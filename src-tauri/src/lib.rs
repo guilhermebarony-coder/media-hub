@@ -265,6 +265,10 @@ pub struct DownloadResult {
 
 #[derive(Serialize, Clone)]
 pub struct ProgressEvent {
+    /// Optional job identifier — set by the batch queue caller so the
+    /// renderer can route progress events to the right job row. Null
+    /// for single-URL downloads where there's only one active job.
+    pub job_id: Option<String>,
     /// Bytes pulled across the current stream (resets when yt-dlp moves
     /// from video stream to audio stream during a `<id>+bestaudio` spec).
     pub downloaded_bytes: u64,
@@ -335,6 +339,7 @@ async fn yt_download(
     video_id: String,
     in_sec: Option<f64>,
     out_sec: Option<f64>,
+    job_id: Option<String>,
 ) -> Result<DownloadResult, String> {
     // `format_spec` is an opaque yt-dlp -f argument — could be a single
     // format id ("18", "313") or a composed spec ("313+bestaudio/best").
@@ -505,6 +510,7 @@ async fn yt_download(
         let running = running.clone();
         let total_hint = total_bytes_hint;
         let video_id = video_id.clone();
+        let job_id_clone = job_id.clone();
         tokio::spawn(async move {
             // Rolling window of (bytes, time) samples. Speed is computed
             // across the oldest-to-newest sample, smoothing out the
@@ -555,6 +561,7 @@ async fn yt_download(
                 let _ = app.emit(
                     "download:progress",
                     ProgressEvent {
+                        job_id: job_id_clone.clone(),
                         downloaded_bytes: bytes_now,
                         total_bytes: total_hint,
                         percent,
@@ -634,6 +641,7 @@ async fn yt_download(
             let _ = app.emit(
                 "download:progress",
                 ProgressEvent {
+                    job_id: job_id.clone(),
                     downloaded_bytes: total,
                     total_bytes: Some(total),
                     percent: Some(100.0),

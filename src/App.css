@@ -560,6 +560,208 @@ code,
   border-color: var(--accent-line);
 }
 
+/* ===================================================================
+   Batch queue card
+   =================================================================== */
+
+.mh-queue__textarea {
+  width: 100%;
+  background: var(--bg-2);
+  border: 1px solid var(--line-hi);
+  border-radius: 5px;
+  color: var(--text-0);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 10px 12px;
+  resize: vertical;
+  outline: none;
+  margin-bottom: 12px;
+}
+.mh-queue__textarea:focus {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.mh-queue__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.mh-queue__btn-secondary {
+  height: 32px;
+  padding: 0 14px;
+  background: var(--bg-2);
+  color: var(--text-0);
+  font-size: 12px;
+  border-radius: 5px;
+  border: 1px solid var(--line-hi);
+  cursor: pointer;
+}
+.mh-queue__btn-secondary:hover {
+  background: var(--bg-3);
+  border-color: var(--accent-line);
+}
+.mh-queue__stats {
+  margin-left: auto;
+  font-size: 11px;
+  font-family: var(--mono);
+}
+
+.mh-queue__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mh-queue__row {
+  display: grid;
+  grid-template-columns: 84px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.mh-queue__thumb {
+  width: 84px;
+  height: 48px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.mh-queue__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.mh-queue__thumb-empty {
+  width: 100%;
+  height: 100%;
+  background: repeating-linear-gradient(
+    45deg,
+    var(--bg-2),
+    var(--bg-2) 6px,
+    var(--bg-3) 6px,
+    var(--bg-3) 12px
+  );
+}
+
+.mh-queue__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mh-queue__title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mh-queue__meta {
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mh-queue__progress {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.mh-queue__progress-bar {
+  height: 4px;
+  background: var(--bg-3);
+  border-radius: 2px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+.mh-queue__progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.18s ease-out;
+}
+.mh-queue__progress-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 10.5px;
+  color: var(--text-2);
+}
+.mh-queue__progress-meta span:first-child {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.mh-queue__done {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.mh-queue__error {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--err);
+  font-family: var(--mono);
+  word-break: break-word;
+}
+
+.mh-queue__status {
+  display: flex;
+  align-items: center;
+}
+.mh-queue__pill {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 3px 9px;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  background: var(--bg-3);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.mh-queue__pill--queued {
+  color: var(--text-2);
+}
+.mh-queue__pill--fetching {
+  color: var(--text-1);
+  background: var(--bg-3);
+  border-color: var(--line-hi);
+}
+.mh-queue__pill--downloading {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: var(--accent-line);
+}
+.mh-queue__pill--done {
+  color: var(--ok);
+  background: rgba(107, 213, 143, 0.12);
+  border-color: rgba(107, 213, 143, 0.35);
+}
+.mh-queue__pill--failed {
+  color: var(--err);
+  background: rgba(239, 106, 106, 0.12);
+  border-color: rgba(239, 106, 106, 0.35);
+}
+
 /* Download progress bar */
 .mh-meta__progress {
   display: flex;

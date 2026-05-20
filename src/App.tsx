@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -47,6 +47,7 @@ type DownloadResult = {
 };
 
 type ProgressEvent = {
+  job_id: string | null;
   downloaded_bytes: number;
   total_bytes: number | null;
   percent: number | null;
@@ -640,6 +641,360 @@ function MetadataCard() {
 }
 
 // =====================================================================
+// Batch queue card (0.2 MVP)
+// =====================================================================
+//
+// Sequential downloads from a paste-multiple-URLs textarea. Each job
+// gets a unique id so we can route Rust's download:progress events to
+// the right row.
+//
+// Out of scope for this MVP (intentionally — see ROADMAP.md 0.4):
+//   - parallel workers / concurrency
+//   - per-job format picker (everyone gets bv*+ba/b → mp4)
+//   - pause / resume
+//   - retry with backoff
+//   - persistence (queue dies on app close)
+//
+// Architecturally the design is: state lives in React (a jobs array),
+// the queue processor is just a sequential async loop that calls
+// yt_fetch_metadata + yt_download per job, mutating job state through
+// each phase. No new Rust commands needed — yt_download already accepts
+// optional job_id and tags its progress events with it.
+
+type QueueStatus =
+  | "queued"
+  | "fetching"
+  | "downloading"
+  | "done"
+  | "failed";
+
+type QueueJob = {
+  id: string;
+  url: string;
+  status: QueueStatus;
+  title?: string;
+  channel?: string;
+  thumbnail?: string | null;
+  duration_sec?: number | null;
+  progress?: ProgressEvent;
+  resultPath?: string;
+  resultBytes?: number | null;
+  error?: string;
+};
+
+function statusLabel(s: QueueStatus): string {
+  switch (s) {
+    case "queued":
+      return "queued";
+    case "fetching":
+      return "fetching";
+    case "downloading":
+      return "downloading";
+    case "done":
+      return "done";
+    case "failed":
+      return "failed";
+  }
+}
+
+function newJobId(): string {
+  // Date.now + random is plenty unique for our scale.
+  return `job-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+}
+
+async function revealFile(filePath: string) {
+  try {
+    await revealItemInDir(filePath);
+  } catch {
+    const idx = Math.max(filePath.lastIndexOf("\\"), filePath.lastIndexOf("/"));
+    const dir = idx > 0 ? filePath.slice(0, idx) : filePath;
+    try {
+      await openPath(dir);
+    } catch {
+      // swallow — the row's error state will show in this case
+    }
+  }
+}
+
+function QueueCard() {
+  const [urlsInput, setUrlsInput] = useState("");
+  const [jobs, setJobs] = useState<QueueJob[]>([]);
+  // Ref mirrors jobs so the async processor can read fresh state without
+  // closing over stale React snapshots.
+  const jobsRef = useRef<QueueJob[]>([]);
+  jobsRef.current = jobs;
+  // True while the sequential processor loop is running. Prevents double-
+  // starting if the user adds more URLs mid-queue (the existing loop
+  // picks them up on its next iteration).
+  const processingRef = useRef(false);
+
+  // Subscribe to progress events and route to the matching job by id.
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    listen<ProgressEvent>("download:progress", (e) => {
+      const id = e.payload.job_id;
+      if (!id) return; // ignore single-URL flow events
+      setJobs((prev) =>
+        prev.map((j) => (j.id === id ? { ...j, progress: e.payload } : j)),
+      );
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  // Auto-start the processor whenever there are queued jobs and the
+  // pump isn't already running. Runs AFTER React commits the new jobs
+  // to state, so jobsRef is up to date when pump iterates.
+  //
+  // Calling void pump() directly from queueAll() doesn't work because
+  // jobsRef.current still points to the pre-queueAll snapshot at that
+  // synchronous moment — React hasn't re-rendered yet.
+  useEffect(() => {
+    if (processingRef.current) return;
+    if (!jobs.some((j) => j.status === "queued")) return;
+    void pump();
+    // pump itself is stable (uses refs internally) so it's not listed
+    // as a dep; we only care about jobs changing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs]);
+
+  function updateJob(id: string, patch: Partial<QueueJob>) {
+    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j)));
+  }
+
+  async function processOne(job: QueueJob): Promise<void> {
+    updateJob(job.id, { status: "fetching" });
+    let meta: VideoMetadata;
+    try {
+      meta = await invoke<VideoMetadata>("yt_fetch_metadata", { url: job.url });
+    } catch (e) {
+      updateJob(job.id, { status: "failed", error: String(e) });
+      return;
+    }
+
+    // Pick a size hint from the largest video format available — close
+    // enough to what `bv*+ba/b` will resolve to. Without this the
+    // progress bar shows raw bytes only (no percent).
+    const bestVideo =
+      meta.formats
+        .filter((f) => f.has_video)
+        .reduce<FormatOption | null>(
+          (best, f) =>
+            (f.filesize_bytes ?? 0) > (best?.filesize_bytes ?? 0) ? f : best,
+          null,
+        ) ?? null;
+
+    updateJob(job.id, {
+      status: "downloading",
+      title: meta.title,
+      channel: meta.channel,
+      thumbnail: meta.thumbnail,
+      duration_sec: meta.duration_sec,
+    });
+
+    try {
+      const res = await invoke<DownloadResult>("yt_download", {
+        url: job.url,
+        // bv*+ba/b → best video + best audio merged; fallback to best
+        // pre-muxed if a YT format has both. Solid universal default.
+        formatSpec: "bv*+ba/b",
+        mergeContainer: "mp4",
+        totalBytesHint: bestVideo?.filesize_bytes ?? null,
+        videoId: meta.id,
+        inSec: null,
+        outSec: null,
+        jobId: job.id,
+      });
+      updateJob(job.id, {
+        status: "done",
+        resultPath: res.path,
+        resultBytes: res.bytes,
+      });
+    } catch (e) {
+      updateJob(job.id, { status: "failed", error: String(e) });
+    }
+  }
+
+  async function pump() {
+    if (processingRef.current) return;
+    processingRef.current = true;
+    try {
+      // Loop until no queued jobs remain. Reads from the ref each
+      // iteration so newly-added jobs are picked up automatically.
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const next = jobsRef.current.find((j) => j.status === "queued");
+        if (!next) break;
+        await processOne(next);
+      }
+    } finally {
+      processingRef.current = false;
+    }
+  }
+
+  function queueAll() {
+    const urls = urlsInput
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (urls.length === 0) return;
+    const newJobs: QueueJob[] = urls.map((url) => ({
+      id: newJobId(),
+      url,
+      status: "queued",
+    }));
+    setJobs((prev) => [...prev, ...newJobs]);
+    setUrlsInput("");
+    // The processor starts via the useEffect above once React commits
+    // the new jobs to state — no manual pump() call here.
+  }
+
+  function clearCompleted() {
+    setJobs((prev) =>
+      prev.filter((j) => j.status !== "done" && j.status !== "failed"),
+    );
+  }
+
+  const stats = (() => {
+    if (jobs.length === 0) return "";
+    const counts: Record<QueueStatus, number> = {
+      queued: 0,
+      fetching: 0,
+      downloading: 0,
+      done: 0,
+      failed: 0,
+    };
+    for (const j of jobs) counts[j.status]++;
+    const parts: string[] = [];
+    if (counts.downloading) parts.push(`${counts.downloading} active`);
+    if (counts.queued) parts.push(`${counts.queued} queued`);
+    if (counts.done) parts.push(`${counts.done} done`);
+    if (counts.failed) parts.push(`${counts.failed} failed`);
+    return parts.join(" · ");
+  })();
+
+  return (
+    <section className="mh-smoke__card">
+      <h1>
+        Batch queue <span className="mh-smoke__chip">0.2 mvp</span>
+      </h1>
+      <p className="mh-smoke__hint">
+        Paste one URL per line, hit Queue all. Each downloads at the best
+        available video + audio (mp4). Sequential — one at a time.
+      </p>
+
+      <textarea
+        className="mh-queue__textarea"
+        rows={4}
+        placeholder={"https://www.youtube.com/watch?v=…\nhttps://www.youtube.com/watch?v=…"}
+        value={urlsInput}
+        onChange={(e) => setUrlsInput(e.target.value)}
+        spellCheck={false}
+      />
+
+      <div className="mh-queue__actions">
+        <button
+          className="mh-smoke__btn"
+          onClick={queueAll}
+          disabled={!urlsInput.trim()}
+        >
+          Queue all
+        </button>
+        <button className="mh-queue__btn-secondary" onClick={clearCompleted}>
+          Clear completed
+        </button>
+        <span className="mh-smoke__faint mh-queue__stats">{stats}</span>
+      </div>
+
+      {jobs.length > 0 && (
+        <ul className="mh-queue__list">
+          {jobs.map((job) => (
+            <li key={job.id} className="mh-queue__row">
+              <div className="mh-queue__thumb">
+                {job.thumbnail ? (
+                  <img src={job.thumbnail} alt="" loading="lazy" />
+                ) : (
+                  <div className="mh-queue__thumb-empty" />
+                )}
+              </div>
+              <div className="mh-queue__body">
+                <div className="mh-queue__title">{job.title ?? job.url}</div>
+                <div className="mh-queue__meta mono">
+                  {job.channel
+                    ? `${job.channel}${job.duration_sec ? ` · ${fmtDuration(job.duration_sec)}` : ""}`
+                    : job.url}
+                </div>
+                {job.status === "downloading" && (
+                  <div className="mh-queue__progress">
+                    <div className="mh-queue__progress-bar">
+                      <div
+                        className={
+                          "mh-queue__progress-fill" +
+                          (job.progress?.percent == null
+                            ? " mh-meta__progress-fill--indeterminate"
+                            : "")
+                        }
+                        style={{
+                          width:
+                            job.progress?.percent != null
+                              ? `${Math.min(100, job.progress.percent)}%`
+                              : "100%",
+                        }}
+                      />
+                    </div>
+                    <div className="mh-queue__progress-meta mono">
+                      <span>
+                        {job.progress?.percent != null
+                          ? `${job.progress.percent.toFixed(1)}%`
+                          : "starting…"}
+                      </span>
+                      <span>
+                        {fmtBytes(job.progress?.downloaded_bytes ?? 0)}
+                        {job.progress?.total_bytes
+                          ? ` / ${fmtBytes(job.progress.total_bytes)}`
+                          : ""}
+                      </span>
+                      {job.progress?.speed_bps != null && (
+                        <span>{fmtBytes(job.progress.speed_bps)}/s</span>
+                      )}
+                      {job.progress?.eta_sec != null && (
+                        <span>ETA {fmtEta(job.progress.eta_sec)}</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {job.status === "done" && job.resultPath && (
+                  <div className="mh-queue__done mono">
+                    <span>{fmtBytes(job.resultBytes ?? 0)}</span>
+                    <button
+                      className="mh-meta__openbtn"
+                      onClick={() => revealFile(job.resultPath!)}
+                    >
+                      Open
+                    </button>
+                  </div>
+                )}
+                {job.status === "failed" && (
+                  <div className="mh-queue__error">{job.error}</div>
+                )}
+              </div>
+              <div className="mh-queue__status">
+                <span className={`mh-queue__pill mh-queue__pill--${job.status}`}>
+                  {statusLabel(job.status)}
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+// =====================================================================
 // App shell
 // =====================================================================
 
@@ -657,6 +1012,7 @@ function App() {
 
       <div className="mh-smoke__stack">
         <MetadataCard />
+        <QueueCard />
         <SmokeCard />
       </div>
 
