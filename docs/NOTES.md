@@ -328,6 +328,32 @@ shell/nav)
 
 ---
 
+## 2026-05-20 — YouTube format selection gotcha
+
+For any YouTube video above ~360p, video and audio are served as
+**separate streams**. yt-dlp lists them as separate format rows: video
+rows show `acodec: none`, audio rows show `vcodec: none`.
+
+If the user picks a 1080p row directly, they get a video-only file
+(no sound). That's the correct yt-dlp behavior, but bad UX as a default.
+
+**Resolution (proper format picker, probably 0.2 final or 0.3):**
+Default selection logic should map a user pick to a yt-dlp format spec:
+- User clicks a video-only row at NNNNp → translate to
+  `<id>+bestaudio/best` so yt-dlp grabs that video stream + the best
+  audio stream + muxes them together via ffmpeg (we already ship it).
+- User clicks a pre-muxed row (both codecs present) → use the id as-is.
+- User clicks an audio-only row → use the id as-is (audio-only download).
+
+This is a 1-line yt-dlp arg change but a real UX decision (do we
+auto-promote video-only to video+audio silently? show a hint?). Worth
+a quick decision when we build the proper picker.
+
+**MVD workaround:** user picks format `18` (MP4 360p w/ audio) or
+similar pre-muxed row for tests.
+
+---
+
 ## Parking lot (uncategorized ideas, drop in here as they surface)
 
 - Bandwidth throttle in settings (single global limit, applies across queue)

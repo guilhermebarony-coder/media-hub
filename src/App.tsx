@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { openPath } from "@tauri-apps/plugin-opener";
 import "./App.css";
 
 // =====================================================================
@@ -37,6 +38,11 @@ type VideoMetadata = {
   webpage_url: string;
   view_count: number | null;
   formats: FormatOption[];
+};
+
+type DownloadResult = {
+  path: string;
+  bytes: number | null;
 };
 
 // =====================================================================
@@ -137,6 +143,12 @@ function MetadataCard() {
   const [err, setErr] = useState<string | null>(null);
   const [showFormats, setShowFormats] = useState(false);
 
+  // Download state
+  const [selectedFormat, setSelectedFormat] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [dlErr, setDlErr] = useState<string | null>(null);
+  const [dlResult, setDlResult] = useState<DownloadResult | null>(null);
+
   async function fetchMetadata(e?: FormEvent) {
     e?.preventDefault();
     if (!url.trim()) return;
@@ -144,6 +156,9 @@ function MetadataCard() {
     setErr(null);
     setMeta(null);
     setShowFormats(false);
+    setSelectedFormat(null);
+    setDlResult(null);
+    setDlErr(null);
     try {
       const out = await invoke<VideoMetadata>("yt_fetch_metadata", { url });
       setMeta(out);
@@ -151,6 +166,35 @@ function MetadataCard() {
       setErr(String(e));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function download() {
+    if (!selectedFormat || !url.trim()) return;
+    setDownloading(true);
+    setDlErr(null);
+    setDlResult(null);
+    try {
+      const res = await invoke<DownloadResult>("yt_download", {
+        url,
+        formatId: selectedFormat,
+      });
+      setDlResult(res);
+    } catch (e) {
+      setDlErr(String(e));
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  async function openContainingFolder(filePath: string) {
+    // Strip filename to get parent dir. Works for both Windows (\) and POSIX (/).
+    const idx = Math.max(filePath.lastIndexOf("\\"), filePath.lastIndexOf("/"));
+    const dir = idx > 0 ? filePath.slice(0, idx) : filePath;
+    try {
+      await openPath(dir);
+    } catch (e) {
+      setDlErr(`open folder failed: ${String(e)}`);
     }
   }
 
@@ -246,6 +290,7 @@ function MetadataCard() {
               <table>
                 <thead>
                   <tr>
+                    <th></th>
                     <th>id</th>
                     <th>ext</th>
                     <th>res</th>
@@ -257,30 +302,88 @@ function MetadataCard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {meta.formats.map((f) => (
-                    <tr key={f.id}>
-                      <td className="mono">{f.id}</td>
-                      <td className="mono">{f.ext}</td>
-                      <td className="mono">
-                        {f.width && f.height ? `${f.width}×${f.height}` : "—"}
-                      </td>
-                      <td className="mono">{f.fps ? Math.round(f.fps) : "—"}</td>
-                      <td className="mono">
-                        {f.vcodec && f.vcodec !== "none"
-                          ? f.vcodec.split(".")[0]
-                          : "—"}
-                      </td>
-                      <td className="mono">
-                        {f.acodec && f.acodec !== "none"
-                          ? f.acodec.split(".")[0]
-                          : "—"}
-                      </td>
-                      <td className="mono">{fmtBytes(f.filesize_bytes)}</td>
-                      <td className="mh-meta__note">{f.note ?? ""}</td>
-                    </tr>
-                  ))}
+                  {meta.formats.map((f) => {
+                    const isSel = selectedFormat === f.id;
+                    return (
+                      <tr
+                        key={f.id}
+                        className={isSel ? "mh-meta__row--sel" : ""}
+                        onClick={() => setSelectedFormat(f.id)}
+                      >
+                        <td className="mh-meta__radio">
+                          <span className={isSel ? "dot dot--on" : "dot"} />
+                        </td>
+                        <td className="mono">{f.id}</td>
+                        <td className="mono">{f.ext}</td>
+                        <td className="mono">
+                          {f.width && f.height ? `${f.width}×${f.height}` : "—"}
+                        </td>
+                        <td className="mono">
+                          {f.fps ? Math.round(f.fps) : "—"}
+                        </td>
+                        <td className="mono">
+                          {f.vcodec && f.vcodec !== "none"
+                            ? f.vcodec.split(".")[0]
+                            : "—"}
+                        </td>
+                        <td className="mono">
+                          {f.acodec && f.acodec !== "none"
+                            ? f.acodec.split(".")[0]
+                            : "—"}
+                        </td>
+                        <td className="mono">{fmtBytes(f.filesize_bytes)}</td>
+                        <td className="mh-meta__note">{f.note ?? ""}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* Download bar — only after metadata exists */}
+          <div className="mh-meta__dlbar">
+            <div className="mh-meta__dlbar-info">
+              {selectedFormat ? (
+                <>
+                  <span className="mh-smoke__label">selected</span>
+                  <code>{selectedFormat}</code>
+                  <span className="mh-meta__dlbar-dest">
+                    → ~/Media Hub/Downloads/_test/
+                  </span>
+                </>
+              ) : (
+                <span className="mh-smoke__faint">
+                  Click a format row above, then download.
+                </span>
+              )}
+            </div>
+            <button
+              className="mh-smoke__btn"
+              onClick={download}
+              disabled={!selectedFormat || downloading}
+            >
+              {downloading ? "Downloading…" : "Download"}
+            </button>
+          </div>
+
+          {dlErr && (
+            <div className="mh-smoke__row mh-smoke__row--err mh-meta__dlmsg">
+              <span className="mh-smoke__label">download error</span>
+              <code>{dlErr}</code>
+            </div>
+          )}
+
+          {dlResult && (
+            <div className="mh-smoke__row mh-smoke__row--ok mh-meta__dlmsg">
+              <span className="mh-smoke__label">downloaded</span>
+              <code>{dlResult.path}</code>
+              <button
+                className="mh-meta__openbtn"
+                onClick={() => openContainingFolder(dlResult.path)}
+              >
+                Open folder
+              </button>
             </div>
           )}
         </article>

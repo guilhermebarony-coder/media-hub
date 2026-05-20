@@ -4,7 +4,7 @@
 // Milestone 0.2 in progress: `yt_fetch_metadata` (paste URL → metadata card).
 
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::ShellExt;
 
 // =====================================================================
@@ -244,6 +244,111 @@ async fn yt_fetch_metadata(app: AppHandle, url: String) -> Result<VideoMetadata,
 }
 
 // =====================================================================
+// 0.2 — Minimum viable download (no progress streaming yet)
+// =====================================================================
+//
+// Spawns yt-dlp with -f <format_id> + an output template, awaits completion,
+// returns the final on-disk path. Destination is hardcoded to
+// ~/Media Hub/Downloads/_test/ for this slice — proper destination
+// resolution (Library vs active Project) lands with milestone 0.6.
+//
+// Progress streaming via Tauri events is the next slice, not this one.
+// This is deliberately the smallest useful step that proves files
+// actually land on disk.
+
+#[derive(Serialize)]
+pub struct DownloadResult {
+    pub path: String,
+    pub bytes: Option<u64>,
+}
+
+#[tauri::command]
+async fn yt_download(
+    app: AppHandle,
+    url: String,
+    format_id: String,
+) -> Result<DownloadResult, String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err("URL is empty".into());
+    }
+    if format_id.trim().is_empty() {
+        return Err("format_id is empty".into());
+    }
+
+    // Resolve destination dir. Hardcoded for MVD — the real picker comes
+    // with the active-project / library work in 0.6.
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| format!("resolve home dir: {e}"))?;
+    let dest = home.join("Media Hub").join("Downloads").join("_test");
+    std::fs::create_dir_all(&dest).map_err(|e| format!("create dest dir: {e}"))?;
+
+    // yt-dlp output template: title (truncated) + video id in brackets +
+    // ext. The id prevents collisions when grabbing the same title twice.
+    let template = dest.join("%(title).180B [%(id)s].%(ext)s");
+    let template_str = template.to_string_lossy().to_string();
+
+    let shell = app.shell();
+    let cmd = shell
+        .sidecar("yt-dlp")
+        .map_err(|e| format!("sidecar resolve: {e}"))?;
+
+    // --print after_move:filepath asks yt-dlp to echo the final path AFTER
+    // any post-processing rename. That's the file we hand back to the UI.
+    let out = cmd
+        .args([
+            "-f",
+            format_id.trim(),
+            "--no-playlist",
+            "--no-warnings",
+            "--no-call-home",
+            "--restrict-filenames",
+            "--no-mtime", // use download time, not source mtime — friendlier for library sort
+            "--print",
+            "after_move:filepath",
+            "-o",
+            template_str.as_str(),
+            "--",
+            trimmed,
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("spawn failed: {e}"))?;
+
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let tail = stderr
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .last()
+            .unwrap_or("(no stderr)");
+        return Err(format!("yt-dlp failed: {tail}"));
+    }
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let final_path = stdout
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .last()
+        .unwrap_or("");
+
+    if final_path.is_empty() {
+        return Err("yt-dlp returned no output path".into());
+    }
+
+    // Read file size to display in the UI. Non-fatal if missing.
+    let bytes = std::fs::metadata(final_path).ok().map(|m| m.len());
+
+    Ok(DownloadResult {
+        path: final_path.to_string(),
+        bytes,
+    })
+}
+
+// =====================================================================
 // Tauri bootstrap
 // =====================================================================
 
@@ -255,6 +360,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             binaries_version,
             yt_fetch_metadata,
+            yt_download,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
