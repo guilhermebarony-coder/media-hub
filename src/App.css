@@ -480,6 +480,20 @@ code,
   text-overflow: ellipsis;
 }
 
+.mh-meta__hint-chip {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-line);
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
 .mh-meta__dlmsg {
   margin: 0;
   border-top: 1px solid var(--line);

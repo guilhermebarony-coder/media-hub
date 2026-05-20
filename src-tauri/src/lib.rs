@@ -266,14 +266,21 @@ pub struct DownloadResult {
 async fn yt_download(
     app: AppHandle,
     url: String,
-    format_id: String,
+    format_spec: String,
+    merge_container: Option<String>,
 ) -> Result<DownloadResult, String> {
+    // `format_spec` is an opaque yt-dlp -f argument — could be a single
+    // format id ("18", "313") or a composed spec ("313+bestaudio/best").
+    // `merge_container` is an optional yt-dlp --merge-output-format value
+    // ("mp4", "webm", "mkv"). The React layer decides both based on the
+    // picked format's ext (so picking MP4 stays MP4, picking WebM stays
+    // WebM). Note: muxing is byte-copy only — no recompression happens.
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return Err("URL is empty".into());
     }
-    if format_id.trim().is_empty() {
-        return Err("format_id is empty".into());
+    if format_spec.trim().is_empty() {
+        return Err("format_spec is empty".into());
     }
 
     // Resolve destination dir. Hardcoded for MVD — the real picker comes
@@ -290,29 +297,67 @@ async fn yt_download(
     let template = dest.join("%(title).180B [%(id)s].%(ext)s");
     let template_str = template.to_string_lossy().to_string();
 
+    // When yt-dlp needs to mux (e.g. `313+bestaudio/best`), it shells out
+    // to ffmpeg. It looks for ffmpeg on PATH by default — but our ffmpeg
+    // is bundled as a sidecar next to media-hub.exe, not on PATH. Point
+    // yt-dlp at the bundled binary explicitly so muxing Just Works
+    // regardless of whether the user has a system ffmpeg.
+    let ffmpeg_path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .map(|dir| {
+            if cfg!(windows) {
+                dir.join("ffmpeg.exe")
+            } else {
+                dir.join("ffmpeg")
+            }
+        })
+        .filter(|p| p.exists());
+    let ffmpeg_path_str = ffmpeg_path.as_ref().map(|p| p.to_string_lossy().to_string());
+
     let shell = app.shell();
     let cmd = shell
         .sidecar("yt-dlp")
         .map_err(|e| format!("sidecar resolve: {e}"))?;
 
+    // Build args. --ffmpeg-location is optional — if we couldn't resolve
+    // a bundled ffmpeg, yt-dlp falls back to PATH lookup and emits a
+    // clean error if both are missing.
+    let mut args: Vec<&str> = vec![
+        "-f",
+        format_spec.trim(),
+        "--no-playlist",
+        "--no-warnings",
+        "--no-call-home",
+        "--restrict-filenames",
+        "--no-mtime", // download time, not source mtime — friendlier for library sort
+        "--print",
+        "after_move:filepath",
+        "-o",
+        template_str.as_str(),
+    ];
+    if let Some(ref ff) = ffmpeg_path_str {
+        args.push("--ffmpeg-location");
+        args.push(ff.as_str());
+    }
+    // Allowed container values — defensive guard against arbitrary
+    // strings from the renderer slipping into a yt-dlp arg.
+    let container_owned = merge_container
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| matches!(*c, "mp4" | "webm" | "mkv" | "m4a"))
+        .map(|c| c.to_string());
+    if let Some(ref c) = container_owned {
+        args.push("--merge-output-format");
+        args.push(c.as_str());
+    }
+    args.push("--");
+    args.push(trimmed);
+
     // --print after_move:filepath asks yt-dlp to echo the final path AFTER
     // any post-processing rename. That's the file we hand back to the UI.
     let out = cmd
-        .args([
-            "-f",
-            format_id.trim(),
-            "--no-playlist",
-            "--no-warnings",
-            "--no-call-home",
-            "--restrict-filenames",
-            "--no-mtime", // use download time, not source mtime — friendlier for library sort
-            "--print",
-            "after_move:filepath",
-            "-o",
-            template_str.as_str(),
-            "--",
-            trimmed,
-        ])
+        .args(args)
         .output()
         .await
         .map_err(|e| format!("spawn failed: {e}"))?;

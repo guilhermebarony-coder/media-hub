@@ -143,8 +143,9 @@ function MetadataCard() {
   const [err, setErr] = useState<string | null>(null);
   const [showFormats, setShowFormats] = useState(false);
 
-  // Download state
-  const [selectedFormat, setSelectedFormat] = useState<string | null>(null);
+  // Download state — store the full FormatOption so we can compose the
+  // yt-dlp spec (video-only picks auto-promote to <id>+bestaudio/best).
+  const [selectedFormat, setSelectedFormat] = useState<FormatOption | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [dlErr, setDlErr] = useState<string | null>(null);
   const [dlResult, setDlResult] = useState<DownloadResult | null>(null);
@@ -169,15 +170,53 @@ function MetadataCard() {
     }
   }
 
+  // Compose the yt-dlp -f argument + merge container from a picked
+  // format row.
+  //
+  // YouTube above ~360p serves video and audio as separate streams. If
+  // the user picks a video-only row, we silently grab the best audio
+  // stream alongside it and let ffmpeg (bundled) mux them together.
+  // Muxing is byte-copy only — no quality loss.
+  //
+  // Container hygiene: keep the user's picked video container.
+  //   MP4 video  → pair with M4A audio  → merge into MP4
+  //   WebM video → pair with WebM audio → merge into WebM
+  //   anything else → MKV (it can hold anything)
+  // This prevents the surprise of picking "mp4" and getting ".webm"
+  // back when yt-dlp default-mergeed AV1 + Opus into the WebM family.
+  function composeFormatSpec(
+    f: FormatOption,
+  ): { spec: string; mergeContainer: string | null } {
+    if (!f.has_video || f.has_audio) {
+      // Audio-only OR pre-muxed — no muxing needed.
+      return { spec: f.id, mergeContainer: null };
+    }
+    if (f.ext === "mp4") {
+      return {
+        spec: `${f.id}+bestaudio[ext=m4a]/bestaudio/best`,
+        mergeContainer: "mp4",
+      };
+    }
+    if (f.ext === "webm") {
+      return {
+        spec: `${f.id}+bestaudio[ext=webm]/bestaudio/best`,
+        mergeContainer: "webm",
+      };
+    }
+    return { spec: `${f.id}+bestaudio/best`, mergeContainer: "mkv" };
+  }
+
   async function download() {
     if (!selectedFormat || !url.trim()) return;
+    const { spec, mergeContainer } = composeFormatSpec(selectedFormat);
     setDownloading(true);
     setDlErr(null);
     setDlResult(null);
     try {
       const res = await invoke<DownloadResult>("yt_download", {
         url,
-        formatId: selectedFormat,
+        formatSpec: spec,
+        mergeContainer,
       });
       setDlResult(res);
     } catch (e) {
@@ -303,12 +342,12 @@ function MetadataCard() {
                 </thead>
                 <tbody>
                   {meta.formats.map((f) => {
-                    const isSel = selectedFormat === f.id;
+                    const isSel = selectedFormat?.id === f.id;
                     return (
                       <tr
                         key={f.id}
                         className={isSel ? "mh-meta__row--sel" : ""}
-                        onClick={() => setSelectedFormat(f.id)}
+                        onClick={() => setSelectedFormat(f)}
                       >
                         <td className="mh-meta__radio">
                           <span className={isSel ? "dot dot--on" : "dot"} />
@@ -346,8 +385,14 @@ function MetadataCard() {
             <div className="mh-meta__dlbar-info">
               {selectedFormat ? (
                 <>
-                  <span className="mh-smoke__label">selected</span>
-                  <code>{selectedFormat}</code>
+                  <span className="mh-smoke__label">spec</span>
+                  <code>{composeFormatSpec(selectedFormat).spec}</code>
+                  {selectedFormat.has_video && !selectedFormat.has_audio && (
+                    <span className="mh-meta__hint-chip">
+                      + audio →{" "}
+                      .{composeFormatSpec(selectedFormat).mergeContainer}
+                    </span>
+                  )}
                   <span className="mh-meta__dlbar-dest">
                     → ~/Media Hub/Downloads/_test/
                   </span>
