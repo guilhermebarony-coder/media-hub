@@ -1,0 +1,22 @@
+[package]
+name = "media-hub"
+version = "0.1.0"
+description = "Media Hub — download manager + media library for video editors"
+authors = ["Guilherme"]
+edition = "2021"
+
+[lib]
+# The `_lib` suffix avoids a Windows-only conflict with the bin name.
+# https://github.com/rust-lang/cargo/issues/8519
+name = "media_hub_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
