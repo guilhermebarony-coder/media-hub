@@ -56,20 +56,49 @@ Decided 2026-05-19. Captured here because *why* matters more than *what*.
 
 ---
 
-## Current state — dev0 (2026-05-19)
+## Current state — 2026-05-20
 
-Project not yet scaffolded. Decisions captured in cut-lines table above.
-Rust toolchain installed (rustc 1.95.0). Node already present.
-Visual Studio C++ Build Tools status: **unconfirmed** — first scaffolding
-step verifies.
+Two days in, milestones 0.1 → 0.4 shipped, 0.5 foundation + tags + search
+shipped (proper library page UI deferred). 13 commits on `main`.
 
-What needs to exist before milestone 0.1 starts:
+What works end-to-end:
+- ✅ Tauri 2 + React 19 + TS scaffold, dark theme, 1400×900 window
+- ✅ yt-dlp + ffmpeg bundled as sidecars, `-hwaccel auto` for GPU decode
+- ✅ Single-URL: paste → metadata → format picker → segment In/Out →
+  transcode preset → live progress → file lands
+- ✅ Auto-mux video-only picks with container preservation (MP4 stays MP4,
+  WebM stays WebM)
+- ✅ Segment trim via post-download ffmpeg `-c copy` (full source then
+  trim, no quality loss, keyframe-snapped)
+- ✅ Live download progress via filesystem polling (bypasses Python's
+  pipe-buffering wall; uses seek-to-end to defeat Windows MFT size cache)
+- ✅ Transcode pipeline: ProRes 422 LT / DNxHR SQ / H.264 libx264 / H.264
+  NVENC. Progress from ffmpeg's `-progress pipe:1`.
+- ✅ Batch queue: 3 parallel download workers, 1 CPU transcode + 1 GPU
+  transcode concurrently, persisted to localStorage, retry failed,
+  per-job preset capture
+- ✅ Library (SQLite + sqlx): every download writes a row; tags with
+  inline chip editor + autocomplete; tag-filter cloud; LIKE search with
+  150ms debounce; event-driven refresh via `library:changed`
 
-- [ ] VS C++ Build Tools installed (Tauri requirement on Windows)
-- [ ] `media-hub/` Tauri+React+TS+Vite scaffold
-- [ ] `yt-dlp` and `ffmpeg` binaries downloaded for Win+Mac, placed as sidecars
-- [ ] Tailwind + shadcn/ui installed
-- [ ] Git repo initialized
+What's partially done (counts as 0.5 but not all of it):
+- ✅ assets schema + insert/list/delete commands
+- ✅ tags + asset_tags schema with CASCADE delete
+- ✅ Per-asset tag editor in dev UI
+- ✅ Tag cloud filter + free-text search
+- 🟡 Library UI is the "dev view" — functional but not the proper grid
+  from the design reference. Real library page lands with the UI overhaul.
+
+What's deferred (not done, won't be done this session):
+- 🟡 Pause / resume in batch queue (Windows process signaling)
+- 🟡 Export to project folder (needs `@tauri-apps/plugin-dialog` for
+  folder picker — separate plugin install + capability)
+- 🟡 Rename rules with `{channel}` / `{title}` / `{date}` tokens (needs
+  settings panel which doesn't exist)
+- 🟡 FTS5 search upgrade (current LIKE is fine for <10k assets; revisit
+  if needed)
+- 🟡 Proper UI overhaul (top bar, nav, route-based screens) — pairs
+  naturally with the library page rebuild
 
 ---
 

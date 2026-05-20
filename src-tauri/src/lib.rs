@@ -3,6 +3,8 @@
 // Milestone 0.1: `binaries_version` smoke test (proves sidecar pipeline).
 // Milestone 0.2 in progress: `yt_fetch_metadata` (paste URL → metadata card).
 
+mod library;
+
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_shell::process::CommandEvent;
@@ -984,11 +986,29 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
+        .setup(|app| {
+            // Open / create the library DB synchronously at startup so
+            // the first command call doesn't race the pool initialization.
+            // block_on inside setup is the standard Tauri pattern for
+            // "async init that the rest of the app depends on."
+            let app_handle = app.handle().clone();
+            let lib_state = tauri::async_runtime::block_on(async {
+                library::init(&app_handle).await
+            })?;
+            app.manage(lib_state);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             binaries_version,
             yt_fetch_metadata,
             yt_download,
             media_transcode,
+            library::library_insert,
+            library::library_list,
+            library::library_count,
+            library::library_delete,
+            library::tag_set_for_asset,
+            library::tag_list_all,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

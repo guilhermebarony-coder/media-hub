@@ -75,6 +75,106 @@ type TranscodePreset =
   | "h264_mp4"
   | "h264_nvenc_mp4";
 
+// =====================================================================
+// Library types (mirror src-tauri/src/library.rs)
+// =====================================================================
+
+type AssetInput = {
+  source_url: string;
+  platform: string;
+  video_id: string | null;
+  channel: string | null;
+  title: string;
+  duration_sec: number | null;
+  in_sec: number | null;
+  out_sec: number | null;
+  file_path: string;
+  file_size: number | null;
+  container: string | null;
+  codec_video: string | null;
+  codec_audio: string | null;
+  width: number | null;
+  height: number | null;
+  fps: number | null;
+  transcoded_to: string | null;
+  thumbnail_url: string | null;
+};
+
+type Asset = AssetInput & {
+  id: string;
+  downloaded_at: number;
+  tags: string[];
+};
+
+type TagCount = {
+  name: string;
+  count: number;
+};
+
+type LibraryFilters = {
+  query?: string | null;
+  tags?: string[] | null;
+  limit?: number | null;
+};
+
+function extFromPath(p: string): string | null {
+  const idx = p.lastIndexOf(".");
+  if (idx <= 0) return null;
+  return p.slice(idx + 1).toLowerCase();
+}
+
+/**
+ * Best-effort codec inference. When a transcode was applied, the file
+ * on disk has the preset's codec, not the source's. When no preset,
+ * we use whatever yt-dlp told us about the chosen format.
+ */
+function videoCodecFor(
+  preset: TranscodePreset,
+  sourceVcodec: string | null | undefined,
+): string | null {
+  switch (preset) {
+    case "prores_422_lt":
+      return "prores";
+    case "dnxhr_sq":
+      return "dnxhd";
+    case "h264_mp4":
+    case "h264_nvenc_mp4":
+      return "h264";
+    case "none":
+      return sourceVcodec ? sourceVcodec.split(".")[0] : null;
+  }
+}
+
+function audioCodecFor(
+  preset: TranscodePreset,
+  sourceAcodec: string | null | undefined,
+): string | null {
+  switch (preset) {
+    case "prores_422_lt":
+    case "dnxhr_sq":
+      return "pcm_s16le";
+    case "h264_mp4":
+    case "h264_nvenc_mp4":
+      return "aac";
+    case "none":
+      return sourceAcodec ? sourceAcodec.split(".")[0] : null;
+  }
+}
+
+/**
+ * Record an asset row in the SQLite library. Wrapped so callers don't
+ * need to remember the command name and so we can swallow errors
+ * without breaking the download flow — the file is already on disk;
+ * library indexing is non-essential UX.
+ */
+async function recordInLibrary(input: AssetInput): Promise<void> {
+  try {
+    await invoke<string>("library_insert", { input });
+  } catch (e) {
+    console.warn("library_insert failed (non-fatal):", e);
+  }
+}
+
 type TranscodePresetMeta = {
   value: TranscodePreset;
   label: string;
@@ -413,10 +513,10 @@ function MetadataCard() {
       // If a transcode preset was chosen, run it as a sequential
       // second phase. The downloaded file is the input; the encoded
       // file lands next to it with a preset-suffixed name.
+      let finalRes = dlRes;
+      let usedPreset: TranscodePreset = "none";
       if (transcodePreset !== "none") {
         setPhase("transcoding");
-        // Estimate total seconds for percent/ETA: trim duration for
-        // segments, full video duration otherwise.
         const totalSecHint =
           inSec != null && outSec != null
             ? outSec - inSec
@@ -428,19 +528,40 @@ function MetadataCard() {
             totalSecHint,
             jobId: null,
           });
-          // Replace the displayed result with the transcoded file —
-          // the user picked a preset because that's the file they want.
+          finalRes = txRes;
+          usedPreset = transcodePreset;
           setDlResult(txRes);
         } catch (e) {
-          // Transcode failed but the download succeeded. Surface the
-          // error and keep showing the source file so the user has
-          // something usable.
           setDlErr(`transcode failed: ${String(e)} (source kept: ${dlRes.path})`);
           setDlResult(dlRes);
         }
       } else {
         setDlResult(dlRes);
       }
+
+      // Record in the library (best-effort, non-blocking on failure).
+      // For transcoded files, the row reflects the transcoded codec/
+      // container — that's the file the user picked a preset to get.
+      void recordInLibrary({
+        source_url: url,
+        platform: "youtube",
+        video_id: meta?.id ?? null,
+        channel: meta?.channel ?? null,
+        title: meta?.title ?? url,
+        duration_sec: meta?.duration_sec ?? null,
+        in_sec: inSec,
+        out_sec: outSec,
+        file_path: finalRes.path,
+        file_size: finalRes.bytes ?? null,
+        container: extFromPath(finalRes.path),
+        codec_video: videoCodecFor(usedPreset, selectedFormat.vcodec),
+        codec_audio: audioCodecFor(usedPreset, selectedFormat.acodec),
+        width: selectedFormat.width,
+        height: selectedFormat.height,
+        fps: selectedFormat.fps,
+        transcoded_to: usedPreset === "none" ? null : usedPreset,
+        thumbnail_url: meta?.thumbnail ?? null,
+      });
     } catch (e) {
       setDlErr(String(e));
     } finally {
@@ -1140,6 +1261,11 @@ function QueueCard() {
     // parallel because they use different hardware. Two CPU jobs
     // can't because they'd thrash the CPU.
     const preset = job.transcodePreset;
+    let finalPath = dlRes.path;
+    let finalBytes = dlRes.bytes;
+    let usedPreset: TranscodePreset = "none";
+    let jobFailed = false;
+
     if (preset !== "none") {
       const sem = isGpuPreset(preset) ? gpuTranscodeSem : cpuTranscodeSem;
       await sem.acquire();
@@ -1151,6 +1277,9 @@ function QueueCard() {
           totalSecHint: meta.duration_sec ?? null,
           jobId: job.id,
         });
+        finalPath = txRes.path;
+        finalBytes = txRes.bytes;
+        usedPreset = preset;
         updateJob(job.id, {
           status: "done",
           resultPath: txRes.path,
@@ -1165,6 +1294,7 @@ function QueueCard() {
           resultBytes: dlRes.bytes,
           error: `transcode failed: ${String(e)} (source kept)`,
         });
+        jobFailed = true;
       } finally {
         sem.release();
       }
@@ -1175,6 +1305,39 @@ function QueueCard() {
         resultBytes: dlRes.bytes,
       });
     }
+
+    // Record in library (non-blocking on failure). Even failed
+    // transcodes get an entry for the source file — it's on disk and
+    // useful to track.
+    void recordInLibrary({
+      source_url: job.url,
+      platform: "youtube",
+      video_id: meta.id,
+      channel: meta.channel,
+      title: meta.title,
+      duration_sec: meta.duration_sec,
+      in_sec: null,
+      out_sec: null,
+      file_path: finalPath,
+      file_size: finalBytes,
+      container: extFromPath(finalPath),
+      // Batch downloads use the `bv*+ba/b` spec — we don't know the
+      // exact source codec without parsing yt-dlp output. Best-effort:
+      // bestVideo is what filesize_hint was derived from, usually the
+      // resolved video stream.
+      codec_video: videoCodecFor(usedPreset, bestVideo?.vcodec),
+      codec_audio: audioCodecFor(usedPreset, null),
+      width: bestVideo?.width ?? null,
+      height: bestVideo?.height ?? null,
+      fps: bestVideo?.fps ?? null,
+      transcoded_to: usedPreset === "none" ? null : usedPreset,
+      thumbnail_url: meta.thumbnail,
+    });
+
+    // jobFailed is consumed by the closure scope above; just here to
+    // suppress the lint warning. The outcome was already reflected in
+    // the updateJob calls.
+    void jobFailed;
   }
 
   function queueAll() {
@@ -1440,6 +1603,355 @@ function QueueCard() {
 }
 
 // =====================================================================
+// Library verification card (0.5 foundation, will be replaced)
+// =====================================================================
+//
+// This is a throwaway dev-only view that confirms library_insert is
+// persisting rows. The real library grid + tags + search lands in 0.5
+// proper next session. Until then this card just shows the raw rows
+// so we know the data layer is alive.
+
+/**
+ * Tag chip editor — shows existing tag chips and an inline input to add
+ * a new one. Sends the WHOLE tag list to the backend on every change
+ * (tag_set_for_asset replaces atomically), keeping the round-trip
+ * simple and race-free.
+ */
+function TagEditor({
+  asset,
+  knownTags,
+}: {
+  asset: Asset;
+  knownTags: TagCount[];
+}) {
+  const [draft, setDraft] = useState("");
+  const [editing, setEditing] = useState(false);
+
+  async function commitTags(next: string[]) {
+    try {
+      await invoke("tag_set_for_asset", { assetId: asset.id, tags: next });
+    } catch (e) {
+      console.warn("tag_set_for_asset failed:", e);
+    }
+  }
+
+  async function addTag(name: string) {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    // Avoid duplicates (case-insensitive — backend also enforces this).
+    const lower = trimmed.toLowerCase();
+    if (asset.tags.some((t) => t.toLowerCase() === lower)) {
+      setDraft("");
+      return;
+    }
+    await commitTags([...asset.tags, trimmed]);
+    setDraft("");
+  }
+
+  async function removeTag(name: string) {
+    await commitTags(asset.tags.filter((t) => t !== name));
+  }
+
+  // Autocomplete suggestions = known tags matching the draft prefix,
+  // minus the ones already on this asset.
+  const suggestions = (() => {
+    const d = draft.trim().toLowerCase();
+    if (!d) return [];
+    const has = new Set(asset.tags.map((t) => t.toLowerCase()));
+    return knownTags
+      .filter(
+        (t) => t.name.toLowerCase().includes(d) && !has.has(t.name.toLowerCase()),
+      )
+      .slice(0, 5);
+  })();
+
+  return (
+    <div className="mh-lib__tagrow">
+      {asset.tags.map((t) => (
+        <span key={t} className="mh-lib__tag">
+          <span>{t}</span>
+          <button
+            className="mh-lib__tag-x"
+            onClick={() => void removeTag(t)}
+            title="Remove tag"
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      {editing ? (
+        <span className="mh-lib__tag-input-wrap">
+          <input
+            className="mh-lib__tag-input"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void addTag(draft);
+              } else if (e.key === "Escape") {
+                setDraft("");
+                setEditing(false);
+              }
+            }}
+            onBlur={() => {
+              if (draft.trim()) void addTag(draft);
+              setEditing(false);
+            }}
+            placeholder="tag…"
+            autoFocus
+            spellCheck={false}
+          />
+          {suggestions.length > 0 && (
+            <div className="mh-lib__tag-suggestions">
+              {suggestions.map((s) => (
+                <button
+                  key={s.name}
+                  className="mh-lib__tag-suggestion"
+                  // onMouseDown fires before onBlur, so the click
+                  // registers before the input loses focus.
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    void addTag(s.name);
+                    setEditing(false);
+                  }}
+                >
+                  {s.name}{" "}
+                  <span className="mh-smoke__faint">({s.count})</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </span>
+      ) : (
+        <button
+          className="mh-lib__tag mh-lib__tag-add"
+          onClick={() => setEditing(true)}
+        >
+          + tag
+        </button>
+      )}
+    </div>
+  );
+}
+
+function LibraryDevCard() {
+  const [assets, setAssets] = useState<Asset[]>([]);
+  const [count, setCount] = useState<number>(0);
+  const [err, setErr] = useState<string | null>(null);
+  const [allTags, setAllTags] = useState<TagCount[]>([]);
+  // Filter state — search query + active tag filter set.
+  const [query, setQuery] = useState("");
+  const [activeTags, setActiveTags] = useState<Set<string>>(new Set());
+
+  // Debounced query — we don't fire a SQL query on every keystroke,
+  // but a small lag (150ms) covers fast typing without feeling stale.
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(query.trim()), 150);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  async function refresh() {
+    try {
+      const filters: LibraryFilters = {
+        query: debouncedQuery || null,
+        tags: activeTags.size > 0 ? Array.from(activeTags) : null,
+        limit: 500,
+      };
+      const [list, n, tags] = await Promise.all([
+        invoke<Asset[]>("library_list", { filters }),
+        invoke<number>("library_count"),
+        invoke<TagCount[]>("tag_list_all"),
+      ]);
+      setAssets(list);
+      setCount(n);
+      setAllTags(tags);
+      setErr(null);
+    } catch (e) {
+      setErr(String(e));
+    }
+  }
+
+  // Initial load + refresh whenever filters change.
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedQuery, activeTags]);
+
+  // Event-driven refresh — Rust emits library:changed after every
+  // insert/delete/tag mutation. No more polling.
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    listen("library:changed", () => {
+      void refresh();
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+    // refresh closes over filter state but the listener body re-reads
+    // it on each call via the ref-like behavior of state-setting in
+    // closures. New events trigger an up-to-date refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function del(id: string) {
+    try {
+      await invoke("library_delete", { id });
+    } catch (e) {
+      setErr(String(e));
+    }
+  }
+
+  function toggleTagFilter(tag: string) {
+    setActiveTags((prev) => {
+      const next = new Set(prev);
+      if (next.has(tag)) next.delete(tag);
+      else next.add(tag);
+      return next;
+    });
+  }
+
+  const hasActiveFilter = query.trim() !== "" || activeTags.size > 0;
+
+  return (
+    <section className="mh-smoke__card">
+      <h1>
+        Library
+        <span className="mh-smoke__chip">0.5 dev view</span>
+      </h1>
+      <p className="mh-smoke__hint">
+        Every successful download writes a row here. {count} assets total.
+        Tag your assets and filter by tag + search; the proper grid view +
+        export-to-project lands in the next session.
+      </p>
+
+      {/* Filter bar — search + tag chips */}
+      <div className="mh-lib__filterbar">
+        <input
+          className="mh-meta__input"
+          type="text"
+          placeholder="search title or channel…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          spellCheck={false}
+        />
+        {hasActiveFilter && (
+          <button
+            className="mh-queue__btn-secondary"
+            onClick={() => {
+              setQuery("");
+              setActiveTags(new Set());
+            }}
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      {allTags.length > 0 && (
+        <div className="mh-lib__tagcloud">
+          {allTags.map((t) => {
+            const active = activeTags.has(t.name);
+            return (
+              <button
+                key={t.name}
+                className={
+                  "mh-lib__tag mh-lib__tag-filter" +
+                  (active ? " mh-lib__tag-filter--active" : "")
+                }
+                onClick={() => toggleTagFilter(t.name)}
+              >
+                {t.name}{" "}
+                <span className="mh-smoke__faint">({t.count})</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <div
+        className="mh-smoke__faint"
+        style={{ fontSize: 11, padding: "8px 0", fontFamily: "var(--mono)" }}
+      >
+        showing {assets.length} of {count}
+        {hasActiveFilter ? " (filtered)" : ""}
+      </div>
+
+      {err && (
+        <div className="mh-smoke__row mh-smoke__row--err" style={{ marginTop: 12 }}>
+          <span className="mh-smoke__label">library error</span>
+          <code>{err}</code>
+        </div>
+      )}
+
+      {assets.length === 0 ? (
+        <div
+          className="mh-smoke__faint"
+          style={{ padding: "20px 0", textAlign: "center", fontSize: 12 }}
+        >
+          {hasActiveFilter
+            ? "No assets match the current filter."
+            : "No assets yet. Download something with the cards above."}
+        </div>
+      ) : (
+        <ul className="mh-queue__list">
+          {assets.map((a) => (
+            <li key={a.id} className="mh-queue__row">
+              <div className="mh-queue__thumb">
+                {a.thumbnail_url ? (
+                  <img src={a.thumbnail_url} alt="" loading="lazy" />
+                ) : (
+                  <div className="mh-queue__thumb-empty" />
+                )}
+              </div>
+              <div className="mh-queue__body">
+                <div className="mh-queue__title">{a.title}</div>
+                <div className="mh-queue__meta mono">
+                  {a.channel ?? "—"}
+                  {a.duration_sec ? ` · ${fmtDuration(a.duration_sec)}` : ""}
+                  {a.width && a.height ? ` · ${a.width}×${a.height}` : ""}
+                  {a.codec_video ? ` · ${a.codec_video}` : ""}
+                  {a.container ? ` · .${a.container}` : ""}
+                  {a.transcoded_to ? ` · transcoded to ${a.transcoded_to}` : ""}
+                </div>
+                <div className="mh-queue__meta mono mh-smoke__faint">
+                  {fmtBytes(a.file_size)}
+                  {" · "}
+                  {a.in_sec != null && a.out_sec != null
+                    ? `segment ${fmtDuration(a.in_sec)}–${fmtDuration(a.out_sec)}`
+                    : "full"}
+                  {" · "}
+                  {new Date(a.downloaded_at * 1000).toLocaleString()}
+                </div>
+                <TagEditor asset={a} knownTags={allTags} />
+              </div>
+              <div className="mh-queue__status" style={{ flexDirection: "column", gap: 4 }}>
+                <button
+                  className="mh-meta__openbtn"
+                  onClick={() => revealFile(a.file_path)}
+                >
+                  Open
+                </button>
+                <button
+                  className="mh-meta__openbtn"
+                  onClick={() => del(a.id)}
+                  style={{ color: "var(--err)", borderColor: "var(--err)" }}
+                >
+                  Forget
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+// =====================================================================
 // App shell
 // =====================================================================
 
@@ -1458,6 +1970,7 @@ function App() {
       <div className="mh-smoke__stack">
         <MetadataCard />
         <QueueCard />
+        <LibraryDevCard />
         <SmokeCard />
       </div>
 

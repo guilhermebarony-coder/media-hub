@@ -785,6 +785,129 @@ code,
   border-color: rgba(239, 106, 106, 0.35);
 }
 
+/* ===================================================================
+   Library dev view — filter bar, tag cloud, per-asset tag editor
+   =================================================================== */
+
+.mh-lib__filterbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.mh-lib__tagcloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 0 4px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 10px;
+}
+
+.mh-lib__tagrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.mh-lib__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-hi);
+  border-radius: 3px;
+  padding: 2px 7px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-1);
+  cursor: default;
+  white-space: nowrap;
+}
+
+.mh-lib__tag-x {
+  background: none;
+  border: 0;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 2px;
+  line-height: 1;
+}
+.mh-lib__tag-x:hover {
+  color: var(--err);
+}
+
+.mh-lib__tag-add {
+  cursor: pointer;
+  color: var(--text-3);
+  border-style: dashed;
+}
+.mh-lib__tag-add:hover {
+  color: var(--accent);
+  border-color: var(--accent-line);
+}
+
+.mh-lib__tag-filter {
+  cursor: pointer;
+}
+.mh-lib__tag-filter:hover {
+  border-color: var(--accent-line);
+}
+.mh-lib__tag-filter--active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.mh-lib__tag-input-wrap {
+  position: relative;
+  display: inline-block;
+}
+.mh-lib__tag-input {
+  background: var(--bg-2);
+  border: 1px solid var(--accent-line);
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-0);
+  outline: none;
+  width: 100px;
+}
+.mh-lib__tag-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 2px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-hi);
+  border-radius: 4px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 10;
+  min-width: 140px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+.mh-lib__tag-suggestion {
+  background: none;
+  border: 0;
+  text-align: left;
+  padding: 3px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-1);
+  cursor: pointer;
+  border-radius: 2px;
+}
+.mh-lib__tag-suggestion:hover {
+  background: var(--bg-3);
+  color: var(--text-0);
+}
+
 /* Download progress bar */
 .mh-meta__progress {
   display: flex;

@@ -214,6 +214,80 @@ A scratchpad for me. Future-Claude reading this in a later session:
 
 ---
 
+## 2026-05-20 — Library v1: SQLite, sqlx, tags, events
+
+Shipped the library foundation + most of the v1 feature set in one
+session. Decisions worth keeping:
+
+**sqlx + manual migrations, no `sqlx::migrate!()`**
+
+The macro requires DATABASE_URL at compile time, which means devs
+checking out the repo need a DB file before `cargo build` works.
+Avoided by embedding the migration SQL via `include_str!()` and running
+it through `sqlx::query()` at startup. Migrations are CREATE ... IF
+NOT EXISTS so applying them every launch is idempotent and cheap.
+
+The `FromRow` derive doesn't need DATABASE_URL — only the `query!()`
+macros do — so we enable the `macros` feature without paying that cost.
+
+**Split AssetRow / Asset structs**
+
+`sqlx::FromRow` can't decode a `Vec<String>` from a single column.
+`#[sqlx(default)]` looked promising but still requires the field's
+type to implement `Decode`. Cleanest workaround: one struct that maps
+1:1 to the table for FromRow, another struct that adds the
+denormalized `tags: Vec<String>` for serialization. Convert via
+`impl From<AssetRow> for Asset` and populate tags from a second query.
+
+For 0.5 this is fine. If we ever hit a query where we want tags
+inline, we'd switch to `GROUP_CONCAT` + a custom FromRow impl.
+
+**Tags: replace-all over add/remove**
+
+The `tag_set_for_asset` command takes the WHOLE desired tag list and
+diffs server-side (DELETE old links, INSERT new) inside a single
+transaction. Pros vs add/remove:
+- Atomic — no half-applied state if the renderer crashes mid-edit
+- One round trip per edit, not N
+- Renderer doesn't need to track which tags are "new vs existing"
+- No race conditions between concurrent tag edits on the same asset
+
+Con: sends slightly more data per edit. Negligible at our scale.
+
+**Case-insensitive tags via COLLATE NOCASE**
+
+`tags.name` uses `UNIQUE COLLATE NOCASE`, so "B-Roll" and "b-roll" are
+the same tag. `INSERT OR IGNORE` preserves the original casing of the
+existing row when a duplicate comes in — display reads naturally.
+Filter matching also uses `COLLATE NOCASE` in WHERE clauses.
+
+**Search: LIKE not FTS5**
+
+For <10k assets, `LOWER(title) LIKE '%query%'` is plenty fast and
+~5 LOC. FTS5 would give us ranked relevance and faster fuzzy match
+but requires triggers to keep the virtual table synced with `assets`
++ `asset_tags`. Document as an upgrade path; revisit if perf becomes
+visible. Not worth 50 LOC of trigger setup for a feature that doesn't
+yet have its own bottleneck.
+
+**Library event: `library:changed` from Rust**
+
+Replaced the 3s polling on the dev view with a Tauri event emitted
+from `library_insert` / `library_delete` / `tag_set_for_asset`.
+Renderer subscribes once on mount, calls refresh on each event.
+Cleaner than polling, scales to any update frequency, sets the
+pattern for other view-on-data-change UIs (browser extension,
+sibling AI assistant, etc.).
+
+**DB location**
+
+`~/Media Hub/library.db` — sits alongside `~/Media Hub/Downloads/`,
+matches the planned dual-root structure from chiral-network days.
+WAL journal mode + 5s busy timeout + foreign_keys=on. CASCADE on
+asset_tags means deleting an asset auto-cleans its tag links.
+
+---
+
 ## 2026-05-19 — Library vs Projects: dual-root structure
 
 **Confirmed pattern:** Two top-level roots, same internal organization.
