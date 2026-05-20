@@ -723,6 +723,233 @@ async fn yt_download(
 }
 
 // =====================================================================
+// 0.3 — Transcode pipeline
+// =====================================================================
+//
+// Spawns our bundled ffmpeg to convert a downloaded file into an edit-
+// friendly intermediate (ProRes / DNxHR) or a smaller MP4. The encode
+// preset is decoded server-side from an allowlisted string so the
+// renderer can't inject arbitrary ffmpeg arguments.
+//
+// Progress comes from ffmpeg's `-progress pipe:1` which writes
+// structured key=value lines per chunk — no PyInstaller-style stdout
+// buffering nightmare here, just a clean stream. Parse line by line,
+// emit a transcode:progress event when we see `progress=continue`.
+
+#[derive(Serialize, Clone)]
+pub struct TranscodeProgress {
+    pub job_id: Option<String>,
+    pub processed_sec: f64,
+    pub total_sec: Option<f64>,
+    pub percent: Option<f64>,
+    pub speed_mult: Option<f64>, // 1.0 = realtime, 2.0 = 2× faster than realtime
+}
+
+#[derive(Serialize)]
+pub struct TranscodeResult {
+    pub path: String,
+    pub bytes: Option<u64>,
+}
+
+/// Resolve a preset name to (ffmpeg args, file extension, name suffix).
+/// All preset strings are allowlisted — anything else is rejected so
+/// the renderer can't smuggle ffmpeg flags via this parameter.
+///
+/// Audio handling:
+///   - ProRes / DNxHR: PCM s16le @ 48kHz — uncompressed, NLE-standard
+///   - H.264 MP4: AAC @ 192k — small file, web-friendly
+///
+/// Container choice:
+///   - ProRes / DNxHR: .mov — the universal "intermediate" container
+///   - H.264: .mp4 — small files, Resolve/Premiere read it fine
+fn resolve_preset(preset: &str) -> Result<(Vec<&'static str>, &'static str, &'static str), String> {
+    match preset {
+        "prores_422_lt" => Ok((
+            vec![
+                "-c:v", "prores_ks",
+                "-profile:v", "1",       // 1 = 422 LT
+                "-vendor", "apl0",       // marks the file as Apple-encoded; Resolve accepts this
+                "-pix_fmt", "yuv422p10le",
+                "-c:a", "pcm_s16le",
+                "-ar", "48000",
+            ],
+            "mov",
+            "prores422lt",
+        )),
+        "dnxhr_sq" => Ok((
+            vec![
+                "-c:v", "dnxhd",
+                "-profile:v", "dnxhr_sq",
+                "-pix_fmt", "yuv422p",
+                "-c:a", "pcm_s16le",
+                "-ar", "48000",
+            ],
+            "mov",
+            "dnxhrsq",
+        )),
+        "h264_mp4" => Ok((
+            vec![
+                "-c:v", "libx264",
+                "-preset", "slow",       // good quality/size balance
+                "-crf", "18",            // visually lossless threshold
+                "-pix_fmt", "yuv420p",   // widest compatibility
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-movflags", "+faststart",
+            ],
+            "mp4",
+            "h264",
+        )),
+        other => Err(format!("unknown preset: {other}")),
+    }
+}
+
+#[tauri::command]
+async fn media_transcode(
+    app: AppHandle,
+    src_path: String,
+    preset: String,
+    total_sec_hint: Option<f64>,
+    job_id: Option<String>,
+) -> Result<TranscodeResult, String> {
+    if src_path.trim().is_empty() {
+        return Err("src_path is empty".into());
+    }
+    let src_pb = std::path::PathBuf::from(&src_path);
+    if !src_pb.exists() {
+        return Err(format!("source file does not exist: {src_path}"));
+    }
+
+    let (preset_args, out_ext, suffix) = resolve_preset(preset.trim())?;
+
+    // Build output path: <stem>.<suffix>.<ext> next to the source.
+    let parent = src_pb.parent().ok_or("source has no parent dir")?.to_path_buf();
+    let stem = src_pb
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or("source path is not valid UTF-8")?;
+    let out_path = parent.join(format!("{}.{}.{}", stem, suffix, out_ext));
+    let out_path_str = out_path
+        .to_str()
+        .ok_or("output path is not valid UTF-8")?
+        .to_string();
+
+    // Build full ffmpeg command. -progress pipe:1 emits structured
+    // key=value progress lines on stdout — much cleaner than parsing
+    // ffmpeg's human-readable banner output.
+    let ffmpeg = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| format!("sidecar resolve ffmpeg: {e}"))?;
+
+    let mut args: Vec<&str> = vec![
+        "-y",                // overwrite output if it exists
+        "-hide_banner",      // skip the version/copyright preamble
+        "-loglevel", "warning",
+        "-progress", "pipe:1",
+        "-nostats",          // we have our own progress; the stderr stats are noise
+        "-i", src_path.as_str(),
+    ];
+    args.extend(preset_args.iter());
+    args.push(out_path_str.as_str());
+
+    let (mut rx, _child) = ffmpeg
+        .args(args)
+        .spawn()
+        .map_err(|e| format!("ffmpeg spawn: {e}"))?;
+
+    // Accumulator for the current chunk of progress key=value pairs.
+    // ffmpeg writes one chunk per ~1s of source processed, terminated
+    // by `progress=continue` (or `progress=end` for the final chunk).
+    let mut chunk: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut stderr_tail: Vec<String> = Vec::new();
+    let mut exit_code: Option<i32> = None;
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            CommandEvent::Stdout(bytes) => {
+                let line = String::from_utf8_lossy(&bytes);
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                if let Some(eq) = line.find('=') {
+                    let key = line[..eq].trim().to_string();
+                    let value = line[eq + 1..].trim().to_string();
+                    if key == "progress" {
+                        // End of chunk — compute and emit.
+                        let processed_us: f64 = chunk
+                            .get("out_time_us")
+                            .or_else(|| chunk.get("out_time_ms"))
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        // out_time_us is microseconds; out_time_ms in
+                        // ffmpeg is also microseconds despite the name
+                        // (legacy quirk). Either way, divide by 1e6.
+                        let processed_sec = processed_us / 1_000_000.0;
+                        let speed_mult: Option<f64> = chunk
+                            .get("speed")
+                            .and_then(|s| s.trim_end_matches('x').trim().parse().ok())
+                            .filter(|s: &f64| *s > 0.0);
+                        let percent = total_sec_hint
+                            .filter(|t| *t > 0.0)
+                            .map(|t| (processed_sec / t * 100.0).min(99.9));
+
+                        let _ = app.emit(
+                            "transcode:progress",
+                            TranscodeProgress {
+                                job_id: job_id.clone(),
+                                processed_sec,
+                                total_sec: total_sec_hint,
+                                percent,
+                                speed_mult,
+                            },
+                        );
+
+                        chunk.clear();
+                        if value == "end" {
+                            // The final chunk — loop will exit on
+                            // Terminated event next, but we've emitted
+                            // the last data point.
+                        }
+                    } else {
+                        chunk.insert(key, value);
+                    }
+                }
+            }
+            CommandEvent::Stderr(bytes) => {
+                let line = String::from_utf8_lossy(&bytes).trim().to_string();
+                if !line.is_empty() {
+                    stderr_tail.push(line);
+                    if stderr_tail.len() > 50 {
+                        stderr_tail.remove(0);
+                    }
+                }
+            }
+            CommandEvent::Terminated(payload) => {
+                exit_code = payload.code;
+            }
+            _ => {}
+        }
+    }
+
+    if exit_code != Some(0) {
+        let tail = stderr_tail
+            .last()
+            .cloned()
+            .unwrap_or_else(|| "(no stderr)".into());
+        return Err(format!("ffmpeg failed: {tail}"));
+    }
+
+    let bytes = std::fs::metadata(&out_path_str).ok().map(|m| m.len());
+    Ok(TranscodeResult {
+        path: out_path_str,
+        bytes,
+    })
+}
+
+// =====================================================================
 // Tauri bootstrap
 // =====================================================================
 
@@ -735,6 +962,7 @@ pub fn run() {
             binaries_version,
             yt_fetch_metadata,
             yt_download,
+            media_transcode,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

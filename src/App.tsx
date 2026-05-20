@@ -55,6 +55,40 @@ type ProgressEvent = {
   eta_sec: number | null;
 };
 
+type TranscodeProgress = {
+  job_id: string | null;
+  processed_sec: number;
+  total_sec: number | null;
+  percent: number | null;
+  speed_mult: number | null;
+};
+
+type TranscodeResult = {
+  path: string;
+  bytes: number | null;
+};
+
+type TranscodePreset = "none" | "prores_422_lt" | "dnxhr_sq" | "h264_mp4";
+
+const TRANSCODE_PRESETS: { value: TranscodePreset; label: string; hint: string }[] = [
+  { value: "none", label: "None", hint: "keep source as-is" },
+  {
+    value: "prores_422_lt",
+    label: "ProRes 422 LT",
+    hint: ".mov · NLE-friendly · ~100 Mbps · default for editing",
+  },
+  {
+    value: "dnxhr_sq",
+    label: "DNxHR SQ",
+    hint: ".mov · Avid-native intermediate",
+  },
+  {
+    value: "h264_mp4",
+    label: "H.264 MP4 (optimized)",
+    hint: ".mp4 · small file · for sharing, not editing",
+  },
+];
+
 // =====================================================================
 // Helpers
 // =====================================================================
@@ -205,6 +239,18 @@ function MetadataCard() {
   const [inStr, setInStr] = useState("");
   const [outStr, setOutStr] = useState("");
 
+  // Transcode state — preset selection + active progress + phase tracking.
+  // Phase distinguishes the two visual stages of a single "download" job:
+  // downloading the source, then re-encoding into the editor-friendly
+  // intermediate. Both use the same progress bar with different labels.
+  const [transcodePreset, setTranscodePreset] =
+    useState<TranscodePreset>("none");
+  const [transcodeProgress, setTranscodeProgress] =
+    useState<TranscodeProgress | null>(null);
+  const [phase, setPhase] = useState<"idle" | "downloading" | "transcoding">(
+    "idle",
+  );
+
   // Subscribe to streaming progress events from Rust. The event payload
   // arrives once per yt-dlp progress tick; we just stuff it into state
   // and let React re-render the bar.
@@ -213,14 +259,26 @@ function MetadataCard() {
   // as separate streams — progress resets between them. UI will show
   // two passes. Cleaner stream-aware progress is a future polish item.
   useEffect(() => {
-    let unlisten: UnlistenFn | null = null;
+    let unlistenDl: UnlistenFn | null = null;
+    let unlistenTx: UnlistenFn | null = null;
     listen<ProgressEvent>("download:progress", (e) => {
+      // Single-URL flow doesn't tag with a job_id, so accept all
+      // untagged events. Batch events (with job_id set) are routed
+      // by QueueCard's own listener.
+      if (e.payload.job_id) return;
       setProgress(e.payload);
     }).then((fn) => {
-      unlisten = fn;
+      unlistenDl = fn;
+    });
+    listen<TranscodeProgress>("transcode:progress", (e) => {
+      if (e.payload.job_id) return;
+      setTranscodeProgress(e.payload);
+    }).then((fn) => {
+      unlistenTx = fn;
     });
     return () => {
-      unlisten?.();
+      unlistenDl?.();
+      unlistenTx?.();
     };
   }, []);
 
@@ -323,8 +381,10 @@ function MetadataCard() {
     setDlErr(null);
     setDlResult(null);
     setProgress(null);
+    setTranscodeProgress(null);
+    setPhase("downloading");
     try {
-      const res = await invoke<DownloadResult>("yt_download", {
+      const dlRes = await invoke<DownloadResult>("yt_download", {
         url,
         formatSpec: spec,
         mergeContainer,
@@ -333,12 +393,45 @@ function MetadataCard() {
         inSec,
         outSec,
       });
-      setDlResult(res);
+
+      // If a transcode preset was chosen, run it as a sequential
+      // second phase. The downloaded file is the input; the encoded
+      // file lands next to it with a preset-suffixed name.
+      if (transcodePreset !== "none") {
+        setPhase("transcoding");
+        // Estimate total seconds for percent/ETA: trim duration for
+        // segments, full video duration otherwise.
+        const totalSecHint =
+          inSec != null && outSec != null
+            ? outSec - inSec
+            : (meta?.duration_sec ?? null);
+        try {
+          const txRes = await invoke<TranscodeResult>("media_transcode", {
+            srcPath: dlRes.path,
+            preset: transcodePreset,
+            totalSecHint,
+            jobId: null,
+          });
+          // Replace the displayed result with the transcoded file —
+          // the user picked a preset because that's the file they want.
+          setDlResult(txRes);
+        } catch (e) {
+          // Transcode failed but the download succeeded. Surface the
+          // error and keep showing the source file so the user has
+          // something usable.
+          setDlErr(`transcode failed: ${String(e)} (source kept: ${dlRes.path})`);
+          setDlResult(dlRes);
+        }
+      } else {
+        setDlResult(dlRes);
+      }
     } catch (e) {
       setDlErr(String(e));
     } finally {
       setDownloading(false);
       setProgress(null);
+      setTranscodeProgress(null);
+      setPhase("idle");
     }
   }
 
@@ -539,6 +632,27 @@ function MetadataCard() {
             </span>
           </div>
 
+          {/* Transcode preset selector */}
+          <div className="mh-meta__segbar">
+            <span className="mh-smoke__label">transcode</span>
+            <select
+              className="mh-meta__select"
+              value={transcodePreset}
+              onChange={(e) =>
+                setTranscodePreset(e.target.value as TranscodePreset)
+              }
+            >
+              {TRANSCODE_PRESETS.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+            <span className="mh-smoke__faint mh-meta__seghint">
+              {TRANSCODE_PRESETS.find((p) => p.value === transcodePreset)?.hint}
+            </span>
+          </div>
+
           {/* Download bar — only after metadata exists */}
           <div className="mh-meta__dlbar">
             <div className="mh-meta__dlbar-info">
@@ -571,7 +685,7 @@ function MetadataCard() {
             </button>
           </div>
 
-          {downloading && (
+          {downloading && phase === "downloading" && (
             <div className="mh-meta__progress">
               <div className="mh-meta__progress-bar">
                 <div
@@ -592,8 +706,8 @@ function MetadataCard() {
               <div className="mh-meta__progress-meta">
                 <span className="mono">
                   {progress?.percent != null
-                    ? `${progress.percent.toFixed(1)}%`
-                    : "starting…"}
+                    ? `${progress.percent.toFixed(1)}% · downloading`
+                    : "starting download…"}
                 </span>
                 <span className="mono">
                   {fmtBytes(progress?.downloaded_bytes ?? 0)}
@@ -609,6 +723,44 @@ function MetadataCard() {
                 <span className="mono">
                   {progress?.eta_sec != null
                     ? `ETA ${fmtEta(progress.eta_sec)}`
+                    : ""}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {downloading && phase === "transcoding" && (
+            <div className="mh-meta__progress">
+              <div className="mh-meta__progress-bar">
+                <div
+                  className={
+                    "mh-meta__progress-fill" +
+                    (transcodeProgress?.percent == null
+                      ? " mh-meta__progress-fill--indeterminate"
+                      : "")
+                  }
+                  style={{
+                    width:
+                      transcodeProgress?.percent != null
+                        ? `${Math.min(100, transcodeProgress.percent)}%`
+                        : "100%",
+                  }}
+                />
+              </div>
+              <div className="mh-meta__progress-meta">
+                <span className="mono">
+                  {transcodeProgress?.percent != null
+                    ? `${transcodeProgress.percent.toFixed(1)}% · transcoding`
+                    : "starting transcode…"}
+                </span>
+                <span className="mono">
+                  {transcodeProgress
+                    ? `${fmtEta(Math.floor(transcodeProgress.processed_sec))}${transcodeProgress.total_sec ? ` / ${fmtEta(Math.floor(transcodeProgress.total_sec))}` : ""}`
+                    : ""}
+                </span>
+                <span className="mono">
+                  {transcodeProgress?.speed_mult != null
+                    ? `${transcodeProgress.speed_mult.toFixed(2)}× realtime`
                     : ""}
                 </span>
               </div>

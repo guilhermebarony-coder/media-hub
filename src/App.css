@@ -491,6 +491,24 @@ code,
   margin-left: auto;
 }
 
+.mh-meta__select {
+  height: 26px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-hi);
+  border-radius: 4px;
+  color: var(--text-0);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 0 8px;
+  outline: none;
+  cursor: pointer;
+  min-width: 200px;
+}
+.mh-meta__select:focus {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
 /* Download bar below format list */
 .mh-meta__dlbar {
   display: flex;

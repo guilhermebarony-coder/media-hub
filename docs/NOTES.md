@@ -290,6 +290,94 @@ case without an extension. Decide closer to the milestone.
 
 ---
 
+## 2026-05-20 — Transcript-to-markers assistant (sibling app sketch)
+
+Owner refined the AI search idea after seeing media-hub in action.
+Decision: build it as a **separate app**, not part of media-hub. Reasons:
+different problem domain (LLM orchestration vs media tooling), different
+release cadence (LLM APIs change monthly), different user paradigm
+(transcript→marker review vs URL→download). They share exactly one
+interface: an HTTP POST to media-hub's batch queue.
+
+### Concrete flow
+
+```
+[ Sibling app — name TBD, possibly "transcript-mate" or similar ]
+   ↓
+Paste transcript (optionally + timeline markers from Resolve)
+   ↓
+LLM call (Claude Sonnet 4.6 or Haiku) with structured output schema:
+   markers[]: { timestamp, category, brief, search_queries[], references[]? }
+   - category: "animation" | "broll" | "roadmap_visual"
+   - search_queries: 2-3 phrasings to feed downstream search
+   - references (v2 only): Pinterest / image-search results
+   ↓
+Review UI: edit, delete, regenerate any marker. User's editorial
+judgment is the QC gate — LLM produces a draft, editor makes it right.
+   ↓
+"Send to Media Hub" button
+   ↓
+HTTP POST to localhost:<port> on media-hub (the same endpoint we'll
+build for the planned browser extension — one endpoint, two clients)
+   ↓
+Media-hub's batch queue picks up the URLs and downloads them
+```
+
+### Cost reality check (2026-05-20 figures)
+
+- **LLM marker generation**: Claude Sonnet at typical transcript sizes
+  ≈ $0.02-0.05 per video. Haiku is ~5× cheaper. $50/mo = thousands of
+  videos. Dirt cheap.
+- **Visual references (v2)**: this is the budget eater. Pinterest's
+  public API is gone; scraping is fragile + ToS-questionable. Real
+  options are SerpAPI / Bing Image Search ≈ $50/mo for 5k searches.
+- **Realistic monthly spend for daily use**: $20-40 LLM + $30-50
+  images = ~$80/mo total. Within the "$50 already worth it" budget
+  if user mostly cares about text markers and uses image refs sparingly.
+
+### Realistic v1 scope (ship-first ordering)
+
+1. **Transcript → text markers**, no images yet. Marker = category +
+   timestamp + search queries. User reviews/edits.
+2. **Media-hub HTTP endpoint** for receiving queued URLs. Single
+   POST handler in Rust, ~50 LOC. Builds on the existing queue
+   architecture.
+3. **Visual references** (v2): wire Pinterest / image-search APIs
+   into the marker objects, render thumbnails in the review UI.
+4. **Style guide prompting** (v3): user maintains a personal prompt
+   prefix (aesthetic, channel patterns, past usage) that gets fed
+   into every marker generation. This is where personal AI tools
+   pull ahead of generic ChatGPT.
+
+### Architectural notes (for future-us starting the sibling project)
+
+- Stack: probably Tauri + React again (matches media-hub muscle memory
+  and the design tokens), OR plain web app since no filesystem access
+  needed. Web app is faster to ship.
+- Repo: fresh, separate from media-hub. Own docs/ folder, own
+  ROADMAP, own NOTES. Mirrors the same discipline.
+- Integration: media-hub gets an HTTP server on localhost (token-
+  protected, see "Browser extension architecture" section above for
+  the same design). The sibling app POSTs `{ urls: string[], project?: string }`
+  and media-hub appends to its batch queue.
+- LLM client: use the official Anthropic SDK directly. Structured
+  output via tool use / response_format. No middleware needed for
+  this scale.
+
+### The honest catch worth telling future-us
+
+LLM marker suggestions are useful but not magic. First few uses, the
+editor will spend more time fixing the LLM's bad suggestions than
+manual search would have taken. The value **compounds** with:
+- A personal style-guide prompt that learns user's taste
+- Iteration on the marker schema (what fields actually help)
+- Integration friction reduced to zero (the POST-to-media-hub piece)
+
+Without all three, it's just ChatGPT with extra steps. With all three,
+it's a real product moat for someone who edits daily.
+
+---
+
 ## 2026-05-19 — AI b-roll search (v1.5+ exploration)
 
 **Brainstormed but explicitly post-1.0.** Architecturally cheap to
