@@ -68,9 +68,20 @@ type TranscodeResult = {
   bytes: number | null;
 };
 
-type TranscodePreset = "none" | "prores_422_lt" | "dnxhr_sq" | "h264_mp4";
+type TranscodePreset =
+  | "none"
+  | "prores_422_lt"
+  | "dnxhr_sq"
+  | "h264_mp4"
+  | "h264_nvenc_mp4";
 
-const TRANSCODE_PRESETS: { value: TranscodePreset; label: string; hint: string }[] = [
+type TranscodePresetMeta = {
+  value: TranscodePreset;
+  label: string;
+  hint: string;
+};
+
+const TRANSCODE_PRESETS: TranscodePresetMeta[] = [
   { value: "none", label: "None", hint: "keep source as-is" },
   {
     value: "prores_422_lt",
@@ -86,6 +97,11 @@ const TRANSCODE_PRESETS: { value: TranscodePreset; label: string; hint: string }
     value: "h264_mp4",
     label: "H.264 MP4 (optimized)",
     hint: ".mp4 · small file · for sharing, not editing",
+  },
+  {
+    value: "h264_nvenc_mp4",
+    label: "H.264 MP4 (NVENC, NVIDIA GPU)",
+    hint: ".mp4 · 5–10× faster on NVIDIA · errors gracefully if no GPU",
   },
 ];
 
@@ -817,6 +833,7 @@ type QueueStatus =
   | "queued"
   | "fetching"
   | "downloading"
+  | "transcoding"
   | "done"
   | "failed";
 
@@ -829,6 +846,7 @@ type QueueJob = {
   thumbnail?: string | null;
   duration_sec?: number | null;
   progress?: ProgressEvent;
+  transcodeProgress?: TranscodeProgress;
   resultPath?: string;
   resultBytes?: number | null;
   error?: string;
@@ -842,6 +860,8 @@ function statusLabel(s: QueueStatus): string {
       return "fetching";
     case "downloading":
       return "downloading";
+    case "transcoding":
+      return "transcoding";
     case "done":
       return "done";
     case "failed":
@@ -871,6 +891,13 @@ async function revealFile(filePath: string) {
 function QueueCard() {
   const [urlsInput, setUrlsInput] = useState("");
   const [jobs, setJobs] = useState<QueueJob[]>([]);
+  // Batch-level transcode setting — applies to every queued job. Per-
+  // job overrides aren't a thing in this MVP; that's a 0.4 polish item.
+  const [batchTranscode, setBatchTranscode] = useState<TranscodePreset>("none");
+  // Mirror to a ref so processOne (running inside the async pump loop)
+  // sees the latest value without re-closing on every render.
+  const batchTranscodeRef = useRef<TranscodePreset>("none");
+  batchTranscodeRef.current = batchTranscode;
   // Ref mirrors jobs so the async processor can read fresh state without
   // closing over stale React snapshots.
   const jobsRef = useRef<QueueJob[]>([]);
@@ -881,19 +908,35 @@ function QueueCard() {
   const processingRef = useRef(false);
 
   // Subscribe to progress events and route to the matching job by id.
+  // Two event families — download progress while yt-dlp runs, transcode
+  // progress while ffmpeg runs. Both tagged with job_id by Rust so we
+  // can route to the right row without ambiguity vs the single-URL flow.
   useEffect(() => {
-    let unlisten: UnlistenFn | null = null;
+    let unlistenDl: UnlistenFn | null = null;
+    let unlistenTx: UnlistenFn | null = null;
     listen<ProgressEvent>("download:progress", (e) => {
       const id = e.payload.job_id;
-      if (!id) return; // ignore single-URL flow events
+      if (!id) return;
       setJobs((prev) =>
         prev.map((j) => (j.id === id ? { ...j, progress: e.payload } : j)),
       );
     }).then((fn) => {
-      unlisten = fn;
+      unlistenDl = fn;
+    });
+    listen<TranscodeProgress>("transcode:progress", (e) => {
+      const id = e.payload.job_id;
+      if (!id) return;
+      setJobs((prev) =>
+        prev.map((j) =>
+          j.id === id ? { ...j, transcodeProgress: e.payload } : j,
+        ),
+      );
+    }).then((fn) => {
+      unlistenTx = fn;
     });
     return () => {
-      unlisten?.();
+      unlistenDl?.();
+      unlistenTx?.();
     };
   }, []);
 
@@ -947,8 +990,9 @@ function QueueCard() {
       duration_sec: meta.duration_sec,
     });
 
+    let dlRes: DownloadResult;
     try {
-      const res = await invoke<DownloadResult>("yt_download", {
+      dlRes = await invoke<DownloadResult>("yt_download", {
         url: job.url,
         // bv*+ba/b → best video + best audio merged; fallback to best
         // pre-muxed if a YT format has both. Solid universal default.
@@ -960,13 +1004,44 @@ function QueueCard() {
         outSec: null,
         jobId: job.id,
       });
-      updateJob(job.id, {
-        status: "done",
-        resultPath: res.path,
-        resultBytes: res.bytes,
-      });
     } catch (e) {
       updateJob(job.id, { status: "failed", error: String(e) });
+      return;
+    }
+
+    // Optional transcode step. Uses the ref so it picks up a preset the
+    // user changed mid-batch (next jobs honor the new setting).
+    const preset = batchTranscodeRef.current;
+    if (preset !== "none") {
+      updateJob(job.id, { status: "transcoding", resultPath: dlRes.path });
+      try {
+        const txRes = await invoke<TranscodeResult>("media_transcode", {
+          srcPath: dlRes.path,
+          preset,
+          totalSecHint: meta.duration_sec ?? null,
+          jobId: job.id,
+        });
+        updateJob(job.id, {
+          status: "done",
+          resultPath: txRes.path,
+          resultBytes: txRes.bytes,
+        });
+      } catch (e) {
+        // Transcode failed but download succeeded — surface the error
+        // and keep the source path so the user has something usable.
+        updateJob(job.id, {
+          status: "failed",
+          resultPath: dlRes.path,
+          resultBytes: dlRes.bytes,
+          error: `transcode failed: ${String(e)} (source kept)`,
+        });
+      }
+    } else {
+      updateJob(job.id, {
+        status: "done",
+        resultPath: dlRes.path,
+        resultBytes: dlRes.bytes,
+      });
     }
   }
 
@@ -1016,12 +1091,14 @@ function QueueCard() {
       queued: 0,
       fetching: 0,
       downloading: 0,
+      transcoding: 0,
       done: 0,
       failed: 0,
     };
     for (const j of jobs) counts[j.status]++;
+    const active = counts.downloading + counts.transcoding + counts.fetching;
     const parts: string[] = [];
-    if (counts.downloading) parts.push(`${counts.downloading} active`);
+    if (active) parts.push(`${active} active`);
     if (counts.queued) parts.push(`${counts.queued} queued`);
     if (counts.done) parts.push(`${counts.done} done`);
     if (counts.failed) parts.push(`${counts.failed} failed`);
@@ -1046,6 +1123,26 @@ function QueueCard() {
         onChange={(e) => setUrlsInput(e.target.value)}
         spellCheck={false}
       />
+
+      <div className="mh-meta__segbar" style={{ borderTop: 0, padding: "8px 0 14px" }}>
+        <span className="mh-smoke__label">transcode all</span>
+        <select
+          className="mh-meta__select"
+          value={batchTranscode}
+          onChange={(e) =>
+            setBatchTranscode(e.target.value as TranscodePreset)
+          }
+        >
+          {TRANSCODE_PRESETS.map((p) => (
+            <option key={p.value} value={p.value}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+        <span className="mh-smoke__faint mh-meta__seghint">
+          {TRANSCODE_PRESETS.find((p) => p.value === batchTranscode)?.hint}
+        </span>
+      </div>
 
       <div className="mh-queue__actions">
         <button
@@ -1114,6 +1211,48 @@ function QueueCard() {
                       )}
                       {job.progress?.eta_sec != null && (
                         <span>ETA {fmtEta(job.progress.eta_sec)}</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {job.status === "transcoding" && (
+                  <div className="mh-queue__progress">
+                    <div className="mh-queue__progress-bar">
+                      <div
+                        className={
+                          "mh-queue__progress-fill" +
+                          (job.transcodeProgress?.percent == null
+                            ? " mh-meta__progress-fill--indeterminate"
+                            : "")
+                        }
+                        style={{
+                          width:
+                            job.transcodeProgress?.percent != null
+                              ? `${Math.min(100, job.transcodeProgress.percent)}%`
+                              : "100%",
+                        }}
+                      />
+                    </div>
+                    <div className="mh-queue__progress-meta mono">
+                      <span>
+                        {job.transcodeProgress?.percent != null
+                          ? `${job.transcodeProgress.percent.toFixed(1)}% · transcoding`
+                          : "starting transcode…"}
+                      </span>
+                      {job.transcodeProgress && (
+                        <span>
+                          {fmtEta(
+                            Math.floor(job.transcodeProgress.processed_sec),
+                          )}
+                          {job.transcodeProgress.total_sec
+                            ? ` / ${fmtEta(Math.floor(job.transcodeProgress.total_sec))}`
+                            : ""}
+                        </span>
+                      )}
+                      {job.transcodeProgress?.speed_mult != null && (
+                        <span>
+                          {job.transcodeProgress.speed_mult.toFixed(2)}×
+                        </span>
                       )}
                     </div>
                   </div>

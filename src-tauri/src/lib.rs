@@ -800,6 +800,26 @@ fn resolve_preset(preset: &str) -> Result<(Vec<&'static str>, &'static str, &'st
             "mp4",
             "h264",
         )),
+        // NVENC variant — 5-10× faster than libx264 on NVIDIA hardware.
+        // Falls back to "ffmpeg failed: unknown encoder h264_nvenc" if
+        // the user's machine doesn't have a compatible NVIDIA GPU or
+        // their driver is too old. Quality is delivery-tier (CQ 20 is
+        // visually equivalent to libx264 -crf 18 for most content).
+        "h264_nvenc_mp4" => Ok((
+            vec![
+                "-c:v", "h264_nvenc",
+                "-preset", "p6",         // p1 fastest .. p7 highest quality
+                "-rc", "vbr",
+                "-cq", "20",             // constant quality target
+                "-b:v", "0",             // pure CQ, no bitrate cap
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-movflags", "+faststart",
+            ],
+            "mp4",
+            "h264nv",
+        )),
         other => Err(format!("unknown preset: {other}")),
     }
 }
@@ -848,6 +868,12 @@ async fn media_transcode(
         "-loglevel", "warning",
         "-progress", "pipe:1",
         "-nostats",          // we have our own progress; the stderr stats are noise
+        // Hardware decode acceleration where available. `auto` picks
+        // the best available backend (NVDEC on NVIDIA, QSV on Intel,
+        // VideoToolbox on macOS, etc.) and falls back to CPU silently
+        // if none work. Cuts decode time substantially on H.264/HEVC/
+        // AV1 inputs which is most of what YouTube serves.
+        "-hwaccel", "auto",
         "-i", src_path.as_str(),
     ];
     args.extend(preset_args.iter());

@@ -769,6 +769,11 @@ code,
   background: var(--accent-dim);
   border-color: var(--accent-line);
 }
+.mh-queue__pill--transcoding {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: var(--accent-line);
+}
 .mh-queue__pill--done {
   color: var(--ok);
   background: rgba(107, 213, 143, 0.12);
