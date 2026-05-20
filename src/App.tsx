@@ -1,5 +1,6 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openPath } from "@tauri-apps/plugin-opener";
 import "./App.css";
 
@@ -45,6 +46,14 @@ type DownloadResult = {
   bytes: number | null;
 };
 
+type ProgressEvent = {
+  downloaded_bytes: number;
+  total_bytes: number | null;
+  percent: number | null;
+  speed_bps: number | null;
+  eta_sec: number | null;
+};
+
 // =====================================================================
 // Helpers
 // =====================================================================
@@ -70,6 +79,18 @@ function fmtBytes(b: number | null): string {
 function fmtUploadDate(d: string | null): string {
   if (!d || d.length !== 8) return "—";
   return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+}
+
+function fmtEta(sec: number | null): string {
+  if (sec == null || sec <= 0) return "—";
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (m < 60) return `${m}:${s.toString().padStart(2, "0")}`;
+  const h = Math.floor(m / 60);
+  return `${h}:${(m % 60).toString().padStart(2, "0")}:${s
+    .toString()
+    .padStart(2, "0")}`;
 }
 
 // =====================================================================
@@ -149,6 +170,26 @@ function MetadataCard() {
   const [downloading, setDownloading] = useState(false);
   const [dlErr, setDlErr] = useState<string | null>(null);
   const [dlResult, setDlResult] = useState<DownloadResult | null>(null);
+  const [progress, setProgress] = useState<ProgressEvent | null>(null);
+
+  // Subscribe to streaming progress events from Rust. The event payload
+  // arrives once per yt-dlp progress tick; we just stuff it into state
+  // and let React re-render the bar.
+  //
+  // Note: for `<id>+bestaudio` specs, yt-dlp downloads video THEN audio
+  // as separate streams — progress resets between them. UI will show
+  // two passes. Cleaner stream-aware progress is a future polish item.
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    listen<ProgressEvent>("download:progress", (e) => {
+      setProgress(e.payload);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
 
   async function fetchMetadata(e?: FormEvent) {
     e?.preventDefault();
@@ -212,17 +253,27 @@ function MetadataCard() {
     setDownloading(true);
     setDlErr(null);
     setDlResult(null);
+    setProgress(null);
     try {
       const res = await invoke<DownloadResult>("yt_download", {
         url,
         formatSpec: spec,
         mergeContainer,
+        // Hint the expected size so Rust can compute % from the file's
+        // growing size on disk. For composed specs this is the video stream
+        // size only; audio adds maybe 5-10 MB, so percent caps around 95-99%
+        // before the merger fires. Acceptable for a feedback signal.
+        totalBytesHint: selectedFormat.filesize_bytes,
+        // video_id helps Rust filter dest-dir files to just the ones for
+        // this download (we put [<id>] in the output template).
+        videoId: meta?.id ?? "",
       });
       setDlResult(res);
     } catch (e) {
       setDlErr(String(e));
     } finally {
       setDownloading(false);
+      setProgress(null);
     }
   }
 
@@ -411,6 +462,50 @@ function MetadataCard() {
               {downloading ? "Downloading…" : "Download"}
             </button>
           </div>
+
+          {downloading && (
+            <div className="mh-meta__progress">
+              <div className="mh-meta__progress-bar">
+                <div
+                  className={
+                    "mh-meta__progress-fill" +
+                    (progress?.percent == null
+                      ? " mh-meta__progress-fill--indeterminate"
+                      : "")
+                  }
+                  style={{
+                    width:
+                      progress?.percent != null
+                        ? `${Math.min(100, progress.percent)}%`
+                        : "100%",
+                  }}
+                />
+              </div>
+              <div className="mh-meta__progress-meta">
+                <span className="mono">
+                  {progress?.percent != null
+                    ? `${progress.percent.toFixed(1)}%`
+                    : "starting…"}
+                </span>
+                <span className="mono">
+                  {fmtBytes(progress?.downloaded_bytes ?? 0)}
+                  {progress?.total_bytes != null
+                    ? ` / ${fmtBytes(progress.total_bytes)}`
+                    : ""}
+                </span>
+                <span className="mono">
+                  {progress?.speed_bps != null
+                    ? `${fmtBytes(progress.speed_bps)}/s`
+                    : ""}
+                </span>
+                <span className="mono">
+                  {progress?.eta_sec != null
+                    ? `ETA ${fmtEta(progress.eta_sec)}`
+                    : ""}
+                </span>
+              </div>
+            </div>
+          )}
 
           {dlErr && (
             <div className="mh-smoke__row mh-smoke__row--err mh-meta__dlmsg">

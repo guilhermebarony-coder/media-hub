@@ -514,3 +514,54 @@ code,
   background: var(--bg-2);
   border-color: var(--accent-line);
 }
+
+/* Download progress bar */
+.mh-meta__progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-2);
+}
+.mh-meta__progress-bar {
+  height: 6px;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+.mh-meta__progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.18s ease-out;
+}
+@keyframes mh-indeterminate {
+  0% { background-position: 0 0; }
+  100% { background-position: 24px 0; }
+}
+.mh-meta__progress-fill--indeterminate {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--accent) 0,
+    var(--accent) 6px,
+    var(--accent-line) 6px,
+    var(--accent-line) 12px
+  );
+  background-size: 24px 24px;
+  animation: mh-indeterminate 0.6s linear infinite;
+  opacity: 0.7;
+}
+.mh-meta__progress-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.mh-meta__progress-meta span:first-child {
+  color: var(--accent);
+  font-weight: 500;
+  min-width: 60px;
+}
+

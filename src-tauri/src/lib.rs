@@ -4,7 +4,8 @@
 // Milestone 0.2 in progress: `yt_fetch_metadata` (paste URL → metadata card).
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
 // =====================================================================
@@ -244,22 +245,74 @@ async fn yt_fetch_metadata(app: AppHandle, url: String) -> Result<VideoMetadata,
 }
 
 // =====================================================================
-// 0.2 — Minimum viable download (no progress streaming yet)
+// 0.2 — Download with streaming progress
 // =====================================================================
 //
-// Spawns yt-dlp with -f <format_id> + an output template, awaits completion,
-// returns the final on-disk path. Destination is hardcoded to
-// ~/Media Hub/Downloads/_test/ for this slice — proper destination
-// resolution (Library vs active Project) lands with milestone 0.6.
+// yt-dlp is spawned (not awaited as one blob) so we can read its stdout
+// line by line while the download runs. We instruct yt-dlp to emit
+// machine-parseable progress lines with a custom prefix, parse them in
+// Rust, and forward structured events to the renderer via Tauri's event
+// system. The renderer subscribes with @tauri-apps/api/event `listen`.
 //
-// Progress streaming via Tauri events is the next slice, not this one.
-// This is deliberately the smallest useful step that proves files
-// actually land on disk.
+// Destination is still hardcoded to ~/Media Hub/Downloads/_test/ for
+// this slice; proper Library/Project routing lands with milestone 0.6.
 
 #[derive(Serialize)]
 pub struct DownloadResult {
     pub path: String,
     pub bytes: Option<u64>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ProgressEvent {
+    /// Bytes pulled across the current stream (resets when yt-dlp moves
+    /// from video stream to audio stream during a `<id>+bestaudio` spec).
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
+    pub percent: Option<f64>,
+    pub speed_bps: Option<u64>,
+    pub eta_sec: Option<u64>,
+}
+
+/// Return the actual current byte count of `path` by opening it for read
+/// and seeking to the end.
+///
+/// On Windows, the file size in directory listings is **cached** and
+/// doesn't update during buffered writes — `std::fs::metadata().len()`
+/// on an actively-growing file returns the size from the last metadata
+/// flush, often 0 throughout the entire download. Opening the file
+/// ourselves and seeking to the end forces the file system to report
+/// the real current position. yt-dlp opens its writes with shared
+/// access on Windows, so this concurrent read is allowed.
+fn live_file_size(path: &std::path::Path) -> Option<u64> {
+    use std::fs::OpenOptions;
+    use std::io::{Seek, SeekFrom};
+    let mut f = OpenOptions::new().read(true).open(path).ok()?;
+    f.seek(SeekFrom::End(0)).ok()
+}
+
+/// Sum live byte counts of every active download file in `dir` — both
+/// `.part` (when --no-part isn't used) and our matching final-name
+/// pattern. At most one or two files are growing at a time (video then
+/// audio for composed specs), so the sum is the currently-relevant
+/// total even though we don't know which file is which.
+fn sum_live_dir_bytes(dir: &std::path::Path, video_id: &str) -> u64 {
+    let id_marker = format!("[{video_id}]");
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    // Match either *.part OR files containing our video id
+                    // (matches yt-dlp's <title> [<id>].<ext> output template,
+                    // including intermediate per-format names like .f313.webm).
+                    let name = e.file_name().to_string_lossy().to_lowercase();
+                    name.ends_with(".part") || name.contains(&id_marker.to_lowercase())
+                })
+                .filter_map(|e| live_file_size(&e.path()))
+                .sum()
+        })
+        .unwrap_or(0)
 }
 
 #[tauri::command]
@@ -268,6 +321,8 @@ async fn yt_download(
     url: String,
     format_spec: String,
     merge_container: Option<String>,
+    total_bytes_hint: Option<u64>,
+    video_id: String,
 ) -> Result<DownloadResult, String> {
     // `format_spec` is an opaque yt-dlp -f argument — could be a single
     // format id ("18", "313") or a composed spec ("313+bestaudio/best").
@@ -316,23 +371,44 @@ async fn yt_download(
     let ffmpeg_path_str = ffmpeg_path.as_ref().map(|p| p.to_string_lossy().to_string());
 
     let shell = app.shell();
+    // PYTHONUNBUFFERED disables Python's block-buffering of stdout when
+    // the process is piped (not attached to a TTY). yt-dlp.exe is a
+    // PyInstaller bundle and honors this env var — without it, progress
+    // lines sit in the buffer until the process exits, defeating the
+    // whole point of streaming.
     let cmd = shell
         .sidecar("yt-dlp")
-        .map_err(|e| format!("sidecar resolve: {e}"))?;
+        .map_err(|e| format!("sidecar resolve: {e}"))?
+        .env("PYTHONUNBUFFERED", "1");
 
-    // Build args. --ffmpeg-location is optional — if we couldn't resolve
-    // a bundled ffmpeg, yt-dlp falls back to PATH lookup and emits a
-    // clean error if both are missing.
+    // We don't try to parse yt-dlp's progress output anymore — Python's
+    // block-buffering on piped stdout makes it arrive in one burst at
+    // end-of-process (PYTHONUNBUFFERED doesn't override PyInstaller's
+    // bundled Python in practice). Instead we poll the .part file size
+    // from the filesystem every 500ms in a sibling task, which gives
+    // us real progress without depending on stdout flushing. See
+    // sum_part_file_bytes + the spawn block below.
+    //
+    // `--print after_move:...` still works — it fires only once after
+    // each stream's post-processing rename, so a single end-of-process
+    // flush is fine for capturing the final path.
+    let filepath_template = "after_move:[mh-filepath] %(filepath)s";
+
     let mut args: Vec<&str> = vec![
         "-f",
         format_spec.trim(),
         "--no-playlist",
         "--no-warnings",
-        "--no-call-home",
         "--restrict-filenames",
         "--no-mtime", // download time, not source mtime — friendlier for library sort
+        // Sequential fragment downloads — forces each fragment to flush
+        // before the next starts, giving our filesystem polling more
+        // discrete checkpoints to observe. Without this yt-dlp downloads
+        // N fragments in parallel and the writes can all arrive in one burst.
+        "--concurrent-fragments",
+        "1",
         "--print",
-        "after_move:filepath",
+        filepath_template,
         "-o",
         template_str.as_str(),
     ];
@@ -354,43 +430,124 @@ async fn yt_download(
     args.push("--");
     args.push(trimmed);
 
-    // --print after_move:filepath asks yt-dlp to echo the final path AFTER
-    // any post-processing rename. That's the file we hand back to the UI.
-    let out = cmd
+    // Polling task: every 500ms, sum .part file sizes in dest, compute
+    // speed from delta, emit a progress event. Stops as soon as the
+    // shared `running` flag flips — set by the StopPolling drop guard
+    // when this function returns (success or error), so the task can
+    // never outlive the download.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    struct StopPolling(Arc<AtomicBool>);
+    impl Drop for StopPolling {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::Relaxed);
+        }
+    }
+
+    let running = Arc::new(AtomicBool::new(true));
+    let _stop_guard = StopPolling(running.clone());
+
+    {
+        let app = app.clone();
+        let dest = dest.clone();
+        let running = running.clone();
+        let total_hint = total_bytes_hint;
+        let video_id = video_id.clone();
+        tokio::spawn(async move {
+            let mut last_bytes: u64 = 0;
+            let mut last_time = Instant::now();
+            // First emit fires after the first sleep — gives yt-dlp ~500ms
+            // to actually start writing before we report 0/0.
+            while running.load(Ordering::Relaxed) {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                if !running.load(Ordering::Relaxed) {
+                    break;
+                }
+                let bytes_now = sum_live_dir_bytes(&dest, &video_id);
+                let now = Instant::now();
+                let dt = now.duration_since(last_time).as_secs_f64();
+                let db = bytes_now.saturating_sub(last_bytes);
+                let speed = if dt > 0.0 && db > 0 {
+                    Some((db as f64 / dt) as u64)
+                } else {
+                    None
+                };
+                let percent = total_hint
+                    .filter(|t| *t > 0)
+                    .map(|t| ((bytes_now as f64 / t as f64) * 100.0).min(99.9));
+                let eta = match (speed, total_hint) {
+                    (Some(s), Some(t)) if s > 0 && t > bytes_now => {
+                        Some(t.saturating_sub(bytes_now) / s)
+                    }
+                    _ => None,
+                };
+                let _ = app.emit(
+                    "download:progress",
+                    ProgressEvent {
+                        downloaded_bytes: bytes_now,
+                        total_bytes: total_hint,
+                        percent,
+                        speed_bps: speed,
+                        eta_sec: eta,
+                    },
+                );
+                last_bytes = bytes_now;
+                last_time = now;
+            }
+        });
+    }
+
+    // Spawn yt-dlp and read its event stream. We only consume stdout for
+    // the [mh-filepath] capture and stderr for error reporting; progress
+    // comes from the polling task above.
+    let (mut rx, _child) = cmd
         .args(args)
-        .output()
-        .await
+        .spawn()
         .map_err(|e| format!("spawn failed: {e}"))?;
 
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let tail = stderr
-            .lines()
-            .filter(|l| !l.trim().is_empty())
+    let mut final_path: Option<String> = None;
+    let mut stderr_tail: Vec<String> = Vec::new();
+    let mut exit_code: Option<i32> = None;
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            CommandEvent::Stdout(bytes) => {
+                let line = String::from_utf8_lossy(&bytes);
+                let line = line.trim();
+                if let Some(path) = line.strip_prefix("[mh-filepath] ") {
+                    final_path = Some(path.trim().to_string());
+                }
+            }
+            CommandEvent::Stderr(bytes) => {
+                let line = String::from_utf8_lossy(&bytes).trim().to_string();
+                if !line.is_empty() {
+                    stderr_tail.push(line);
+                    if stderr_tail.len() > 50 {
+                        stderr_tail.remove(0);
+                    }
+                }
+            }
+            CommandEvent::Terminated(payload) => {
+                exit_code = payload.code;
+            }
+            _ => {}
+        }
+    }
+
+    if exit_code != Some(0) {
+        let tail = stderr_tail
             .last()
-            .unwrap_or("(no stderr)");
+            .cloned()
+            .unwrap_or_else(|| "(no stderr)".into());
         return Err(format!("yt-dlp failed: {tail}"));
     }
 
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let final_path = stdout
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .last()
-        .unwrap_or("");
+    let path = final_path.ok_or_else(|| "yt-dlp returned no output path".to_string())?;
+    let bytes = std::fs::metadata(&path).ok().map(|m| m.len());
 
-    if final_path.is_empty() {
-        return Err("yt-dlp returned no output path".into());
-    }
-
-    // Read file size to display in the UI. Non-fatal if missing.
-    let bytes = std::fs::metadata(final_path).ok().map(|m| m.len());
-
-    Ok(DownloadResult {
-        path: final_path.to_string(),
-        bytes,
-    })
+    Ok(DownloadResult { path, bytes })
 }
 
 // =====================================================================

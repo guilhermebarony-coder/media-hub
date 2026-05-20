@@ -328,6 +328,106 @@ shell/nav)
 
 ---
 
+## 2026-05-20 — Download progress on Windows: the buffering rabbit hole
+
+Burned a session figuring out why streaming download progress didn't
+work on Windows. Documenting the dead ends and the eventual fix so we
+don't re-derive this when polishing the UI.
+
+### The problem
+
+We wanted yt-dlp progress events flowing to the UI in real time.
+Naïve approach: `tauri-plugin-shell .spawn()` yt-dlp, parse the
+`--progress-template` lines from stdout, emit Tauri events.
+
+What actually happened: **stdout from yt-dlp arrived in one giant burst
+at process exit**, not incrementally. The progress bar sat at "starting…
+0 B" the entire download, then jumped straight to "done."
+
+### Dead ends (each took 10–30 min to rule out)
+
+1. **Switched `%(progress)j` JSON template → positional fields with `s`
+   formatter.** No help. yt-dlp emitted nothing at all to stdout
+   during the download regardless of template.
+2. **Set `PYTHONUNBUFFERED=1` via `.env()` on the command.** Should
+   force Python to unbuffer stdout. Doesn't work for PyInstaller
+   bundles in practice — the bundled Python ignores it or sets it
+   too late in startup.
+3. **`--newline` flag** — already passed, makes no difference for the
+   non-TTY pipe case.
+4. **Watched `.part` files in the dest dir for size changes.** This
+   was the breakthrough idea — bypass stdout entirely, get progress
+   from the filesystem. *Almost* worked, but…
+
+### The actual Windows-specific gotcha
+
+On Windows, when a process is buffered-writing to a file,
+**`std::fs::metadata(path).len()` returns the cached size from the MFT**,
+which doesn't update until the file is closed/flushed. So during a
+download:
+- The `.part` file exists
+- Data IS being written to disk (cluster contents update)
+- But `metadata().len()` returns 0 the entire time, then jumps to
+  the final size at process exit
+
+This isn't a Tauri bug, a Python bug, or a yt-dlp bug. It's NTFS +
+buffered I/O working as designed.
+
+### The fix
+
+Open the file and seek to end. The seek operation forces Windows to
+report the *actual* current byte position, not the cached attribute:
+
+```rust
+fn live_file_size(path: &Path) -> Option<u64> {
+    use std::fs::OpenOptions;
+    use std::io::{Seek, SeekFrom};
+    let mut f = OpenOptions::new().read(true).open(path).ok()?;
+    f.seek(SeekFrom::End(0)).ok()
+}
+```
+
+Concurrent read is allowed because Python opens its writes with
+`FILE_SHARE_READ` on Windows by default.
+
+Combined with `--concurrent-fragments 1` (so writes are sequential and
+we see discrete checkpoints rather than one parallel burst), this
+gives accurate live progress polled every 500ms.
+
+### Implications for future work
+
+- **ETA + speed are bursty** with this approach. Each 500ms poll
+  produces a delta; yt-dlp's actual write pattern is bursty (network
+  chunks land in clumps), so speed can swing from 0 → 200 MB/s → 0
+  between adjacent polls. Smoothing: a 3-tick rolling average would
+  calm this down a lot. Worth doing when we polish the UI but not
+  blocking.
+- **Percent is capped at 99.9%** during the download phase by design
+  — when the file is being merged by ffmpeg, the polled total briefly
+  exceeds the hint. Capping prevents the bar from showing 105%.
+- **For composed specs, the bar dips between streams.** Video stream
+  completes (90%+), gets renamed/moved, audio stream starts (small,
+  rises fast). Acceptable for v1. Stream-aware progress (showing
+  "video 1/2" and "audio 2/2" as separate phases) is a polish item.
+- **For batch downloads (0.4), need per-file polling tasks**, each
+  scoped to its own job. The current StopPolling drop guard pattern
+  generalizes — just spawn one per active job.
+
+### What we tried that didn't work, for future reference
+
+- `%(progress)j` template — yt-dlp's JSON formatter may be unreliable
+  for the full `progress` dict; positional `%(.field)s` works for
+  individual fields but doesn't help when stdout itself is buffered
+- `PYTHONUNBUFFERED=1` env var — doesn't override PyInstaller bundles
+- `--newline` flag — only affects \r vs \n line endings, doesn't
+  unbuffer
+- ConPTY (pseudo-terminal allocation) — would solve the buffering by
+  giving yt-dlp a fake TTY, but it's a Windows-specific dependency
+  with version quirks across Win10/11. **Not worth it now that the
+  filesystem polling works**, but documented here for completeness.
+
+---
+
 ## 2026-05-20 — YouTube format selection gotcha
 
 For any YouTube video above ~360p, video and audio are served as
