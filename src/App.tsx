@@ -81,6 +81,34 @@ function fmtUploadDate(d: string | null): string {
   return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
 }
 
+/**
+ * Parse a flexible timestamp string into seconds.
+ *
+ * Accepted forms:
+ *   "42"          → 42
+ *   "1:30"        → 90        (mm:ss)
+ *   "1:02:30"     → 3750      (hh:mm:ss)
+ *   "01:30.500"   → 90.5      (fractional seconds optional anywhere)
+ *   ""            → null      (caller treats as "unset")
+ *
+ * Returns null for invalid input.
+ */
+function parseTimestamp(s: string): number | null {
+  const trimmed = s.trim();
+  if (!trimmed) return null;
+  const parts = trimmed.split(":");
+  if (parts.length > 3) return null;
+  let total = 0;
+  for (let i = 0; i < parts.length; i++) {
+    const n = Number(parts[i]);
+    if (!Number.isFinite(n) || n < 0) return null;
+    // Largest unit first: hh:mm:ss, mm:ss, or just seconds
+    const mult = Math.pow(60, parts.length - 1 - i);
+    total += n * mult;
+  }
+  return total;
+}
+
 function fmtEta(sec: number | null): string {
   if (sec == null || sec <= 0) return "—";
   if (sec < 60) return `${sec}s`;
@@ -171,6 +199,10 @@ function MetadataCard() {
   const [dlErr, setDlErr] = useState<string | null>(null);
   const [dlResult, setDlResult] = useState<DownloadResult | null>(null);
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
+  // Segment In/Out timestamps — strings so the user can type whatever
+  // form they want (mm:ss, hh:mm:ss, seconds); parsed on submit.
+  const [inStr, setInStr] = useState("");
+  const [outStr, setOutStr] = useState("");
 
   // Subscribe to streaming progress events from Rust. The event payload
   // arrives once per yt-dlp progress tick; we just stuff it into state
@@ -250,6 +282,42 @@ function MetadataCard() {
   async function download() {
     if (!selectedFormat || !url.trim()) return;
     const { spec, mergeContainer } = composeFormatSpec(selectedFormat);
+
+    // Resolve segment from the text inputs. Both empty → full download.
+    // One empty / one filled → user error.
+    const inSec = parseTimestamp(inStr);
+    const outSec = parseTimestamp(outStr);
+    if (inStr.trim() !== "" && inSec == null) {
+      setDlErr(`Invalid In timestamp: "${inStr}"`);
+      return;
+    }
+    if (outStr.trim() !== "" && outSec == null) {
+      setDlErr(`Invalid Out timestamp: "${outStr}"`);
+      return;
+    }
+    if ((inSec == null) !== (outSec == null)) {
+      setDlErr("Specify both In and Out, or neither (for full video)");
+      return;
+    }
+    if (inSec != null && outSec != null) {
+      if (outSec <= inSec) {
+        setDlErr("Out must be after In");
+        return;
+      }
+      if (meta?.duration_sec != null && outSec > meta.duration_sec) {
+        setDlErr(
+          `Out (${outSec}s) exceeds video duration (${Math.floor(meta.duration_sec)}s)`,
+        );
+        return;
+      }
+    }
+
+    // The size hint is the FULL filesize — we always pull the full
+    // source, then trim locally with ffmpeg. (Earlier scaled this by
+    // segment duration when we thought yt-dlp could byte-range, which
+    // it can't.)
+    const bytesHint: number | null = selectedFormat.filesize_bytes;
+
     setDownloading(true);
     setDlErr(null);
     setDlResult(null);
@@ -259,14 +327,10 @@ function MetadataCard() {
         url,
         formatSpec: spec,
         mergeContainer,
-        // Hint the expected size so Rust can compute % from the file's
-        // growing size on disk. For composed specs this is the video stream
-        // size only; audio adds maybe 5-10 MB, so percent caps around 95-99%
-        // before the merger fires. Acceptable for a feedback signal.
-        totalBytesHint: selectedFormat.filesize_bytes,
-        // video_id helps Rust filter dest-dir files to just the ones for
-        // this download (we put [<id>] in the output template).
+        totalBytesHint: bytesHint,
         videoId: meta?.id ?? "",
+        inSec,
+        outSec,
       });
       setDlResult(res);
     } catch (e) {
@@ -430,6 +494,43 @@ function MetadataCard() {
               </table>
             </div>
           )}
+
+          {/* Segment In/Out — optional. Empty = full video. */}
+          <div className="mh-meta__segbar">
+            <span className="mh-smoke__label">segment</span>
+            <label className="mh-meta__seginput">
+              <span className="mh-meta__seglabel">in</span>
+              <input
+                type="text"
+                placeholder="—"
+                value={inStr}
+                onChange={(e) => setInStr(e.target.value)}
+                spellCheck={false}
+                autoComplete="off"
+              />
+            </label>
+            <label className="mh-meta__seginput">
+              <span className="mh-meta__seglabel">out</span>
+              <input
+                type="text"
+                placeholder="—"
+                value={outStr}
+                onChange={(e) => setOutStr(e.target.value)}
+                spellCheck={false}
+                autoComplete="off"
+              />
+            </label>
+            <span className="mh-smoke__faint mh-meta__seghint">
+              {inStr || outStr ? (
+                <>
+                  Downloads the full source first, then trims with ffmpeg
+                  (stream-copy, ~5–15 s, no quality loss).
+                </>
+              ) : (
+                <>mm:ss · hh:mm:ss · or seconds. Leave both empty for full video.</>
+              )}
+            </span>
+          </div>
 
           {/* Download bar — only after metadata exists */}
           <div className="mh-meta__dlbar">

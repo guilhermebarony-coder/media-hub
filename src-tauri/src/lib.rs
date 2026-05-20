@@ -315,6 +315,16 @@ fn sum_live_dir_bytes(dir: &std::path::Path, video_id: &str) -> u64 {
         .unwrap_or(0)
 }
 
+/// Format a number of seconds as HH-MM-SS for use in filenames.
+/// Dashes (not colons) so the result is filesystem-safe on Windows.
+fn fmt_segment_label(sec: f64) -> String {
+    let total = sec.max(0.0) as u64;
+    let h = total / 3600;
+    let m = (total % 3600) / 60;
+    let s = total % 60;
+    format!("{:02}-{:02}-{:02}", h, m, s)
+}
+
 #[tauri::command]
 async fn yt_download(
     app: AppHandle,
@@ -323,6 +333,8 @@ async fn yt_download(
     merge_container: Option<String>,
     total_bytes_hint: Option<u64>,
     video_id: String,
+    in_sec: Option<f64>,
+    out_sec: Option<f64>,
 ) -> Result<DownloadResult, String> {
     // `format_spec` is an opaque yt-dlp -f argument — could be a single
     // format id ("18", "313") or a composed spec ("313+bestaudio/best").
@@ -346,11 +358,34 @@ async fn yt_download(
         .map_err(|e| format!("resolve home dir: {e}"))?;
     let dest = home.join("Media Hub").join("Downloads").join("_test");
     std::fs::create_dir_all(&dest).map_err(|e| format!("create dest dir: {e}"))?;
+    let dest_str = dest.to_string_lossy().to_string();
+    // Force yt-dlp's temp files (during merges and section trims) into
+    // our dest dir so the filesystem-polling progress task can see them.
+    // Without this, segment downloads stage in a hidden temp dir and the
+    // bar sits at 0 the whole time.
+    let temp_paths_arg = format!("temp:{}", dest_str);
 
-    // yt-dlp output template: title (truncated) + video id in brackets +
-    // ext. The id prevents collisions when grabbing the same title twice.
-    let template = dest.join("%(title).180B [%(id)s].%(ext)s");
-    let template_str = template.to_string_lossy().to_string();
+    // Segment validation: both must be set together (one without the
+    // other is meaningless), and in must be strictly before out.
+    let segment = match (in_sec, out_sec) {
+        (Some(i), Some(o)) if o > i && i >= 0.0 => Some((i, o)),
+        (Some(_), Some(_)) => return Err("In must be < Out and both >= 0".into()),
+        (None, None) => None,
+        _ => return Err("Specify both In and Out, or neither".into()),
+    };
+
+    // Output template — include segment range in the filename when set
+    // so re-downloading a different slice doesn't overwrite the previous.
+    let template_path = if let Some((i, o)) = segment {
+        dest.join(format!(
+            "%(title).180B [%(id)s] [{}_{}].%(ext)s",
+            fmt_segment_label(i),
+            fmt_segment_label(o)
+        ))
+    } else {
+        dest.join("%(title).180B [%(id)s].%(ext)s")
+    };
+    let template_str = template_path.to_string_lossy().to_string();
 
     // When yt-dlp needs to mux (e.g. `313+bestaudio/best`), it shells out
     // to ffmpeg. It looks for ffmpeg on PATH by default — but our ffmpeg
@@ -407,6 +442,9 @@ async fn yt_download(
         // N fragments in parallel and the writes can all arrive in one burst.
         "--concurrent-fragments",
         "1",
+        // Force temp files to be in dest dir (see temp_paths_arg above).
+        "-P",
+        temp_paths_arg.as_str(),
         "--print",
         filepath_template,
         "-o",
@@ -427,6 +465,18 @@ async fn yt_download(
         args.push("--merge-output-format");
         args.push(c.as_str());
     }
+
+    // Segment trims are done as a POST-DOWNLOAD step (see below). We
+    // intentionally do NOT pass --download-sections to yt-dlp — its
+    // built-in trim is unreliable for AV1/VP9 high-res content (cut
+    // points off keyframes silently drop the video stream), and its
+    // temp-file behavior breaks our filesystem-polling progress.
+    //
+    // Cost of doing the trim ourselves: same bandwidth (always full
+    // source), plus a few seconds of `ffmpeg -c copy` after download.
+    // Benefits: real progress during download, correct video every
+    // time, no codec-specific gotchas.
+
     args.push("--");
     args.push(trimmed);
 
@@ -544,10 +594,107 @@ async fn yt_download(
         return Err(format!("yt-dlp failed: {tail}"));
     }
 
-    let path = final_path.ok_or_else(|| "yt-dlp returned no output path".to_string())?;
-    let bytes = std::fs::metadata(&path).ok().map(|m| m.len());
+    let full_path = final_path.ok_or_else(|| "yt-dlp returned no output path".to_string())?;
 
-    Ok(DownloadResult { path, bytes })
+    // Post-download trim step (only when segment is set).
+    //
+    // Approach: `ffmpeg -ss <in> -i <full> -t <dur> -c copy <segment>`
+    // - `-ss BEFORE -i`: fast-seek (decoder-level) to the nearest
+    //   keyframe at or before <in>. The first second or two of output
+    //   may be a hair earlier than the user requested, which is
+    //   actually useful for editing (lead-in frames).
+    // - `-c copy`: byte-copy both streams — no re-encode, no quality
+    //   loss, runs at I/O speed (~5-15s for a 1GB file).
+    // - `-t <duration>`: stop after that many seconds. Using `-t`
+    //   instead of `-to` is more reliable across ffmpeg versions when
+    //   combined with input seek.
+    let final_path = if let Some((in_sec, out_sec)) = segment {
+        // Stop the progress poller — download phase is complete. Emit
+        // one last "100%" progress so the bar parks at the top during
+        // the trim instead of falling back to indeterminate.
+        running.store(false, Ordering::Relaxed);
+        if let Some(total) = total_bytes_hint {
+            let _ = app.emit(
+                "download:progress",
+                ProgressEvent {
+                    downloaded_bytes: total,
+                    total_bytes: Some(total),
+                    percent: Some(100.0),
+                    speed_bps: None,
+                    eta_sec: None,
+                },
+            );
+        }
+
+        let full_pb = std::path::PathBuf::from(&full_path);
+        let parent = full_pb.parent().unwrap_or(&dest).to_path_buf();
+        let stem = full_pb
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("video");
+        let ext = full_pb
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("mp4");
+        let seg_name = format!(
+            "{} [{}_{}].{}",
+            stem,
+            fmt_segment_label(in_sec),
+            fmt_segment_label(out_sec),
+            ext
+        );
+        let seg_path = parent.join(seg_name);
+
+        let in_arg = format!("{}", in_sec);
+        let dur_arg = format!("{}", (out_sec - in_sec).max(0.0));
+        let seg_path_str = seg_path
+            .to_str()
+            .ok_or("segment path is not valid UTF-8")?
+            .to_string();
+
+        let ffmpeg_cmd = app
+            .shell()
+            .sidecar("ffmpeg")
+            .map_err(|e| format!("sidecar resolve ffmpeg: {e}"))?;
+        let ff_out = ffmpeg_cmd
+            .args([
+                "-y", // overwrite if exists
+                "-ss", in_arg.as_str(),
+                "-i", full_path.as_str(),
+                "-t", dur_arg.as_str(),
+                "-c", "copy",
+                "-movflags", "+faststart", // friendly mp4 layout
+                seg_path_str.as_str(),
+            ])
+            .output()
+            .await
+            .map_err(|e| format!("ffmpeg spawn: {e}"))?;
+
+        if !ff_out.status.success() {
+            let stderr = String::from_utf8_lossy(&ff_out.stderr);
+            let tail = stderr
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .last()
+                .unwrap_or("(no stderr)");
+            return Err(format!("ffmpeg trim failed: {tail}"));
+        }
+
+        // Trim succeeded — delete the full intermediate. We don't keep
+        // it for now (user explicitly asked for a segment). A future
+        // "keep source" setting could change this.
+        let _ = std::fs::remove_file(&full_path);
+
+        seg_path_str
+    } else {
+        full_path
+    };
+
+    let bytes = std::fs::metadata(&final_path).ok().map(|m| m.len());
+    Ok(DownloadResult {
+        path: final_path,
+        bytes,
+    })
 }
 
 // =====================================================================

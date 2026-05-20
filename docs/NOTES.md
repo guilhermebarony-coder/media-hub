@@ -38,31 +38,86 @@ decide proxy-vs-direct based on data, not opinion.
 
 ---
 
-## 2026-05-19 — Segment download mechanics (the honest version)
+## 2026-05-20 — Segment downloads: full-then-trim is the right architecture
 
-`yt-dlp --download-sections "*<in>-<out>"` does NOT always mean
-"download only those bytes." There are two regimes:
+After fighting `--download-sections` for a session and getting
+audio-only output even with `--force-keyframes-at-cuts`, **we
+abandoned yt-dlp's built-in trim and do it ourselves**:
 
-**Regime A — true byte-range fetch:** Works when:
-- The format is a fragmented MP4/WebM with random-access fragments
-- The CDN honors HTTP Range requests
-- yt-dlp has `--hls-use-mpegts` or similar where needed
-For most modern YouTube MP4 formats, this works.
+1. yt-dlp downloads the full source normally (all our progress +
+   muxing logic works)
+2. After yt-dlp succeeds, if a segment was requested, run our bundled
+   ffmpeg: `ffmpeg -ss <in> -i <full> -t <dur> -c copy -movflags +faststart <segment>`
+3. Delete the full intermediate, return the segment path
 
-**Regime B — full download + ffmpeg trim:** Falls back when:
-- The format is a single monolithic file (some live-stream archives)
-- Range requests are blocked by the CDN
-- yt-dlp internally chooses this path with no easy override
+Why this won:
+- yt-dlp's `--download-sections` produced empty/audio-only video for
+  AV1 high-res content. Even with `--force-keyframes-at-cuts`. The
+  failure mode is silent — no error, just wrong file.
+- yt-dlp's section-trim staging happens in a temp dir we can't reach
+  from our polling, so the bar sat at 0 the whole time.
+- Doing the trim ourselves with `-c copy` is fast (5-15s for 1GB),
+  uses ffmpeg we already ship, and the failure mode is loud (ffmpeg
+  exits non-zero with a clear stderr).
+- We get real progress during the long download phase, then a brief
+  trim. Total UX is fine.
 
-**How we surface this to the user:** Per-job log line + UI indicator
-"(full download + trim)" so the user knows when they're paying full
-bandwidth. Don't lie to the user about what the network is doing.
+Trade-offs we accept:
+- **Full source bandwidth, always.** No way around this without
+  byte-range support from the source (YouTube doesn't expose it for
+  these formats).
+- **Keyframe snapping on cuts.** With `-c copy`, ffmpeg can only cut
+  on I-frames. The In point snaps to the nearest keyframe at or
+  before the requested time (giving lead-in frames — good for
+  editing). The Out point snaps to the next-keyframe boundary. For
+  B-roll this is a feature, not a bug. For exact-cut needs (music
+  sync etc.), would need re-encode at cuts — future "frame-accurate
+  trim" toggle.
+- **Quality: zero loss.** Both streams are byte-copied. Final file
+  bytes within the [in, out] window are bit-identical to the full
+  download. ffmpeg's `+faststart` rewrites only container metadata
+  (moov atom position), not stream data.
 
-**`--force-keyframes-at-cuts` warning:** This flag makes cuts
-frame-accurate by re-encoding around cut points. It defeats the
-"no bloat" win because re-encode is slow and CPU-heavy. Default OFF.
-Add as an opt-in "frame-accurate trim" toggle in settings if anyone
-asks; tell them it's slow.
+---
+
+## 2026-05-19 — Segment download mechanics (historical, superseded above)
+
+**Earlier framing was wrong** — verified the hard way on 2026-05-20.
+`yt-dlp --download-sections "*<in>-<out>"` does NOT do byte-range
+fetching for any format. It ALWAYS downloads the full source video,
+then trims via ffmpeg.
+
+Cost of a segment download = full download bandwidth + small
+trim/re-encode overhead. Same network cost as grabbing the whole file,
+slightly more CPU/time.
+
+**`--force-keyframes-at-cuts` is required for correctness**, not
+optional. First test produced a 238 KB audio-only .mp4 instead of the
+expected ~50 MB video segment from a 4K AV1 video. Root cause:
+
+Modern high-res codecs (AV1, VP9 4K, HEVC) use long keyframe intervals
+(4-10s between keyframes). A cut at an arbitrary timestamp (e.g. 0:30)
+almost never lands on a keyframe. Without `--force-keyframes-at-cuts`,
+ffmpeg's `-ss` seek produces empty/broken video frames at the boundary
+and yt-dlp silently drops the broken video stream, keeping just audio.
+
+With the flag, ffmpeg re-encodes a tiny window around each cut to
+insert real keyframes at the user's chosen boundaries. The rest of
+the segment is still byte-copied — no full re-encode. Cost: a few
+seconds of CPU at cut points. Benefit: correct video every time.
+
+**Temp dir forcing (`-P temp:<dest>`):** `--download-sections` stages
+the full source in a temp dir before trimming. By default yt-dlp's
+temp is wherever it likes (varies by platform/install). We force the
+temp dir to be our dest dir so the in-flight file lands where our
+filesystem-polling progress task watches. Without this, segment
+downloads look frozen at 0% the entire time even though they're
+actively pulling bytes.
+
+**UI surfacing:** When the user types into the segment In/Out fields,
+the help text below switches to "Segment downloads pull the full
+source then trim — same download time, plus a few seconds of
+re-encode at the cuts." Sets expectations honestly.
 
 ---
 
