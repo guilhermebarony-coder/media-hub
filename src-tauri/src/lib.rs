@@ -506,10 +506,15 @@ async fn yt_download(
         let total_hint = total_bytes_hint;
         let video_id = video_id.clone();
         tokio::spawn(async move {
-            let mut last_bytes: u64 = 0;
-            let mut last_time = Instant::now();
-            // First emit fires after the first sleep — gives yt-dlp ~500ms
-            // to actually start writing before we report 0/0.
+            // Rolling window of (bytes, time) samples. Speed is computed
+            // across the oldest-to-newest sample, smoothing out the
+            // burstiness of yt-dlp's network writes (chunks land in
+            // clumps which would give 0 → 200 MB/s swings at the raw
+            // 500ms tick). Five samples = ~2.5 s of history.
+            const WINDOW: usize = 5;
+            let mut window: std::collections::VecDeque<(u64, Instant)> =
+                std::collections::VecDeque::with_capacity(WINDOW + 1);
+
             while running.load(Ordering::Relaxed) {
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 if !running.load(Ordering::Relaxed) {
@@ -517,13 +522,27 @@ async fn yt_download(
                 }
                 let bytes_now = sum_live_dir_bytes(&dest, &video_id);
                 let now = Instant::now();
-                let dt = now.duration_since(last_time).as_secs_f64();
-                let db = bytes_now.saturating_sub(last_bytes);
-                let speed = if dt > 0.0 && db > 0 {
-                    Some((db as f64 / dt) as u64)
+
+                window.push_back((bytes_now, now));
+                while window.len() > WINDOW {
+                    window.pop_front();
+                }
+
+                // Need at least two samples to compute a delta.
+                let speed = if window.len() >= 2 {
+                    let (b0, t0) = window.front().copied().unwrap();
+                    let (b1, t1) = window.back().copied().unwrap();
+                    let dt = t1.duration_since(t0).as_secs_f64();
+                    let db = b1.saturating_sub(b0);
+                    if dt > 0.0 && db > 0 {
+                        Some((db as f64 / dt) as u64)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
+
                 let percent = total_hint
                     .filter(|t| *t > 0)
                     .map(|t| ((bytes_now as f64 / t as f64) * 100.0).min(99.9));
@@ -543,8 +562,6 @@ async fn yt_download(
                         eta_sec: eta,
                     },
                 );
-                last_bytes = bytes_now;
-                last_time = now;
             }
         });
     }

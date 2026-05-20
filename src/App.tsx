@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import "./App.css";
 
 // =====================================================================
@@ -342,13 +342,19 @@ function MetadataCard() {
   }
 
   async function openContainingFolder(filePath: string) {
-    // Strip filename to get parent dir. Works for both Windows (\) and POSIX (/).
-    const idx = Math.max(filePath.lastIndexOf("\\"), filePath.lastIndexOf("/"));
-    const dir = idx > 0 ? filePath.slice(0, idx) : filePath;
+    // revealItemInDir opens the folder AND highlights the file in it
+    // (Explorer on Windows, Finder on macOS). If that fails for any
+    // reason, fall back to just opening the parent dir.
     try {
-      await openPath(dir);
-    } catch (e) {
-      setDlErr(`open folder failed: ${String(e)}`);
+      await revealItemInDir(filePath);
+    } catch {
+      const idx = Math.max(filePath.lastIndexOf("\\"), filePath.lastIndexOf("/"));
+      const dir = idx > 0 ? filePath.slice(0, idx) : filePath;
+      try {
+        await openPath(dir);
+      } catch (e) {
+        setDlErr(`open folder failed: ${String(e)}`);
+      }
     }
   }
 
