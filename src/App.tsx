@@ -841,6 +841,10 @@ type QueueJob = {
   id: string;
   url: string;
   status: QueueStatus;
+  // Preset captured at enqueue time — locks the choice so a user can
+  // queue URLs A with ProRes, then change the dropdown and queue URLs
+  // B with H.264 without the A jobs picking up the new value.
+  transcodePreset: TranscodePreset;
   title?: string;
   channel?: string;
   thumbnail?: string | null;
@@ -851,6 +855,37 @@ type QueueJob = {
   resultBytes?: number | null;
   error?: string;
 };
+
+// =====================================================================
+// Tiny semaphore for limiting concurrent operations.
+// JS doesn't ship one. We use this to serialize CPU-bound transcodes
+// (one at a time, multiple parallel transcodes would just thrash) and
+// to keep NVENC encodes from oversubscribing the GPU encoder engine.
+// =====================================================================
+class Semaphore {
+  private permits: number;
+  private waiters: Array<() => void> = [];
+  constructor(permits: number) {
+    this.permits = permits;
+  }
+  async acquire(): Promise<void> {
+    if (this.permits > 0) {
+      this.permits--;
+      return;
+    }
+    return new Promise((resolve) => this.waiters.push(resolve));
+  }
+  release(): void {
+    const next = this.waiters.shift();
+    if (next) next();
+    else this.permits++;
+  }
+}
+
+const NVENC_PRESETS: Set<TranscodePreset> = new Set(["h264_nvenc_mp4"]);
+function isGpuPreset(p: TranscodePreset): boolean {
+  return NVENC_PRESETS.has(p);
+}
 
 function statusLabel(s: QueueStatus): string {
   switch (s) {
@@ -888,24 +923,59 @@ async function revealFile(filePath: string) {
   }
 }
 
+// Queue is persisted to localStorage so an app crash / restart doesn't
+// lose the work-in-progress list. Any job that was in flight at the
+// time of close is reset to `queued` on next launch (we don't try to
+// resume Rust-side downloads — yt-dlp's `.part` files would be stale
+// and continuing them is more trouble than starting fresh).
+const QUEUE_STORAGE_KEY = "mh.queue.v1";
+function loadQueueFromStorage(): QueueJob[] {
+  try {
+    const raw = localStorage.getItem(QUEUE_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as QueueJob[];
+    // Reset interrupted jobs. Drop transient progress data.
+    return parsed.map((j) => {
+      if (j.status === "fetching" || j.status === "downloading" || j.status === "transcoding") {
+        return {
+          ...j,
+          status: "queued" as QueueStatus,
+          progress: undefined,
+          transcodeProgress: undefined,
+        };
+      }
+      return { ...j, progress: undefined, transcodeProgress: undefined };
+    });
+  } catch {
+    return [];
+  }
+}
+
+// Worker pool configuration. Hardcoded for v1; could be a setting later.
+const DOWNLOAD_WORKERS = 3;
+// Module-scoped semaphores so multiple worker instances share them.
+// CPU and GPU pools are separate so a libx264 transcode and an NVENC
+// transcode can run simultaneously (disjoint hardware).
+const cpuTranscodeSem = new Semaphore(1);
+const gpuTranscodeSem = new Semaphore(1);
+
 function QueueCard() {
   const [urlsInput, setUrlsInput] = useState("");
-  const [jobs, setJobs] = useState<QueueJob[]>([]);
-  // Batch-level transcode setting — applies to every queued job. Per-
-  // job overrides aren't a thing in this MVP; that's a 0.4 polish item.
+  const [jobs, setJobs] = useState<QueueJob[]>(() => loadQueueFromStorage());
+  // Batch-level transcode setting — captured into each job at enqueue
+  // time, so changing this mid-batch only affects newly-added jobs.
   const [batchTranscode, setBatchTranscode] = useState<TranscodePreset>("none");
-  // Mirror to a ref so processOne (running inside the async pump loop)
-  // sees the latest value without re-closing on every render.
-  const batchTranscodeRef = useRef<TranscodePreset>("none");
-  batchTranscodeRef.current = batchTranscode;
-  // Ref mirrors jobs so the async processor can read fresh state without
+  // Ref mirrors jobs so worker loops can read fresh state without
   // closing over stale React snapshots.
   const jobsRef = useRef<QueueJob[]>([]);
   jobsRef.current = jobs;
-  // True while the sequential processor loop is running. Prevents double-
-  // starting if the user adds more URLs mid-queue (the existing loop
-  // picks them up on its next iteration).
-  const processingRef = useRef(false);
+  // Set of job ids currently being processed (by any worker). Used for
+  // atomic claim — without this, two workers could both pick up the
+  // same queued job between React state updates.
+  const claimedRef = useRef<Set<string>>(new Set());
+  // Count of active worker loops. We start workers lazily up to
+  // DOWNLOAD_WORKERS as queued jobs appear.
+  const activeWorkersRef = useRef(0);
 
   // Subscribe to progress events and route to the matching job by id.
   // Two event families — download progress while yt-dlp runs, transcode
@@ -940,24 +1010,76 @@ function QueueCard() {
     };
   }, []);
 
-  // Auto-start the processor whenever there are queued jobs and the
-  // pump isn't already running. Runs AFTER React commits the new jobs
-  // to state, so jobsRef is up to date when pump iterates.
-  //
-  // Calling void pump() directly from queueAll() doesn't work because
-  // jobsRef.current still points to the pre-queueAll snapshot at that
-  // synchronous moment — React hasn't re-rendered yet.
+  // Persist queue to localStorage on every change. Cheap enough to do
+  // synchronously — localStorage writes are <1ms for our sizes.
   useEffect(() => {
-    if (processingRef.current) return;
-    if (!jobs.some((j) => j.status === "queued")) return;
-    void pump();
-    // pump itself is stable (uses refs internally) so it's not listed
-    // as a dep; we only care about jobs changing.
+    try {
+      localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(jobs));
+    } catch {
+      // Quota exceeded etc — not fatal, just skip persistence this tick.
+    }
+  }, [jobs]);
+
+  // Ensure up to DOWNLOAD_WORKERS workers are running whenever there
+  // are unclaimed queued jobs. Workers self-terminate when they can't
+  // find more work; we spin them back up here.
+  useEffect(() => {
+    const queuedUnclaimed = jobs.some(
+      (j) => j.status === "queued" && !claimedRef.current.has(j.id),
+    );
+    if (!queuedUnclaimed) return;
+    while (activeWorkersRef.current < DOWNLOAD_WORKERS) {
+      activeWorkersRef.current++;
+      void workerLoop().finally(() => {
+        activeWorkersRef.current--;
+      });
+    }
+    // workerLoop and ensureWorkers are stable; we only react to jobs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs]);
 
   function updateJob(id: string, patch: Partial<QueueJob>) {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j)));
+  }
+
+  /**
+   * One worker. Pulls the next unclaimed queued job, processes it
+   * through download + (optional) transcode, then loops. Exits when
+   * no more queued work is found.
+   *
+   * Atomic claim: we read jobsRef synchronously and add to claimedRef
+   * before yielding. Two workers can't pick up the same job because
+   * the Set add is synchronous and other workers see it on their next
+   * scan.
+   *
+   * Concurrency model:
+   *   - N workers download in parallel (configurable, default 3)
+   *   - CPU transcodes serialize via cpuTranscodeSem
+   *   - GPU transcodes serialize separately via gpuTranscodeSem
+   *   - A CPU job and a GPU job can run simultaneously (disjoint HW)
+   */
+  async function workerLoop(): Promise<void> {
+    while (true) {
+      let next: QueueJob | undefined;
+      for (const j of jobsRef.current) {
+        if (j.status === "queued" && !claimedRef.current.has(j.id)) {
+          next = j;
+          claimedRef.current.add(j.id);
+          break;
+        }
+      }
+      if (!next) return;
+      try {
+        await processOne(next);
+      } catch (e) {
+        // processOne should handle its own errors via updateJob, but
+        // catch here too as a last resort.
+        updateJob(next.id, { status: "failed", error: String(e) });
+      }
+      // Job stays in claimedRef forever — done/failed jobs aren't
+      // reprocessed by workers. The "Retry failed" action explicitly
+      // un-claims them.
+    }
   }
 
   async function processOne(job: QueueJob): Promise<void> {
@@ -1009,12 +1131,20 @@ function QueueCard() {
       return;
     }
 
-    // Optional transcode step. Uses the ref so it picks up a preset the
-    // user changed mid-batch (next jobs honor the new setting).
-    const preset = batchTranscodeRef.current;
+    // Optional transcode step. Uses the preset captured into the job
+    // at enqueue time (not the live dropdown) so mid-batch changes
+    // don't affect already-queued items.
+    //
+    // Concurrency: CPU and GPU presets use separate semaphores. A
+    // libx264 (CPU) job and an h264_nvenc (GPU) job can run in
+    // parallel because they use different hardware. Two CPU jobs
+    // can't because they'd thrash the CPU.
+    const preset = job.transcodePreset;
     if (preset !== "none") {
-      updateJob(job.id, { status: "transcoding", resultPath: dlRes.path });
+      const sem = isGpuPreset(preset) ? gpuTranscodeSem : cpuTranscodeSem;
+      await sem.acquire();
       try {
+        updateJob(job.id, { status: "transcoding", resultPath: dlRes.path });
         const txRes = await invoke<TranscodeResult>("media_transcode", {
           srcPath: dlRes.path,
           preset,
@@ -1035,6 +1165,8 @@ function QueueCard() {
           resultBytes: dlRes.bytes,
           error: `transcode failed: ${String(e)} (source kept)`,
         });
+      } finally {
+        sem.release();
       }
     } else {
       updateJob(job.id, {
@@ -1045,43 +1177,57 @@ function QueueCard() {
     }
   }
 
-  async function pump() {
-    if (processingRef.current) return;
-    processingRef.current = true;
-    try {
-      // Loop until no queued jobs remain. Reads from the ref each
-      // iteration so newly-added jobs are picked up automatically.
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const next = jobsRef.current.find((j) => j.status === "queued");
-        if (!next) break;
-        await processOne(next);
-      }
-    } finally {
-      processingRef.current = false;
-    }
-  }
-
   function queueAll() {
     const urls = urlsInput
       .split(/\r?\n/)
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
     if (urls.length === 0) return;
+    // Capture the CURRENT preset into each job so the choice locks at
+    // enqueue time. Changing the dropdown later only affects new jobs.
+    const presetSnapshot = batchTranscode;
     const newJobs: QueueJob[] = urls.map((url) => ({
       id: newJobId(),
       url,
       status: "queued",
+      transcodePreset: presetSnapshot,
     }));
     setJobs((prev) => [...prev, ...newJobs]);
     setUrlsInput("");
-    // The processor starts via the useEffect above once React commits
-    // the new jobs to state — no manual pump() call here.
+    // The worker pool kicks in via the useEffect above once React
+    // commits the new jobs to state.
   }
 
   function clearCompleted() {
+    // Drop done/failed from state AND from claimedRef so future retries
+    // (or fresh queues of the same URL) aren't blocked.
+    setJobs((prev) => {
+      const removed = prev.filter(
+        (j) => j.status === "done" || j.status === "failed",
+      );
+      for (const j of removed) claimedRef.current.delete(j.id);
+      return prev.filter((j) => j.status !== "done" && j.status !== "failed");
+    });
+  }
+
+  function retryFailed() {
+    // Reset failed jobs to queued and un-claim them so workers can
+    // pick them up again. Their previous result/error metadata gets
+    // cleared.
     setJobs((prev) =>
-      prev.filter((j) => j.status !== "done" && j.status !== "failed"),
+      prev.map((j) => {
+        if (j.status !== "failed") return j;
+        claimedRef.current.delete(j.id);
+        return {
+          ...j,
+          status: "queued" as QueueStatus,
+          error: undefined,
+          progress: undefined,
+          transcodeProgress: undefined,
+          resultPath: undefined,
+          resultBytes: undefined,
+        };
+      }),
     );
   }
 
@@ -1112,7 +1258,10 @@ function QueueCard() {
       </h1>
       <p className="mh-smoke__hint">
         Paste one URL per line, hit Queue all. Each downloads at the best
-        available video + audio (mp4). Sequential — one at a time.
+        available video + audio (mp4). {DOWNLOAD_WORKERS} downloads run in
+        parallel; transcodes serialize (CPU + GPU pools run independently,
+        so a libx264 job and an NVENC job can overlap). Queue persists
+        across app restarts.
       </p>
 
       <textarea
@@ -1155,6 +1304,11 @@ function QueueCard() {
         <button className="mh-queue__btn-secondary" onClick={clearCompleted}>
           Clear completed
         </button>
+        {jobs.some((j) => j.status === "failed") && (
+          <button className="mh-queue__btn-secondary" onClick={retryFailed}>
+            Retry failed
+          </button>
+        )}
         <span className="mh-smoke__faint mh-queue__stats">{stats}</span>
       </div>
 
