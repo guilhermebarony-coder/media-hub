@@ -63,6 +63,12 @@ export function Scrubber(props: ScrubberProps) {
   // mirror it into React state so the UI reflects it.
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
+  // During click-and-drag, this holds the position the playhead is
+  // VISUALLY at while we wait for mouseup. The real video.currentTime
+  // only seeks once on release. Without this, every mousemove would
+  // issue a seek + range-request cycle, which is what causes the
+  // "playback failed" cascades. NLEs work the same way.
+  const [dragPreviewSec, setDragPreviewSec] = useState<number | null>(null);
   // Element's own duration takes precedence once it loads. We
   // fall back to the hint while waiting.
   const [duration, setDuration] = useState<number>(durationHint ?? 0);
@@ -223,21 +229,34 @@ export function Scrubber(props: ScrubberProps) {
     const bar = scrubBarRef.current;
     if (!bar || duration <= 0) return;
     const rect = bar.getBoundingClientRect();
-    // Pause while dragging so we don't fight the playback head.
     const v = videoRef.current;
     const wasPlaying = v && !v.paused;
     v?.pause();
 
-    const seek = (clientX: number) => {
+    // Track the LAST position the cursor was at while dragging. We
+    // update the visual preview (playhead position) on every move,
+    // but we only commit the actual video seek on mouseup. This
+    // turns N seek calls per drag into exactly 1.
+    let lastSec = 0;
+    const computeSec = (clientX: number): number => {
       const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      seekTo(ratio * duration);
+      return ratio * duration;
     };
-    seek(e.clientX);
 
-    const onMove = (ev: MouseEvent) => seek(ev.clientX);
+    lastSec = computeSec(e.clientX);
+    setDragPreviewSec(lastSec);
+
+    const onMove = (ev: MouseEvent) => {
+      lastSec = computeSec(ev.clientX);
+      setDragPreviewSec(lastSec);
+    };
     const onUp = () => {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
+      // Now commit the actual seek — single round-trip to the CDN
+      // instead of one per pixel.
+      seekTo(lastSec);
+      setDragPreviewSec(null);
       if (wasPlaying) v?.play();
     };
     document.addEventListener("mousemove", onMove);
@@ -248,7 +267,11 @@ export function Scrubber(props: ScrubberProps) {
   const posPct = (s: number | null): string | null =>
     s == null || duration <= 0 ? null : `${Math.max(0, Math.min(100, (s / duration) * 100))}%`;
 
-  const currentPct = posPct(currentTime) ?? "0%";
+  // Playhead position prefers the drag preview while a drag is in
+  // progress — that's how the user gets instant visual feedback
+  // even though the actual video seek is deferred to mouseup.
+  const headSec = dragPreviewSec ?? currentTime;
+  const currentPct = posPct(headSec) ?? "0%";
   const inPct = posPct(inSec);
   const outPct = posPct(outSec);
 
