@@ -672,26 +672,41 @@ decision picked.
 Captured here so we don't lose ideas, but explicitly **not** scoped
 until 1.0 ships:
 
-**1.1 — platform abstraction + first new platform** (was 0.7)
-- `Platform` trait refactor in Rust (YouTube + N impls)
-- Twitter/X public tweets (no auth)
-- URL routing on paste
+**1.1 — workflow polish from real usage** *(was 1.2 in earlier plan)*
+- Whatever the owner actually needs after using 1.0 daily
+- **Front-runner: drag cards to NLE.** Owner: "kinda critical, i
+  currently have to open a folder to get the files, but since i'm not
+  currently active using, it can wait." Once the app is being used for
+  real edits, this is the first ask. Tauri 2 OS drag-drop +
+  `dataTransfer.setData("DownloadURL", file://path)`.
+- Other candidates (in suspected priority order):
+  - Multi-select grid + bulk tag/move/delete
+  - Command palette (Ctrl+Space, see NOTES)
+  - Saved filter combos / smart folders
+  - Source attribution export (credits TXT)
+
+**1.2 — Eagle-style library overhaul** *(replaces "v1.5 library structure" in earlier plan)*
+- **Library folders** alongside tags (owner has been wanting this).
+  Schema sketch in NOTES "Library folders" section.
+- **Color labels** — 5-6 color palette per asset for at-a-glance status
+- **Star rating + per-asset notes**
+- **Better filter sidebar** building on the folder + label system
+- Plus any straggler from 1.1 that turned out matters
+- **Decision rationale (2026-05-21):** owner asked whether to do this
+  pre-1.0 as 0.9. Decided to defer — most of the list is speculation
+  about which Eagle patterns translate; better to use 1.0 for real
+  edits for a week+ before committing to all of it. Folders is the only
+  one owner has surfaced organically.
+
+**1.3 — platform abstraction + first new platform** *(was 1.1)*
+- `Platform` trait refactor in Rust
+- Twitter/X public tweets first; TikTok / Vimeo / Reddit based on use
 - Designed against ≥2 real platforms, not guessed
-
-**1.2 — workflow polish from real usage**
-- Whatever the author actually needs after using 1.0 daily
-- Likely candidates: command palette (Ctrl+Space, see NOTES), drag
-  cards to NLE, color labels / star rating / per-asset notes, source
-  attribution export (credits TXT for video descriptions)
-
-**1.3 — more platforms (use-driven)**
-- TikTok, Vimeo, Reddit — whichever shows up in actual workflow
 - Envato Elements stays risky (no API, ToS-sensitive) — re-evaluate
 
-**1.5 — library structure expansions**
-- Library folders alongside tags (parked in NOTES)
-- Watched-folders mode
-- Eagle integration (folder export → API push)
+**1.5 — library expansions**
+- Watched-folders mode (index files we didn't download)
+- Eagle proper integration (folder export → API push)
 
 **2.0 — chiral-network integration**
 - Drop clips directly into a Chiral project's source folder
@@ -713,6 +728,23 @@ Anything more speculative than this belongs in `docs/NOTES.md` under
 ## Decision log
 
 Newest first. Every entry: what we decided, when, and *why*.
+
+### 2026-05-21 — Eagle-style overhaul lands post-1.0, not as 0.9
+
+- Decision: defer the Eagle-inspired UI/UX work (folders, color labels,
+  ratings, notes, better filters, multi-select bulk ops) to **1.2**.
+  Don't insert a 0.9 milestone before release.
+- Why: most of the Eagle list is speculation — "I bet this pattern from
+  Eagle would help here." Owner has only surfaced **folders** organically
+  ("starting to think we're gonna need folders"). The rest came from me
+  describing Eagle's feature set. Building 6 features pre-1.0 risks
+  shipping 3 that go unused. Better to ship 1.0, use it for real edits
+  for ~1-2 weeks, then cherry-pick the 2-3 features that actually matter.
+- Drag-to-NLE: owner: "kinda critical, but since i'm not currently active
+  using, it can wait." Slotted as **1.1 front-runner** — first ask once
+  daily use begins. Bumped above platform abstraction (was 1.1, now 1.3).
+- Post-1.0 order revised: 1.1 workflow polish (drag-to-NLE front-runner)
+  → 1.2 Eagle overhaul → 1.3 platforms → 1.5 library expansions → 2.x.
 
 ### 2026-05-21 — Replan: 0.6.1 → 0.8 → 1.0, 0.7 post-1.0
 

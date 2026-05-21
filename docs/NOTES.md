@@ -55,7 +55,21 @@ the library gets big enough that finding things is painful.
 
 ---
 
-## 2026-05-21 (parked, target 1.5) — Eagle integration / inspiration
+## 2026-05-21 (parked, target 1.2) — Eagle-style library overhaul
+
+**Status update (2026-05-21):** target moved up from 1.5 to 1.2 after
+owner asked whether to do this as 0.9 (pre-1.0). Decision: defer to
+post-1.0 but make it the first major milestone after the "drag-to-NLE
++ daily-use polish" 1.1. See ROADMAP decision log
+2026-05-21 entry "Eagle-style overhaul lands post-1.0, not as 0.9."
+
+Includes: library folders, color labels, star ratings, per-asset notes,
+better filter sidebar, multi-select + bulk ops. Folder export with
+sidecar JSON (the simplest Eagle integration path) folds in here too.
+
+---
+
+## 2026-05-21 (parked, target 1.5) — Eagle integration (deeper, API-based)
 
 **Owner note (2026-05-21):** "we can get some of the library controls
 from eagle app, and maybe even do a integration somehow, being able
