@@ -1473,6 +1473,47 @@ textarea.field-input {
 .scrubber-fps { font-size: 11px; }
 .scrubber-spacer { flex: 1; }
 
+/* Volume cluster: speaker icon + horizontal slider. The slider has a
+   compact native fallback styled to match the rest of the transport
+   bar; full custom slider chrome is overkill for a single control. */
+.scrubber-volume {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.scrubber-volume input[type="range"] {
+  width: 80px;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--bg-3);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+.scrubber-volume input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: none;
+}
+.scrubber-volume input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: none;
+}
+.scrubber-volume input[type="range"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* The bar itself. Click-and-drag seeks; markers float on top. */
 .scrubber-bar {
   position: relative;

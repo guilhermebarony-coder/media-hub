@@ -63,6 +63,27 @@ export function Scrubber(props: ScrubberProps) {
   // mirror it into React state so the UI reflects it.
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
+  // Volume + mute. Default to 0.5 because YouTube source URLs are
+  // mastered loud and 1.0 will deafen anyone wearing headphones.
+  // Persist across sessions — once the user finds their preferred
+  // level, they shouldn't re-set it every paste. localStorage write
+  // is cheap (<1ms) so we do it on every change.
+  const [volume, setVolume] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem("mh.scrubber.volume.v1");
+      const n = raw == null ? 0.5 : Number(raw);
+      return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.5;
+    } catch {
+      return 0.5;
+    }
+  });
+  const [muted, setMuted] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("mh.scrubber.muted.v1") === "1";
+    } catch {
+      return false;
+    }
+  });
   // Element's own duration takes precedence once it loads. We
   // fall back to the hint while waiting.
   const [duration, setDuration] = useState<number>(durationHint ?? 0);
@@ -213,6 +234,27 @@ export function Scrubber(props: ScrubberProps) {
     else v.pause();
   }
 
+  // Apply React-state volume to the actual element whenever either
+  // changes, including on first load before the user touches the
+  // slider. Persist on every change.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (v) {
+      v.volume = volume;
+      v.muted = muted;
+    }
+    try {
+      localStorage.setItem("mh.scrubber.volume.v1", String(volume));
+      localStorage.setItem("mh.scrubber.muted.v1", muted ? "1" : "0");
+    } catch {
+      // localStorage quota / disabled — fine, just don't persist this tick
+    }
+  }, [volume, muted, streamUrl]);
+
+  function toggleMute() {
+    setMuted((m) => !m);
+  }
+
   function seekTo(sec: number) {
     const v = videoRef.current;
     if (!v) return;
@@ -317,6 +359,56 @@ export function Scrubber(props: ScrubberProps) {
           {fmtDuration(currentTime)} / {fmtDuration(duration || null)}
         </span>
         <span className="scrubber-fps mono faint">{fps} fps</span>
+
+        {/* Volume controls — speaker icon toggles mute, slider sets
+            level 0..1. Both persist to localStorage. Default 0.5 so
+            first-paste doesn't blow eardrums on YouTube source URLs. */}
+        <div className="scrubber-volume">
+          <button
+            type="button"
+            className="ic-btn"
+            onClick={toggleMute}
+            disabled={!streamUrl}
+            title={muted || volume === 0 ? "Unmute" : "Mute"}
+          >
+            {muted || volume === 0 ? (
+              <svg viewBox="0 0 16 16" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 6h2l3-2.5v9L5 10H3V6z" fill="currentColor" />
+                <path d="M11 6l4 4M15 6l-4 4" />
+              </svg>
+            ) : volume < 0.5 ? (
+              <svg viewBox="0 0 16 16" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 6h2l3-2.5v9L5 10H3V6z" fill="currentColor" />
+                <path d="M11 6.5a2.5 2.5 0 0 1 0 3" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 16 16" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 6h2l3-2.5v9L5 10H3V6z" fill="currentColor" />
+                <path d="M11 6.5a2.5 2.5 0 0 1 0 3" />
+                <path d="M13 5a4.5 4.5 0 0 1 0 6" />
+              </svg>
+            )}
+          </button>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={muted ? 0 : volume}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setVolume(v);
+              // Dragging the slider away from zero un-mutes implicitly.
+              // Dragging it to zero also leaves "muted" false — the
+              // explicit mute button is the only way to set it.
+              if (muted && v > 0) setMuted(false);
+            }}
+            disabled={!streamUrl}
+            aria-label="Volume"
+            title={`${Math.round((muted ? 0 : volume) * 100)}%`}
+          />
+        </div>
+
         <span className="scrubber-spacer" />
         <button
           className="btn btn-secondary"
