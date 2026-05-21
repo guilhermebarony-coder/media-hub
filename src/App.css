@@ -1458,7 +1458,7 @@ textarea.field-input {
 .stack { display: flex; flex-direction: column; gap: 18px; max-width: 980px; }
 
 /* ============================================================
-   Settings page placeholders (Phase A scaffolding)
+   Settings page
    ============================================================ */
 .settings-placeholder {
   display: flex;
@@ -1469,6 +1469,80 @@ textarea.field-input {
   border: 1px dashed var(--line-hi);
   border-radius: 5px;
 }
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+.settings-label {
+  flex: 0 0 130px;
+  font-size: 11px;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-family: var(--mono);
+}
+.settings-radio-group {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 2px;
+}
+.settings-radio {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 12px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: var(--text-1);
+  cursor: pointer;
+  user-select: none;
+}
+.settings-radio input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.settings-radio:hover { background: var(--bg-3); color: var(--text-0); }
+.settings-radio.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.settings-kv {
+  margin: 4px 0 0;
+  padding: 10px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 4px 12px;
+  font-size: 11.5px;
+  font-family: var(--mono);
+}
+.settings-kv > div {
+  display: contents;
+}
+.settings-kv dt {
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 10px;
+  margin: 0;
+}
+.settings-kv dd {
+  margin: 0;
+  color: var(--text-0);
+  word-break: break-all;
+}
+.settings-kv dd.err { color: var(--err); }
+.settings-kv dd a { color: var(--accent); text-decoration: none; }
+.settings-kv dd a:hover { text-decoration: underline; }
 
 /* ============================================================
    Scrubber (0.6 Phase D)

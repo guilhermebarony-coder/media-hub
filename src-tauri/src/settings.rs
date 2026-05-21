@@ -157,6 +157,49 @@ fn save_to_disk(path: &PathBuf, settings: &Settings) -> Result<(), String> {
 // Tauri commands
 // =====================================================================
 
+/// Build the yt-dlp argv extras for the current cookies setting.
+/// Returns an empty Vec when source is None — callers can extend()
+/// their args vector unconditionally.
+///
+/// `--cookies-from-browser <name>` reads cookies directly from the
+/// browser's profile (requires the browser to be installed; on
+/// Chrome family Windows wants the browser closed because of the
+/// file lock on Cookies SQLite). `--cookies <path>` reads a
+/// Netscape-format cookies.txt the user exported manually.
+///
+/// We allowlist the browser names yt-dlp supports — slipping an
+/// arbitrary string through could shell-quote-injection territory
+/// (yt-dlp uses argv so it's safer than a shell command line, but
+/// still: defense in depth).
+pub fn cookies_args(state: &SettingsState) -> Vec<String> {
+    let guard = match state.inner.lock() {
+        Ok(g) => g,
+        Err(_) => return Vec::new(),
+    };
+    match &guard.cookies_source {
+        CookiesSource::None => Vec::new(),
+        CookiesSource::Browser { browser } => {
+            const ALLOWED: &[&str] = &[
+                "brave", "chrome", "chromium", "edge", "firefox",
+                "opera", "safari", "vivaldi",
+            ];
+            let b = browser.trim().to_ascii_lowercase();
+            if ALLOWED.contains(&b.as_str()) {
+                vec!["--cookies-from-browser".to_string(), b]
+            } else {
+                eprintln!("cookies_args: unknown browser {browser:?}, skipping");
+                Vec::new()
+            }
+        }
+        CookiesSource::File { path } => {
+            // Path is a string the user typed/picked. yt-dlp will
+            // error cleanly if the file doesn't exist or is malformed
+            // — we don't need to pre-validate.
+            vec!["--cookies".to_string(), path.clone()]
+        }
+    }
+}
+
 #[tauri::command]
 pub fn settings_get(state: State<'_, SettingsState>) -> Result<Settings, String> {
     let guard = state

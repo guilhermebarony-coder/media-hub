@@ -192,7 +192,11 @@ fn project_format(f: RawFormat) -> Option<FormatOption> {
 }
 
 #[tauri::command]
-async fn yt_fetch_metadata(app: AppHandle, url: String) -> Result<VideoMetadata, String> {
+async fn yt_fetch_metadata(
+    app: AppHandle,
+    settings: tauri::State<'_, settings::SettingsState>,
+    url: String,
+) -> Result<VideoMetadata, String> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return Err("URL is empty".into());
@@ -203,16 +207,26 @@ async fn yt_fetch_metadata(app: AppHandle, url: String) -> Result<VideoMetadata,
         .sidecar("yt-dlp")
         .map_err(|e| format!("sidecar resolve failed: {e}"))?;
 
+    // Cookies extras (0.8.B): empty when source is None, otherwise
+    // adds --cookies-from-browser <name> or --cookies <path>.
+    // Owned strings because .args() needs &str references that outlive
+    // the call.
+    let cookies = settings::cookies_args(&settings);
+    let mut args: Vec<&str> = vec![
+        "-j",                  // dump single JSON object, no download
+        "--no-playlist",       // never expand playlists at this stage
+        "--no-warnings",       // keep stderr clean
+        "--no-call-home",      // be polite, skip telemetry
+        "--socket-timeout", "15",
+    ];
+    for c in &cookies {
+        args.push(c.as_str());
+    }
+    args.push("--");           // end of options, URL is positional
+    args.push(trimmed);
+
     let out = cmd
-        .args([
-            "-j",                  // dump single JSON object, no download
-            "--no-playlist",       // never expand playlists at this stage
-            "--no-warnings",       // keep stderr clean
-            "--no-call-home",      // be polite, skip telemetry
-            "--socket-timeout", "15",
-            "--",                  // end of options, URL is positional
-            trimmed,
-        ])
+        .args(args)
         .output()
         .await
         .map_err(|e| format!("spawn failed: {e}"))?;
@@ -339,6 +353,7 @@ fn fmt_segment_label(sec: f64) -> String {
 async fn yt_download(
     app: AppHandle,
     state: tauri::State<'_, library::LibraryState>,
+    settings: tauri::State<'_, settings::SettingsState>,
     url: String,
     format_spec: String,
     merge_container: Option<String>,
@@ -485,6 +500,11 @@ async fn yt_download(
     if let Some(ref ff) = ffmpeg_path_str {
         args.push("--ffmpeg-location");
         args.push(ff.as_str());
+    }
+    // Cookies extras (0.8.B) for age-restricted / following-only content.
+    let cookies = settings::cookies_args(&settings);
+    for c in &cookies {
+        args.push(c.as_str());
     }
     // Allowed container values — defensive guard against arbitrary
     // strings from the renderer slipping into a yt-dlp arg.
@@ -1179,6 +1199,7 @@ pub struct StreamUrl {
 #[tauri::command]
 async fn yt_resolve_stream_url(
     app: AppHandle,
+    settings: tauri::State<'_, settings::SettingsState>,
     url: String,
 ) -> Result<StreamUrl, String> {
     let trimmed = url.trim();
@@ -1193,17 +1214,23 @@ async fn yt_resolve_stream_url(
     let format_spec =
         "best[ext=mp4][height<=720]/best[ext=mp4]/best[height<=720]/best";
 
+    let cookies = settings::cookies_args(&settings);
+    let mut args: Vec<&str> = vec![
+        "-g",
+        "--no-warnings",
+        "--no-playlist",
+        "-f",
+        format_spec,
+    ];
+    for c in &cookies {
+        args.push(c.as_str());
+    }
+    args.push(trimmed);
+
     let output = shell
         .sidecar("yt-dlp")
         .map_err(|e| format!("sidecar resolve: {e}"))?
-        .args([
-            "-g",
-            "--no-warnings",
-            "--no-playlist",
-            "-f",
-            format_spec,
-            trimmed,
-        ])
+        .args(args)
         .output()
         .await
         .map_err(|e| format!("yt-dlp -g failed: {e}"))?;

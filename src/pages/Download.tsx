@@ -18,6 +18,7 @@ import {
   videoCodecFor,
 } from "../lib/library";
 import { useActiveProject } from "../lib/activeProject";
+import { useSettings } from "../lib/settings";
 import { Scrubber } from "../components/Scrubber";
 import type {
   DownloadResult,
@@ -104,6 +105,7 @@ function useLibraryOverride(): boolean {
 
 function MetadataCard() {
   const { scope } = useActiveProject();
+  const { settings } = useSettings();
   const overrideLibrary = useLibraryOverride();
   const [url, setUrl] = useState("");
   const [meta, setMeta] = useState<VideoMetadata | null>(null);
@@ -135,7 +137,20 @@ function MetadataCard() {
   // success message can list them.
   const [downloadedPaths, setDownloadedPaths] = useState<string[]>([]);
 
-  const [transcodePreset, setTranscodePreset] = useState<TranscodePreset>("none");
+  // Initial preset comes from settings; user can still override per-
+  // download. We sync on first ready (settings is async) so the
+  // default matches what they picked in Settings → Transcode.
+  const [transcodePreset, setTranscodePreset] = useState<TranscodePreset>(
+    () => (settings.default_transcode_preset as TranscodePreset) ?? "none",
+  );
+  const presetInitialized = useRef(false);
+  useEffect(() => {
+    if (presetInitialized.current) return;
+    if (settings.default_transcode_preset) {
+      setTranscodePreset(settings.default_transcode_preset as TranscodePreset);
+      presetInitialized.current = true;
+    }
+  }, [settings.default_transcode_preset]);
   const [transcodeProgress, setTranscodeProgress] = useState<TranscodeProgress | null>(null);
   const [phase, setPhase] = useState<"idle" | "downloading" | "transcoding">("idle");
 
@@ -778,16 +793,31 @@ function loadQueueFromStorage(): QueueJob[] {
   }
 }
 
-const DOWNLOAD_WORKERS = 3;
 const cpuTranscodeSem = new Semaphore(1);
 const gpuTranscodeSem = new Semaphore(1);
 
 function QueueCard() {
   const { scope } = useActiveProject();
+  const { settings } = useSettings();
   const overrideLibrary = useLibraryOverride();
   const [urlsInput, setUrlsInput] = useState("");
   const [jobs, setJobs] = useState<QueueJob[]>(() => loadQueueFromStorage());
-  const [batchTranscode, setBatchTranscode] = useState<TranscodePreset>("none");
+  const [batchTranscode, setBatchTranscode] = useState<TranscodePreset>(
+    () => (settings.default_transcode_preset as TranscodePreset) ?? "none",
+  );
+  const batchPresetInitialized = useRef(false);
+  useEffect(() => {
+    if (batchPresetInitialized.current) return;
+    if (settings.default_transcode_preset) {
+      setBatchTranscode(settings.default_transcode_preset as TranscodePreset);
+      batchPresetInitialized.current = true;
+    }
+  }, [settings.default_transcode_preset]);
+
+  // Worker count is settings-driven. When user bumps concurrency, the
+  // useEffect that spawns workers picks up the new ceiling and spins
+  // additional loops if there's queued work.
+  const downloadWorkers = Math.max(1, Math.min(6, settings.download_concurrency));
 
   const jobsRef = useRef<QueueJob[]>([]);
   jobsRef.current = jobs;
@@ -830,14 +860,16 @@ function QueueCard() {
       (j) => j.status === "queued" && !claimedRef.current.has(j.id),
     );
     if (!queuedUnclaimed) return;
-    while (activeWorkersRef.current < DOWNLOAD_WORKERS) {
+    while (activeWorkersRef.current < downloadWorkers) {
       activeWorkersRef.current++;
       void workerLoop().finally(() => {
         activeWorkersRef.current--;
       });
     }
+    // Re-runs when downloadWorkers changes too — bumping concurrency
+    // mid-session spawns more loops to consume the new headroom.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobs]);
+  }, [jobs, downloadWorkers]);
 
   function updateJob(id: string, patch: Partial<QueueJob>) {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j)));
@@ -1058,11 +1090,11 @@ function QueueCard() {
   return (
     <section className="card-box">
       <h2>
-        Batch queue <span className="chip">parallel × {DOWNLOAD_WORKERS}</span>
+        Batch queue <span className="chip">parallel × {downloadWorkers}</span>
       </h2>
       <p className="hint">
         Paste one URL per line, hit Queue all. Each downloads at the best
-        available video + audio (mp4). {DOWNLOAD_WORKERS} downloads run in
+        available video + audio (mp4). {downloadWorkers} downloads run in
         parallel; transcodes serialize (CPU + GPU pools run independently,
         so a libx264 job and an NVENC job can overlap). Queue persists
         across app restarts.
