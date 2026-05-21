@@ -27,11 +27,11 @@ Decided 2026-05-19. Captured here because *why* matters more than *what*.
 
 | Question | Decision | Rationale |
 |----------|----------|-----------|
-| **Audience for 1.0** | Just the author + close circle. Maybe GitHub release as distribution, no community commitment. | Same posture as chiral-network. Decide for real at 0.9.0 — if it's polished, why not share. |
+| **Audience for 1.0** | Just the author + close circle. Maybe GitHub release as distribution, no community commitment. | Same posture as chiral-network. Decide for real at 0.8.0 — if it's polished, why not share. |
 | **Platforms** | Windows + macOS for 1.0. Linux never (or 3.0+). | Tauri makes Linux ~free, but doubles QA. The two real platforms for editors are Win and Mac. |
 | **Stack** | Tauri 2 + React + TS + Rust. yt-dlp and ffmpeg as sidecar binaries. SQLite for library. | Smaller install + better RAM than Electron; matters when shipping ~150 MB of sidecars already. Pivot to Electron+Node in week 1 if Rust friction stalls progress. |
 | **Library model** | Dual-root: `~/Media Hub/Library/` (reusable, lives forever) + `~/Media Hub/Projects/<name>/` (scoped, deletable as a unit). Active project is sticky default — Library is the one-click exception. | Reflects 90% project-focused, 10% loose-browsing reality. Folder you can `rm -rf` (with OS trash safety net) beats fragile project tags. See NOTES.md "Library vs Projects" for details. |
-| **Scrubber UX** | Text-input timestamps for MVP. In-app scrubber by 0.7.0. | Text inputs ship the killer feature (segment download) without blocking on player UX. Scrubber is the polish layer. |
+| **Scrubber UX** | Text-input timestamps for MVP. In-app scrubber by 0.6.0. | Text inputs ship the killer feature (segment download) without blocking on player UX. Scrubber is the polish layer. |
 | **Source-scrub strategy** | Stream the YT URL directly (no proxy download) for scrubbing. Only download the final segment. | Matches "no bloat" philosophy. Fallback to low-res proxy if direct streaming is unreliable on some sources. See NOTES.md "scratch-preview" idea. |
 | **Transcode default** | ProRes 422 LT on macOS, ProRes 422 LT *or* DNxHR SQ on Windows (user picks at first run). Optimized H.264 MP4 as the "small file" option. | 422 LT is the sweet spot for B-roll source. 4444+alpha is rare for downloaded clips. DNxHR SQ for Avid users. |
 | **Twitter/X auth** | Anonymous (public tweets) only for v1.0. Cookie-based auth is post-1.0. | yt-dlp handles public tweets fine. Auth flow is its own scoped milestone. |
@@ -123,39 +123,49 @@ Effort estimates are in *dev builds*, not calendar time. A "dev build"
 ```
 dev0 ──┐
        ▼
-     0.1.0  ── boilerplate + sidecar smoke test
+     0.1.0  ✅  boilerplate + sidecar smoke test
        │
        ▼
-     0.2.0  ── single-URL download
+     0.2.0  ✅  single-URL download
        │
        ▼
-     0.3.0  ── segment download (the killer feature)
+     0.3.0  ✅  segment download + transcode pipeline   ← absorbed original 0.5
        │
        ▼
-     0.4.0  ── batch queue
+     0.4.0  ✅  batch queue (proper, parallel, persistent)
        │
        ▼
-     0.5.0  ── transcode pipeline
+     0.5.0  ✅  library MVP (SQLite, tags, search) + UI overhaul
+     0.5.1  ✅  local thumbnails
        │
        ▼
-     0.6.0  ── library MVP
+     0.6.0  🟡  dual-root (Library + Projects) + in-app scrubber preview
        │
        ▼
-     0.7.0  ── in-app scrubber preview
+     0.7.0  🟡  Twitter/X support + platform abstraction
        │
        ▼
-     0.8.0  ── Twitter/X support + platform abstraction
+     0.8.0  🟡  packaging, polish, public-ready (audience decision lives here)
        │
        ▼
-     0.9.0  ── packaging, polish, public-ready (audience decision lives here)
-       │
-       ▼
-     1.0.0  ── release
+     1.0.0  🟡  release
 ```
+
+**Numbering note:** the milestone tree shifted twice as we built.
+We collapsed the original "0.5 transcode pipeline" into 0.3 because
+the segment-trim ffmpeg work already had ffmpeg wired up; doing
+transcode presets in the same pass cost almost nothing extra. That
+shifted the original "0.6 library" down to 0.5, and so on. The
+**dual-root library** (originally part of 0.6 library) and **in-app
+scrubber** (originally 0.7) are now bundled as 0.6 because the UI
+overhaul we did with 0.5 ate the "Library page UI" chunk of the
+original 0.6 scope — what's left of 0.6 is the project-folder
+mechanic plus the scrubber, which pair naturally. See decision log
+2026-05-20 entry.
 
 ---
 
-### 0.1.0 — Boilerplate & sidecar smoke test *(~2–3 dev builds)*
+### 0.1.0 — Boilerplate & sidecar smoke test *(~2–3 dev builds)* ✅ SHIPPED
 
 **Goal:** Prove the entire pipeline from React button → Rust handler →
 sidecar binary → output back to UI works end-to-end. Nothing real yet,
@@ -190,7 +200,7 @@ just the rails.
 
 ---
 
-### 0.2.0 — Single-URL download *(~4–6 dev builds)*
+### 0.2.0 — Single-URL download *(~4–6 dev builds)* ✅ SHIPPED
 
 **Goal:** Paste a YouTube URL, see the title/thumbnail/format list, pick
 a format, download the full file to a folder. Proves the
@@ -205,7 +215,7 @@ metadata-fetch + download-with-progress pipeline.
   stdout and emits per-line progress events via Tauri events
 - React download row with progress bar, ETA, speed
 - Output folder picker (defaults to `~/Media Hub/Downloads/` for now;
-  library structure comes in 0.6)
+  dual-root library structure comes in 0.6)
 - Error handling: bad URL, network failure, yt-dlp non-zero exit — surface
   in UI, don't crash
 
@@ -213,8 +223,8 @@ metadata-fetch + download-with-progress pipeline.
 
 - ❌ Batch / queue (that's 0.4)
 - ❌ Segment / In-Out (that's 0.3)
-- ❌ Transcoding (that's 0.5)
-- ❌ Twitter/X (that's 0.8 — for now, YouTube-only is fine)
+- ❌ Transcoding (absorbed into 0.3)
+- ❌ Twitter/X (that's 0.7 — for now, YouTube-only is fine)
 
 **Exit criteria:**
 
@@ -225,7 +235,11 @@ metadata-fetch + download-with-progress pipeline.
 
 ---
 
-### 0.3.0 — Segment download (the killer feature) *(~4–6 dev builds)*
+### 0.3.0 — Segment download + transcode pipeline *(~4–6 dev builds)* ✅ SHIPPED
+
+**Numbering note:** original tree had transcode as its own 0.5
+milestone. Consolidated here because ffmpeg was already wired up for
+segment trim — adding presets was incremental work.
 
 **Goal:** Two text inputs (In / Out, `HH:MM:SS` or `MM:SS`), click
 Download, get a file containing only that segment. This is *the*
@@ -247,7 +261,7 @@ differentiator vs every other downloader.
 
 **Out of scope (cut):**
 
-- ❌ In-app player / scrubber (that's 0.7)
+- ❌ In-app player / scrubber (that's 0.6)
 - ❌ Frame-accurate timestamps (HH:MM:SS.ms) — second-precision is fine for MVP
 - ❌ Multi-segment (one In/Out per download for now)
 
@@ -263,7 +277,14 @@ differentiator vs every other downloader.
 
 ---
 
-### 0.4.0 — Batch queue *(~5–7 dev builds)*
+### 0.4.0 — Batch queue *(~5–7 dev builds)* ✅ SHIPPED
+
+**Implementation note:** the queue ended up living in the **renderer**
+(React state + localStorage), not Rust. Pause/resume was deferred
+because Windows process signaling for child processes requires extra
+ceremony — see ARCHITECTURE.md §5. Worker pool: 3 parallel downloads,
+separate CPU/GPU transcode semaphores so an libx264 + an NVENC job
+can run simultaneously.
 
 **Goal:** Multi-URL input, parallel workers, per-job progress, pause /
 resume / cancel. The user's "I have 30 reference videos to grab" workflow.
@@ -300,44 +321,15 @@ resume / cancel. The user's "I have 30 reference videos to grab" workflow.
 
 ---
 
-### 0.5.0 — Transcode pipeline *(~4–6 dev builds)*
+### 0.5.0 — Library MVP + UI overhaul *(~8–12 dev builds)* ✅ SHIPPED
 
-**Goal:** After download (or as part of the download job), ffmpeg
-transcodes to an edit-friendly format. Drop into Resolve and it just
-plays.
+**Numbering note:** original tree had this as 0.6 with the dual-root
+Library/Projects model included. We split: the **SQLite + tags +
+search + UI overhaul** shipped as 0.5, and the **dual-root + project
+folders** got moved to 0.6 (paired with the in-app scrubber, since
+both want a richer Library page than 0.5 ships).
 
-**Scope (in):**
-
-- Transcode presets (built-in, not user-configurable in MVP):
-  - **ProRes 422 LT** (default macOS, available on Win) — `prores_ks -profile:v 1`
-  - **DNxHR SQ** (Avid users on Windows) — `dnxhd -profile:v dnxhr_sq`
-  - **Optimized H.264 MP4** — `libx264 -preset slow -crf 18 -movflags +faststart`
-- Per-job toggle: "Transcode after download" with preset dropdown
-- Global default in settings: which preset to use when toggle is on
-- Rust command `transcode:run(srcPath, preset, destPath)` that spawns ffmpeg
-  with parsed progress events (parse `out_time_ms` from `-progress pipe:1`)
-- UI: post-download row shows "Transcoding…" with its own progress bar
-- Option: "Keep original" vs "Replace with transcode" (default: keep both
-  initially, change default after user feedback)
-
-**Out of scope (cut):**
-
-- ❌ Custom user presets (post-1.0)
-- ❌ Hardware-accelerated encoding (defer; CPU is fine for B-roll quantities)
-- ❌ Audio-only / video-only extraction
-- ❌ Resolution downscale during transcode (use source resolution)
-
-**Exit criteria:**
-
-- [ ] Download a 4K YouTube video, transcode to ProRes 422 LT, file imports
-      cleanly into Resolve and plays without dropped frames on author's machine
-- [ ] DNxHR SQ output imports cleanly into Avid (if testable)
-- [ ] Transcode progress bar moves smoothly, doesn't stall the UI
-- [ ] Cancel a transcode mid-run, partial output is cleaned up
-
----
-
-### 0.6.0 — Library MVP *(~6–10 dev builds)*
+What actually landed in 0.5:
 
 **Goal:** Downloads stop being a Downloads folder dump. SQLite-backed
 library with tags, search, thumbnails, rename rules. The "I downloaded
@@ -382,55 +374,93 @@ that explosion clip 2 months ago, where is it" problem solved.
 - ❌ Duplicate detection across the library (post-1.0; just don't re-download
       from URLs that already exist)
 
-**Exit criteria:**
+**Exit criteria (as shipped):**
 
-- [ ] Download 5 videos with varying segments, all land in correct
-      `Platform/Channel/Month/` folders with correct names
-- [ ] Add 3 tags to an asset, search by tag returns the asset
-- [ ] Search by partial title returns the asset (FTS working)
-- [ ] Export-to-project copies the file into a chosen folder
-- [ ] Thumbnails appear in grid within 5 seconds of download complete
-- [ ] Library with 200+ assets opens in <500ms
+- [x] SQLite library auto-populates on every download
+- [x] Tag any asset; tag-AND filter narrows the grid; free-text search
+      matches title + channel with 150ms debounce
+- [x] Real grid UI with sidebar facets (Source / Tags / Added)
+- [x] Slide-over asset detail drawer with metadata + tag editor +
+      Reveal in Explorer + Forget
+- [x] Library page opens in <500ms with hundreds of assets
+- [x] Local thumbnails extracted from disk file (0.5.1) — correct for
+      segment downloads where the source's YT thumb doesn't represent
+      the trimmed clip
+
+**Deferred to 0.6 (was in the original 0.6 scope):**
+
+- 🟡 Dual-root `Library/` + `Projects/<name>/` filesystem layout
+- 🟡 Project-aware folder routing on download
+- 🟡 Export to project folder (needs `@tauri-apps/plugin-dialog`)
+- 🟡 Rename rules with `{channel}` / `{title}` / `{date}` tokens
+- 🟡 FTS5 search upgrade (LIKE is fine for now)
 
 ---
 
-### 0.7.0 — In-app scrubber preview *(~5–7 dev builds)*
+### 0.6.0 — Dual-root library + in-app scrubber *(~8–12 dev builds)*
 
-**Goal:** Replace the text-input In/Out workflow with a real video player
-that streams the source URL, scrubs, frame-steps, click-to-set In/Out.
+**Goal:** Two big pieces that pair naturally because they share UI
+real estate (the In/Out timeline component) and both need a richer
+Library page (project filter, project breadcrumb). Doing them
+together is half the work of doing them separately.
 
-**Scope (in):**
+**Scope (in) — dual-root + projects:**
 
-- HTML5 `<video>` element pointing at the direct stream URL `yt-dlp -g`
-  resolves (no download needed for scrub)
-- Custom transport controls: play/pause, scrub bar with frame ticks,
-  ← → for frame-step (arrow keys), `I` and `O` to mark In/Out
-- Two markers on the scrub bar showing current In/Out
+- Dual-root layout:
+  ```
+  Library/                          Projects/My-Reel/
+    YouTube/<channel>/<YYYY-MM>/    YouTube/<channel>/<YYYY-MM>/
+    Twitter/<@user>/<YYYY-MM>/      Twitter/<@user>/<YYYY-MM>/
+    project.json
+  _thumbnails/  (shared at root)
+  library.db    (shared at root)
+  ```
+- Top-bar "Active Project" picker stops being decorative; sticky
+  default; Library is the one-click escape hatch
+- New SQL: `projects` table, `assets.project_id` (NULL = Library)
+- Project-aware download routing
+- Right-click asset → Reveal / Export to chosen folder
+- Right-click in Project → Promote to Library
+- Right-click in Library → Copy to Project
+- "Finish Project" action → promote-first dialog → moves folder to OS trash
+- Rename rules in settings (`{channel}`, `{title}`, `{date}`)
+- Duplicate detection on download (NOTES.md "Duplicate/re-download")
+- `@tauri-apps/plugin-dialog` for the folder picker + capability scope
+
+**Scope (in) — in-app scrubber:**
+
+- HTML5 `<video>` element pointing at the direct stream URL
+  (`yt-dlp -g` resolves) — no download needed for scrub
+- Custom transport: play/pause, scrub bar with In/Out markers,
+  ← → for frame-step, `I` / `O` to mark
 - "Download segment" button uses the marked In/Out
-- Fallback: if direct streaming fails (some YouTube formats reject
-  cross-origin without cookies), download a low-res proxy (480p) and
-  scrub that instead
-- See NOTES.md "scratch-preview tier" — the proxy fallback might be
-  worth making the default once we measure how often direct-stream fails
+- Fallback: low-res proxy download if direct streaming fails — see
+  NOTES.md "scratch-preview tier"
 
 **Out of scope (cut):**
 
-- ❌ Frame-accurate seeking (yt-dlp segment cut is keyframe-aligned anyway)
-- ❌ Waveform display for audio (defer)
-- ❌ Multi-segment marking from one preview session (post-1.0)
-- ❌ Side-by-side comparison of versions
+- ❌ Watched-folders mode (we only index what we downloaded)
+- ❌ Tag colors / tag groups (flat tags only)
+- ❌ Smart playlists / saved searches
+- ❌ Multi-machine library sync
+- ❌ Frame-accurate seeking (yt-dlp segment cut is keyframe-aligned)
+- ❌ Waveform display for audio
+- ❌ Side-by-side version comparison
 
 **Exit criteria:**
 
-- [ ] Paste YouTube URL, scrub through a 1-hour video without downloading the source
-- [ ] Frame-step with arrows works
-- [ ] `I` and `O` set In/Out, segment downloads correctly
-- [ ] Fallback to proxy works when direct streaming fails (test with a
-      known-bad format / age-restricted video)
+- [ ] Create a project, download into it, files land under
+      `Projects/<name>/Platform/Channel/Month/`
+- [ ] Switch active project from top-bar picker; library/grid scope changes
+- [ ] Promote an asset from project → library and vice versa
+- [ ] Finish Project moves the folder to OS trash (recoverable)
+- [ ] Paste URL, scrub a 1-hour video without downloading; frame-step
+      with arrows; `I` / `O` mark In/Out; download fires the marked segment
+- [ ] Proxy fallback kicks in when direct streaming fails
 
 ---
 
-### 0.8.0 — Twitter/X + platform abstraction *(~4–6 dev builds)*
+### 0.7.0 — Twitter/X + platform abstraction *(~4–6 dev builds)*
 
 **Goal:** Twitter/X public tweets work end-to-end through every pipeline
 above. Architecture refactored to a `Platform` trait so adding the next
@@ -445,7 +475,7 @@ source is a contained change.
   - Tweet → highest-bitrate variant (Twitter ladders are simpler than YT)
   - Multi-video tweets: prompt user to pick which video
   - Quote-tweet videos handled correctly
-- Library folder layout already supports `Twitter/@user/...` from 0.6
+- Library folder layout supports `Twitter/@user/...` from 0.6 dual-root
 - Settings: optional Twitter cookie input (for following-only / sensitive
   content; defaulted to disabled, opt-in only)
 
@@ -466,7 +496,7 @@ source is a contained change.
 
 ---
 
-### 0.9.0 — Packaging, polish, public-ready *(~5–8 dev builds)*
+### 0.8.0 — Packaging, polish, public-ready *(~5–8 dev builds)*
 
 **Goal:** Cross the "I'd give this to a friend" line. Real installers for
 Win+Mac. Sidecar binaries bundled correctly. Onboarding flow. Audience
@@ -509,7 +539,7 @@ decision made.
 
 ### 1.0.0 — Release *(~2–4 dev builds)*
 
-**Goal:** Tag it, ship it, use it. Whichever distribution the 0.9
+**Goal:** Tag it, ship it, use it. Whichever distribution the 0.8
 decision picked.
 
 **Scope (in):**
@@ -559,6 +589,36 @@ Anything more speculative than this belongs in `docs/NOTES.md` under
 
 Newest first. Every entry: what we decided, when, and *why*.
 
+### 2026-05-20 — Milestone renumbering after consolidating transcode + UI
+
+- Decision: collapse original "0.5 transcode pipeline" into 0.3
+  (shipped together since segment-trim already had ffmpeg wired up).
+  Original "0.6 library" becomes 0.5, with **dual-root + projects**
+  pulled out into a new 0.6 that pairs with the **in-app scrubber**
+  (originally 0.7) because both want a richer Library page than 0.5
+  ships and they share the In/Out timeline component. Downstream
+  milestones shift by one: 0.7 platform, 0.8 packaging, 1.0 release.
+- Why: track the actual order of work, not the planned order. The
+  consolidation in 0.3 was natural (no extra surface area); the 0.6
+  pairing is efficiency (don't redo the library page twice).
+- Effect: see updated milestone tree. Section headings below match
+  the new numbers; backlinks across the doc updated.
+
+### 2026-05-20 — Download queue lives in the renderer, not Rust
+
+- Decision: the batch download queue is React state + localStorage
+  persistence, not a Rust-side `JobQueue` daemon as originally
+  planned in ARCHITECTURE.md.
+- Why: progress events already flowed to the UI; React owned the
+  worker-pool-orchestration sweet spot with `useEffect` + refs;
+  localStorage gave persistence for free. Rust stays the single-
+  purpose "run one yt-dlp / ffmpeg with progress" worker.
+- Trade-off: closing the app mid-job kills that job. No
+  Rust-daemon-keeps-downloading-while-window-closed flow. Accept
+  for now — the actual yt-dlp invocation is short enough that
+  restart-on-relaunch is fine. Revisit if the app is going to be
+  used as a "run overnight" tool.
+
 ### 2026-05-19 — Dual-root library structure (Library + Projects)
 - Decision: Two top-level roots — `Library/` (reusable, permanent) and
   `Projects/<name>/` (scoped, deletable). Active project is sticky
@@ -568,7 +628,7 @@ Newest first. Every entry: what we decided, when, and *why*.
   is scary to delete and easy to get wrong. See NOTES.md for the killer
   interactions (Promote / Copy / Finish Project).
 
-### 2026-05-19 — Multi-segment marking in 0.7 scrubber
+### 2026-05-19 — Multi-segment marking in 0.6 scrubber (was 0.7)
 - Decision: The in-app scrubber supports multiple In/Out pairs per
   preview session. Queue them all in one go.
 - Why: User confirmed it's a high-value workflow. Architecturally cheap —
@@ -615,7 +675,7 @@ Newest first. Every entry: what we decided, when, and *why*.
   for storage, plenty of quality for source). 4444+alpha is rare for
   downloaded clips. Custom presets are a rabbit hole worth deferring.
 
-### 2026-05-19 — Text inputs for In/Out in MVP; in-app scrubber by 0.7
+### 2026-05-19 — Text inputs for In/Out in MVP; in-app scrubber by 0.6 (was 0.7)
 - Decision: Ship segment download in 0.3 with text inputs. Real scrubber
   is a separate milestone.
 - Why: Decouples the killer feature (segment download) from the polish
@@ -648,5 +708,5 @@ Companion docs:
   reality as code lands)
 - `docs/NOTES.md` — working notes, ideas parking lot, gotchas to
   remember
-- `docs/v1_acceptance.md` — QA matrix for 1.0 *(write closer to 0.9)*
+- `docs/v1_acceptance.md` — QA matrix for 1.0 *(write closer to 0.8)*
 - `CHANGELOG.md` — what shipped, in order *(start at 0.1)*

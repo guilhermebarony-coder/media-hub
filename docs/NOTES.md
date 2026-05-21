@@ -1,12 +1,24 @@
 # Media Hub — Working Notes
 
-Status: living doc, dev0 (2026-05-19). This is the parking lot for
-ideas, gotchas, and things-to-remember that don't belong in ROADMAP
-(too speculative or too small) or ARCHITECTURE (not a structural
-decision).
+Status: living doc, last refreshed 2026-05-20 (post 0.5.1). This is
+the parking lot for ideas, gotchas, and things-to-remember that don't
+belong in ROADMAP (too speculative or too small) or ARCHITECTURE (not
+a structural decision).
 
 Format: dated sections, newest at top. Each entry self-contained —
 written so future-me (or future-Claude) can pick it up cold.
+
+**Companion docs:**
+- `ARCHITECTURE.md` — what's actually built + how it fits together
+- `ROADMAP.md` — milestone tree + decision log + cut-lines
+- `FEEDBACK.md` — collaboration notes (personal, timeless)
+
+**Milestone numbering note:** as of 2026-05-20 we collapsed the
+original "0.5 transcode" into 0.3 and split the original "0.6
+library" into 0.5 (SQLite + tags + UI overhaul, shipped) and 0.6
+(dual-root + projects + in-app scrubber). Downstream shifts by one.
+Some entries below pre-date the renumbering — check ROADMAP's
+decision log for the mapping if a milestone number reads weird.
 
 ---
 

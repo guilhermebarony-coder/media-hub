@@ -1,310 +1,472 @@
 # Media Hub — Architecture
 
-Status: planned shape, dev0 (2026-05-19). This document is a **map** of
-where things will live and why. As code lands, this doc updates to match
-reality — if it drifts, fix the doc. Detailed contracts live in
-per-module header comments.
+Status: living doc, last refreshed 2026-05-20 (post 0.5.1 — local
+thumbnails). This document is the **map** of what's actually built and
+where it lives. As code lands, this doc updates to match. If it drifts,
+fix the doc. Detailed contracts live in per-module header comments.
 
-⚠️ At dev0, almost everything below is *planned*, not *built*. Mark each
-section with a "shipped in dev N" tag as it lands.
+✅ = shipped · 🟡 = planned · ❌ = decided against
 
 ---
 
 ## 1. The three layers
 
-Media Hub is a Tauri desktop app with three clean layers and one
-external dependency surface:
+Media Hub is a Tauri 2 desktop app with three clean layers and one
+external dependency surface.
 
 ```
-   ┌────────────────────────────────────────────┐
-   │  Renderer (React + TypeScript)             │
-   │  - UI, state, user input                   │
-   │  - Talks to backend ONLY via Tauri invoke  │
-   └─────────────────┬──────────────────────────┘
-                     │  invoke() / events
-   ┌─────────────────▼──────────────────────────┐
-   │  Backend (Rust, in src-tauri/)             │
-   │  - Tauri commands (the IPC surface)        │
-   │  - Job queue, SQLite, sidecar orchestration│
-   │  - Only writer of library/ + library.db    │
-   └─────────────────┬──────────────────────────┘
-                     │  spawn / parse stdout
-   ┌─────────────────▼──────────────────────────┐
-   │  Sidecars (bundled binaries)               │
-   │  - yt-dlp:  metadata + download            │
-   │  - ffmpeg:  trim + transcode + thumbnails  │
-   └────────────────────────────────────────────┘
+   ┌────────────────────────────────────────────────┐
+   │  Renderer (React 19 + TypeScript + Vite)       │
+   │  - UI, state, user input                       │
+   │  - Owns the download queue (React state +      │
+   │    localStorage persistence)                   │
+   │  - Talks to backend ONLY via Tauri invoke()    │
+   │    and event subscriptions                     │
+   └──────────────────────┬─────────────────────────┘
+                          │  invoke() · listen()
+   ┌──────────────────────▼─────────────────────────┐
+   │  Backend (Rust, in src-tauri/)                 │
+   │  - Tauri commands (the IPC surface)            │
+   │  - Sidecar orchestration + progress streaming  │
+   │  - SQLite persistence (library + tags)         │
+   │  - Stateless except for the SqlitePool         │
+   └──────────────────────┬─────────────────────────┘
+                          │  spawn / stdout pipe
+   ┌──────────────────────▼─────────────────────────┐
+   │  Sidecars (bundled binaries)                   │
+   │  - yt-dlp:  metadata + download                │
+   │  - ffmpeg:  trim + transcode + thumbnails      │
+   └────────────────────────────────────────────────┘
 ```
 
 The renderer **never** spawns processes directly and **never** touches
-the filesystem outside Tauri's allowlist. Every action that mutates
-disk goes through a Rust command.
+the filesystem outside what Tauri's capabilities allow. Every action
+that mutates disk goes through a Rust command.
+
+**Notable architectural choice:** the batch download queue lives in
+the **renderer**, not Rust. This deviates from the original
+dev0-plan. Reasons it ended up there: progress events already flowed
+to the UI; React owned the worker-pool-orchestration sweet spot with
+useEffect + refs; localStorage gave persistence for free. Rust stayed
+the single-purpose "run one yt-dlp / ffmpeg with progress" worker.
+The trade-off: closing the app mid-job actually loses that job (no
+Rust-side queue daemon). We accept that for now — see NOTES.md
+"queue persistence" for the resume strategy.
 
 ---
 
 ## 2. On-disk layout (ground truth)
 
-Everything Media Hub knows is reconstructable from `library/` plus
-`library.db`. Settings live in the OS config dir.
+What's actually written under the user's home directory today:
 
 ```
-~/Media Hub/                                  ← user-pickable root
-├── Library/                                  ← reusable, lives forever
-│   ├── YouTube/<ChannelName>/<YYYY-MM>/<title>__<in>_<out>.<ext>
-│   ├── Twitter/@<username>/<YYYY-MM>/<tweet_id>.<ext>
-│   ├── _thumbnails/<asset_uuid>.jpg
-│   └── library.db                            ← SQLite, single file, shared across both roots
-├── Projects/
-│   └── <project-name>/                       ← scoped, deletable as a unit
-│       ├── YouTube/<ChannelName>/<YYYY-MM>/...
-│       ├── Twitter/...
-│       ├── _thumbnails/
-│       └── project.json                      ← name, created, status, notes
-└── Downloads/                                ← pre-library staging (0.2)
-    └── _pending/<job-id>/                    ← sidecars write here, atomic-moved on success
-
-~/.config/media-hub/  (Mac: ~/Library/Application Support/media-hub/)
-└── settings.json                             ← global settings
-└── queue_state.json                          ← persisted queue (0.4)
+~/Media Hub/
+├── library.db                              ← SQLite WAL-mode, single file
+├── _thumbnails/<asset_uuid>.jpg            ← extracted mid-clip frames (480w q=4)
+└── Downloads/
+    └── _test/                              ← yt-dlp writes here for now
+        ├── <title> [<id>].<ext>            ← downloaded source
+        ├── <title> [<id>].seg_<in>_<out>.<ext>   ← segment-trimmed output
+        └── <title> [<id>].<preset>.<out_ext>    ← transcoded output
 ```
 
-Path safety: every Rust handler that writes/deletes routes through a
-`assert_in_library_root(path)` helper. Anything trying to escape the
-library root errors before touching disk. (Mirrors chiral-network's
-`assertInProjects` discipline.)
+Browser-side state (localStorage):
+```
+mh.queue.v1   ← the batch download queue (active + queued + completed jobs)
+```
+
+**Planned (not yet built):**
+- 🟡 `~/Media Hub/Library/` + `~/Media Hub/Projects/<name>/` dual-root
+  layout (0.6). Today everything lands in `Downloads/_test/` — that
+  path is provisional. The library DB row already carries the full
+  path so migrating later is a path rename, not a re-index.
+- 🟡 `~/Media Hub/_thumbnails/` will move to `Library/_thumbnails/`
+  and per-project `Projects/<n>/_thumbnails/` once dual-root lands.
+- 🟡 Settings file (`settings.json`) doesn't exist yet — no
+  per-user knobs to persist.
+
+**Path safety:** no formal `assert_in_library_root` helper yet. All
+write paths are computed by Rust handlers from a known-safe parent
+(home + "Media Hub"), so user-controllable strings never become
+parent-path components. Lock this down properly when we add
+project folders (user-named) in 0.6.
 
 ---
 
 ## 3. Tauri command surface (the IPC contract)
 
-Renderer talks to backend through `invoke('<command>', args)`. Backend
-pushes async events via `app.emit_all('<event>', payload)`.
+Naming convention: `<domain>_<verb>` (snake_case, single word per
+domain). This is the actual shape — the dev0 plan had `<domain>:<verb>`
+colon-namespaced commands; Tauri's `generate_handler!` macro pushed us
+to a flat snake_case namespace and we never went back.
 
-Naming convention: `<domain>:<verb>` — e.g. `yt:fetchMetadata`,
-`library:search`.
+Commands are registered in `src-tauri/src/lib.rs::run()` via
+`tauri::generate_handler![…]`.
 
-### Planned commands (filled in as they ship)
+### Shipped commands
 
-| Domain | Command | Shipped | Purpose |
-|--------|---------|---------|---------|
-| `binaries:` | `version` | 0.1 | Returns versions of bundled yt-dlp + ffmpeg |
-| `yt:` | `fetchMetadata` | 0.2 | Returns title/duration/formats for a URL |
-| `yt:` | `download` | 0.2 | Full download, emits progress events |
-| `yt:` | `downloadSegment` | 0.3 | Segment download (range or full+trim) |
-| `yt:` | `resolveStreamUrl` | 0.7 | Returns direct stream URL for scrub player |
-| `queue:` | `add`, `pause`, `resume`, `cancel`, `list` | 0.4 | Batch job queue |
-| `transcode:` | `run` | 0.5 | ffmpeg transcode with progress |
-| `library:` | `list`, `search`, `getById`, `addTag`, `removeTag`, `setRating` | 0.6 | Library CRUD |
-| `library:` | `exportToProject` | 0.6 | Copy asset into a user-chosen folder |
-| `platform:` | (trait dispatch) | 0.8 | YouTube + Twitter routing |
-| `settings:` | `get`, `set` | 0.9 | Global settings |
+| Command | File | Purpose |
+|---------|------|---------|
+| `binaries_version` | lib.rs | Returns yt-dlp + ffmpeg version strings (smoke-test, no UI today) |
+| `yt_fetch_metadata` | lib.rs | Spawns `yt-dlp -j`, returns title/duration/formats/thumbnail |
+| `yt_download` | lib.rs | Full download via yt-dlp. Optional in/out triggers post-download ffmpeg `-c copy` trim. Streams progress |
+| `media_transcode` | lib.rs | Re-encodes a downloaded file via ffmpeg with one of 4 presets (ProRes 422 LT / DNxHR SQ / H.264 libx264 / H.264 NVENC). `-hwaccel auto` for hw decode |
+| `media_extract_thumbnail` | lib.rs | Pulls a mid-clip JPG (480w q=4) into `~/Media Hub/_thumbnails/<asset_id>.jpg` |
+| `library_insert` | library.rs | Inserts an asset row; returns its UUID |
+| `library_list` | library.rs | Returns assets matching filters (free-text query + tag-AND + limit), each with its tag list |
+| `library_count` | library.rs | Total asset row count |
+| `library_delete` | library.rs | Removes a row (file on disk untouched). CASCADE drops asset_tags |
+| `library_set_thumbnail` | library.rs | Records a local thumbnail path against an asset |
+| `library_thumbnails_missing` | library.rs | Lists assets with no `thumbnail_path` for the backfill loop |
+| `tag_set_for_asset` | library.rs | Replace-all tag set in one transaction (no diff round-trips) |
+| `tag_list_all` | library.rs | All tags with usage counts, alphabetical, orphans hidden |
 
-### Planned events (renderer subscribes)
+### Shipped events (renderer subscribes via `listen()`)
 
-| Event | Payload | Purpose |
-|-------|---------|---------|
-| `job:progress` | `{jobId, percent, eta, speed}` | Per-job download/transcode progress |
-| `job:done` | `{jobId, outputPath, errors}` | Completion |
-| `library:changed` | `{}` | Re-fetch library list after a write |
-| `queue:changed` | `{}` | Queue state changed (add/pause/etc.) |
+| Event | Payload | Emitted by | Drives |
+|-------|---------|------------|--------|
+| `download:progress` | `{ job_id?, downloaded_bytes, total_bytes?, percent?, speed_bps?, eta_sec? }` | `yt_download` (filesystem-poll task) | Single-URL progress bar + queue rows |
+| `transcode:progress` | `{ job_id?, processed_sec, total_sec?, percent?, speed_mult? }` | `media_transcode` (parses ffmpeg `-progress pipe:1`) | Transcode progress bar |
+| `library:changed` | `{}` | `library_insert`, `library_delete`, `library_set_thumbnail`, `tag_set_for_asset` | Library page auto-refresh (no polling) |
+
+`job_id` is `null` for the single-URL flow and a job UUID for batch
+jobs — that's how the renderer routes events to the right UI.
+
+### Planned commands
+
+- 🟡 `library_move_to_project(asset_id, project_id)` (0.6)
+- 🟡 `project_create / list / delete / finish` (0.6)
+- 🟡 `yt_resolve_stream_url(url, format_id)` for the scrubber's
+  direct-stream playback (0.6)
+- 🟡 `settings_get / settings_set` (0.8 packaging)
 
 ---
 
 ## 4. Sidecar orchestration
 
-Both yt-dlp and ffmpeg are spawned via `tauri-plugin-shell`. Pattern:
+Both `yt-dlp` and `ffmpeg` are spawned via `tauri-plugin-shell`. The
+pattern that ended up working:
 
-1. Build args vector (never string-concat user input — argv stays
-   structured)
-2. Spawn with stdout + stderr piped
-3. Stream stdout line-by-line into a parser (yt-dlp progress lines OR
-   ffmpeg `-progress pipe:1` key=value pairs)
-4. Parser emits structured progress events to the renderer
-5. On exit code: success → success event; non-zero → error event with
-   captured stderr tail
+1. Resolve sidecar by **basename only**: `app.shell().sidecar("ffmpeg")`.
+   Tauri strips any path prefix; the capability's `allow.name` must
+   match the basename or the spawn fails with OS error 3.
+2. Build args vector — never string-concat user input. argv stays
+   structured.
+3. Spawn returns `(rx, _child)` — `rx` is an `mpsc` receiver of
+   `CommandEvent::{Stdout, Stderr, Terminated}`. We `recv().await`
+   in a loop until `Terminated`.
+4. Parse stdout line-by-line:
+   - **yt-dlp:** we don't trust its stdout progress lines (Python's
+     PyInstaller bundle block-buffers stdout when piped — they
+     arrive in one burst at process end). Instead we **poll the
+     filesystem** in a sibling task while yt-dlp runs. See NOTES.md
+     "Progress streaming saga."
+   - **ffmpeg:** structured `key=value` lines from `-progress pipe:1`,
+     terminated by `progress=continue` (or `progress=end`).
+5. Accumulate stderr in a 50-line ring; surface the tail on non-zero
+   exit code so the user sees an actionable error.
 
-**Key rule:** Sidecars never write directly to `library/`. They write
-to a staging dir (`~/Media Hub/Downloads/_pending/<job-id>/`), and on
-success the Rust handler atomically moves the file into the final
-library path. Crash mid-download = leftover staging file we can clean
-up; never a half-written file in the library.
+### Windows MFT cached file-size gotcha
+
+`std::fs::metadata(path).len()` returns the MFT's cached size, which
+doesn't tick up live while a file is being written. The fix:
+
+```rust
+fn live_file_size(path: &std::path::Path) -> Option<u64> {
+    let mut f = OpenOptions::new().read(true).open(path).ok()?;
+    f.seek(SeekFrom::End(0)).ok()
+}
+```
+
+Opening + seeking to end forces a fresh size read. ~1ms per poll on
+SSDs. Polling cadence is 500ms with a rolling 5-sample window for
+speed smoothing.
 
 ### Sidecar bundling
 
 - Win: `yt-dlp.exe` + `ffmpeg.exe` in `src-tauri/binaries/`
-- Mac: `yt-dlp` + `ffmpeg` (universal binary if available, else two
-  arch-specific copies) with Tauri's `-x86_64-apple-darwin` /
-  `-aarch64-apple-darwin` suffix
-- Tauri's `tauri.conf.json > tauri > bundle > externalBin` lists them
-
-Updating sidecars is a manual `scripts/fetch-sidecars.sh` (or .ps1)
-that downloads the latest stable releases. No auto-update of sidecars
-at runtime — they're vendored.
+- Mac: 🟡 not yet fetched. Tauri's per-arch suffix scheme
+  (`-x86_64-apple-darwin` / `-aarch64-apple-darwin`) will apply.
+- `tauri.conf.json > bundle > externalBin` lists them so the
+  installer picks them up.
+- `scripts/fetch-sidecars.ps1` grabs latest stable releases. Manual
+  update, no runtime auto-update of sidecars — they're vendored.
 
 ---
 
-## 5. The job queue (0.4+)
+## 5. The download queue (✅ shipped, lives in the renderer)
 
-A `tokio::sync::mpsc` channel feeding a worker pool. Workers are
-async tasks holding a permit from a `Semaphore` (concurrency limit).
+Located in `src/pages/Download.tsx::QueueCard`. Not in Rust.
 
-```rust
-JobQueue {
-  semaphore: Arc<Semaphore>,        // limits parallel downloads
-  jobs: Arc<RwLock<HashMap<JobId, Job>>>,
-  tx: mpsc::Sender<JobCommand>,     // add / pause / resume / cancel
-}
-
-enum JobKind {
-  Download { url, format, out_path },
-  Segment { url, format, in_sec, out_sec, out_path },
-  Transcode { src, preset, out_path },
-}
-
-enum JobState {
-  Queued, Running, Paused, Done, Failed(String),
+```ts
+type QueueJob = {
+  id: string;              // newJobId() -> "job-<ts>-<rand>"
+  url: string;
+  status: "queued" | "fetching" | "downloading" | "transcoding"
+        | "done" | "failed";
+  transcodePreset: TranscodePreset;   // captured at enqueue, locked
+  title?, channel?, thumbnail?, duration_sec?
+  progress?, transcodeProgress?
+  resultPath?, resultBytes?, error?
 }
 ```
 
-Persistence: queue state is serialized to `queue_state.json` on every
-state change (debounced to ~1s). On launch, queue restores; running
-jobs become Queued (we don't try to resume mid-flight downloads on
-restart — they re-queue from zero, or from byte offset if yt-dlp's
-`--continue` works for that format).
+**Concurrency model:**
+- `DOWNLOAD_WORKERS = 3` worker loops pull from the queue in
+  parallel. Each is just an async function that scans `jobsRef` for
+  the next unclaimed `queued` job, processes it, repeats. Self-
+  terminates when no work found; spun back up by a `useEffect`
+  watching the jobs array.
+- Atomic claim via a ref-Set so two workers can't grab the same job.
+- Two module-scoped semaphores (`cpuTranscodeSem`, `gpuTranscodeSem`,
+  each `permits: 1`) serialize transcodes by hardware pool. A
+  libx264 CPU job and an h264_nvenc GPU job can run simultaneously.
+
+**Persistence:** the whole jobs array is JSON-stringified to
+`localStorage["mh.queue.v1"]` on every state change. On load, jobs
+that were mid-flight (`fetching` / `downloading` / `transcoding`)
+reset to `queued`. We don't try to resume the Rust-side download —
+yt-dlp's `.part` file would be stale; cleaner to re-fetch from zero.
 
 ---
 
-## 6. The library DB (0.6+)
+## 6. The library DB (✅ shipped through 0.5.1)
 
-SQLite via `sqlx` with compile-time-checked queries.
+SQLite via `sqlx` 0.8 (`runtime-tokio` + `sqlite` + `chrono` +
+`macros` features). Compile-time query checking not used — no
+`DATABASE_URL` requirement at build time, just runtime queries.
 
+Path: `~/Media Hub/library.db`. WAL mode + 5s busy_timeout +
+`foreign_keys=on`.
+
+### Schema (current)
+
+```sql
+-- 001_initial.sql
+CREATE TABLE IF NOT EXISTS assets (
+  id            TEXT PRIMARY KEY,           -- UUID v4
+  source_url    TEXT NOT NULL,
+  platform      TEXT NOT NULL,              -- 'youtube' | (later: 'twitter' etc.)
+  video_id      TEXT,
+  channel       TEXT,
+  title         TEXT NOT NULL,
+  duration_sec  REAL,
+  in_sec        REAL,                       -- NULL = full download
+  out_sec       REAL,
+  file_path     TEXT NOT NULL,              -- absolute path on disk
+  file_size     INTEGER,
+  container     TEXT,                       -- 'mp4' | 'webm' | 'mov' | ...
+  codec_video   TEXT,                       -- 'h264' | 'av01' | 'prores' | ...
+  codec_audio   TEXT,
+  width         INTEGER,
+  height        INTEGER,
+  fps           REAL,
+  transcoded_to TEXT,                       -- preset name, NULL if unconverted
+  thumbnail_url TEXT,                       -- remote (YT CDN) thumbnail
+  downloaded_at INTEGER NOT NULL            -- unix epoch
+);
+CREATE INDEX IF NOT EXISTS idx_assets_downloaded_at ON assets(downloaded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_assets_platform_video_id ON assets(platform, video_id);
+CREATE INDEX IF NOT EXISTS idx_assets_platform_channel ON assets(platform, channel);
+
+-- 002_tags.sql
+CREATE TABLE IF NOT EXISTS tags (
+  id   INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE
+);
+CREATE TABLE IF NOT EXISTS asset_tags (
+  asset_id TEXT    NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+  tag_id   INTEGER NOT NULL REFERENCES tags(id)   ON DELETE CASCADE,
+  PRIMARY KEY (asset_id, tag_id)
+);
+CREATE INDEX IF NOT EXISTS idx_asset_tags_tag ON asset_tags(tag_id);
+
+-- 003_thumbnails.sql
+ALTER TABLE assets ADD COLUMN thumbnail_path TEXT;
 ```
-assets (
-  id TEXT PRIMARY KEY,           -- UUID
-  source_url TEXT,
-  platform TEXT,                 -- 'youtube' | 'twitter' | ...
-  channel TEXT,                  -- '@user' or channel name
-  title TEXT,
-  duration_sec INTEGER,
-  in_sec INTEGER,                -- NULL if full download
-  out_sec INTEGER,
-  file_path TEXT,                -- relative to library root
-  file_size INTEGER,
-  codec TEXT,
-  resolution TEXT,               -- '1920x1080'
-  downloaded_at INTEGER,         -- epoch
-  transcoded_to TEXT,            -- preset name, NULL if not transcoded
-  rating INTEGER                 -- 0-5, default 0
-)
 
-tags (id INTEGER PRIMARY KEY, name TEXT UNIQUE)
-asset_tags (asset_id TEXT, tag_id INTEGER, PRIMARY KEY (asset_id, tag_id))
+**Migration runner** (`library::init`) loads each file via
+`include_str!`, splits on `;` after stripping `--` comments, executes
+each statement. The loop silently swallows "duplicate column name"
+errors so the non-idempotent `ALTER TABLE ADD COLUMN` doesn't break
+re-runs. Switch to a real migrations-tracking table when we have a
+fourth ALTER.
 
--- FTS5 virtual table for search (0.6 exit criterion)
-CREATE VIRTUAL TABLE assets_fts USING fts5(
-  title, channel, tags,
-  content='assets', content_rowid='rowid'
-)
-```
+**Search:** plain `LIKE %query%` on `title` and `channel` for now,
+case-insensitive. Fine for <10k assets. FTS5 upgrade is a deferred
+item in ROADMAP.
 
-Migrations live in `src-tauri/migrations/`. `sqlx migrate run` on app
-launch.
+**Tag semantics:** the renderer can pass a list of required tags;
+each becomes an `EXISTS (SELECT 1 FROM asset_tags…)` clause, ANDed.
+Matches the "narrow down by adding chips" UX. Casing is preserved
+on insert via `INSERT OR IGNORE` + NOCASE collation — UI shows the
+original casing, matching is case-insensitive.
+
+**Orphan tag rows are kept** (last asset deleted/untagged). The
+`tag_list_all` query filters with `HAVING count > 0` so they're
+invisible in the UI cloud, but re-adding the same tag re-uses the
+original row + casing instead of creating a duplicate.
 
 ---
 
-## 7. Platform abstraction (0.8+)
+## 7. Thumbnail extraction (✅ 0.5.1)
 
-```rust
-#[async_trait]
-trait Platform {
-  fn url_pattern(&self) -> &Regex;
-  async fn fetch_metadata(&self, url: &str) -> Result<Metadata>;
-  async fn resolve_stream_url(&self, url: &str, format: &FormatId) -> Result<String>;
-  async fn download(&self, url: &str, format: &FormatId, out: &Path, progress: ProgressSink) -> Result<()>;
-  async fn download_segment(&self, url: &str, format: &FormatId, in_sec: f64, out_sec: f64, out: &Path, progress: ProgressSink) -> Result<SegmentMode>;
-}
+After every successful download (single-URL or batch), the renderer
+fires `attachLocalThumbnail(assetId, srcPath, durationSec)` as
+fire-and-forget. That calls:
 
-enum SegmentMode { RangeOnly, FullThenTrim }
-```
+1. `media_extract_thumbnail` — ffmpeg `-ss <duration/2 or 1s> -i <src>
+   -frames:v 1 -vf scale=480:-2:flags=lanczos -q:v 4` → writes
+   `~/Media Hub/_thumbnails/<asset_id>.jpg` (~30–80 KB).
+2. `library_set_thumbnail(asset_id, path)` — UPDATEs the row, fires
+   `library:changed`. The UI re-renders with the local thumb.
 
-`PlatformRouter` matches URL → impl. YouTube and Twitter both shell out
-to yt-dlp under the hood; the abstraction is for *us*, to keep
-URL-specific quirks contained.
+`-ss` goes BEFORE `-i` for fast keyframe seek (decoder skips to the
+nearest keyframe before the requested timestamp). Frame-accurate seek
+would need `-ss` after `-i`; overkill for a thumbnail.
+
+**Backfill:** the Library page mounts → calls
+`library_thumbnails_missing` → walks the result serially with 150ms
+between extractions. Existing assets fill in over time without CPU
+thrashing.
+
+**Asset protocol serving:** `tauri.conf.json` has
+`app.security.assetProtocol = { enable: true, scope: ["$HOME/**"] }`.
+The renderer uses `convertFileSrc(localPath)` to turn a Windows path
+into an `asset.localhost/...` URL the webview can load. Works
+identically in dev and packaged builds.
 
 ---
 
-## 8. Where features live (module map)
+## 8. UI shell (✅ shipped post-0.5)
 
-To be filled as code lands. Initial planned layout:
+`react-router-dom` v7 with **HashRouter** (avoids `tauri://` vs
+`http://localhost` origin issues). Routes:
+
+```
+/              → /library (redirect)
+/download      → DownloadPage   (MetadataCard + QueueCard)
+/library       → LibraryPage    (filter sidebar + grid + drawer)
+/projects      → ProjectsPage   (stub, 0.6)
+/settings      → SettingsPage   (stub, 0.8)
+*              → /library (catch-all)
+```
+
+`Shell` component owns the persistent chrome (44px top bar + 216px
+left nav) and renders `<Outlet />` for the active route. Stays
+mounted across route changes so navigation is instant.
+
+**Design tokens:** lifted verbatim from `design-reference/Media Hub
+Wireframes.html` with the amber accent recolored to our lime
+`#c7f154`. Geist + Geist Mono via `@fontsource` — no runtime network
+dependency.
+
+---
+
+## 9. Source layout (current)
 
 ```
 media-hub/
 ├── src/                              ← React frontend
-│   ├── components/                   ← UI components
-│   ├── pages/                        ← Top-level views (Smoke, Download, Queue, Library)
-│   ├── hooks/                        ← TanStack Query hooks for invoke()
-│   ├── lib/                          ← Pure TS utilities (format helpers, timestamp parsing)
-│   └── App.tsx
+│   ├── App.tsx                       ← Router (HashRouter + 4 routes)
+│   ├── main.tsx                      ← React.createRoot entry
+│   ├── App.css                       ← Design tokens + all component styles
+│   ├── shell/
+│   │   └── Shell.tsx                 ← TopBar + Nav + <Outlet />
+│   ├── pages/
+│   │   ├── Download.tsx              ← MetadataCard, QueueCard
+│   │   ├── Library.tsx               ← Grid + filter sidebar + drawer
+│   │   ├── Projects.tsx              ← Stub (0.6)
+│   │   └── Settings.tsx              ← Stub (0.8)
+│   └── lib/
+│       ├── types.ts                  ← Shared TS types (mirror Rust)
+│       ├── format.ts                 ← fmtDuration, fmtBytes, parseTimestamp
+│       ├── library.ts                ← recordInLibrary, attachLocalThumbnail, thumbnailSrc
+│       └── icons.tsx                 ← Inline SVG icon set
 ├── src-tauri/                        ← Rust backend
 │   ├── src/
-│   │   ├── main.rs                   ← Tauri app bootstrap, command registry
-│   │   ├── commands/                 ← One file per `<domain>:` namespace
-│   │   │   ├── binaries.rs
-│   │   │   ├── yt.rs
-│   │   │   ├── queue.rs
-│   │   │   ├── transcode.rs
-│   │   │   └── library.rs
-│   │   ├── sidecar/                  ← Sidecar spawn + parse helpers
-│   │   │   ├── ytdlp.rs              ← yt-dlp progress parser
-│   │   │   └── ffmpeg.rs             ← ffmpeg -progress parser
-│   │   ├── platform/                 ← Platform trait + impls (0.8)
-│   │   ├── library/                  ← SQLite layer + path helpers
-│   │   └── paths.rs                  ← assert_in_library_root, sanitize_filename
+│   │   ├── lib.rs                    ← App bootstrap + sidecar/yt/transcode/thumb commands
+│   │   └── library.rs                ← SQLite layer + library/tag commands
+│   ├── migrations/
+│   │   ├── 001_initial.sql           ← assets table
+│   │   ├── 002_tags.sql              ← tags + asset_tags
+│   │   └── 003_thumbnails.sql        ← thumbnail_path column
+│   ├── capabilities/
+│   │   └── default.json              ← shell:allow-execute (yt-dlp, ffmpeg), opener scopes
 │   ├── binaries/                     ← Bundled yt-dlp + ffmpeg (gitignored)
-│   ├── migrations/                   ← sqlx migrations
-│   └── tauri.conf.json
+│   ├── icons/
+│   ├── Cargo.toml
+│   └── tauri.conf.json               ← bundle.externalBin + assetProtocol scope
 ├── docs/
 │   ├── ROADMAP.md
 │   ├── ARCHITECTURE.md               ← this file
 │   ├── NOTES.md                      ← working notes + parking lot
-│   └── (others as needed)
-└── scripts/
-    └── fetch-sidecars.ps1            ← grab latest yt-dlp / ffmpeg
+│   └── FEEDBACK.md                   ← collaboration notes (personal, timeless)
+├── design-reference/                 ← Handoff JSX (used as design spec, not run)
+├── scripts/
+│   └── fetch-sidecars.ps1            ← Grab latest yt-dlp / ffmpeg
+├── package.json
+└── tsconfig.json
 ```
+
+**What ISN'T in the layout** (deliberate, vs the dev0 plan):
+- ❌ No `src-tauri/src/commands/` per-domain split — two files
+  (`lib.rs`, `library.rs`) is small enough that splitting adds
+  ceremony without payoff. Re-evaluate at 1000+ LOC per file.
+- ❌ No `src-tauri/src/platform/` trait yet — YouTube-only until 0.7.
+- ❌ No `src-tauri/src/sidecar/` parser split — inline parsing in
+  each command. Will refactor if a third sidecar joins.
+- ❌ No `src/hooks/` directory — no TanStack Query, just bare
+  `useState` + `useEffect`. Add it back if state caching ever
+  becomes painful.
 
 ---
 
-## 9. Cross-cutting concerns
+## 10. Cross-cutting concerns
 
 ### Error handling
 Rust commands return `Result<T, String>` where the error string is
-user-facing (no Rust debug formatting in production). Internal panics
-should be unreachable; if they happen, the renderer surfaces a "report
-this" prompt.
+user-facing. Internal panics are unreachable; the frontend surfaces
+errors in a `msg-row` element. No structured error type yet.
 
 ### Logging
-`tracing` crate, with logs written to OS log dir + a ring-buffer the
-diagnostic bundle reads. (Diagnostic bundle is a 0.9 feature.)
+`println!` for now in dev; production logging is a 0.8 packaging
+concern. `tracing` crate planned at that point + ring buffer for a
+"download diagnostic bundle."
 
 ### Settings
-Single `settings.json` in the OS config dir. Loaded once at startup,
-written atomically (tmp + rename). Mirrors chiral-network's discipline.
+🟡 No settings persistence yet. Hard-coded defaults in code:
+- Download workers: 3
+- Library DB path: `~/Media Hub/library.db`
+- Transcode hardware decode: `-hwaccel auto` always
+- Thumbnail dimensions: 480w / JPG q=4
+- Search debounce: 150ms
+
+Settings panel + `settings.json` arrive with the 0.8 packaging
+milestone.
 
 ### Concurrency model
-- Frontend: TanStack Query handles all server state caching
-- Backend: `tokio` runtime; one global `JobQueue` instance held in
-  Tauri's managed state
+- Frontend: bare React; semaphores for transcode pools, useRef for
+  worker pool atomic claim
+- Backend: `tokio` (provided by `tauri::async_runtime`); each
+  command is its own async task. SqlitePool shared via Tauri's
+  managed `State<LibraryState>`.
 
 ---
 
-## 10. What's NOT here (yet)
+## 11. What's NOT here (yet)
 
-Deliberately deferred or skipped:
-- Auto-update mechanism — manual download for 1.0
-- Telemetry — never (per non-goals)
-- Plugin system — never in 1.x
-- Localization — English only for 1.0
-- Code signing — defer until distribution path warrants it
+Deliberately deferred or never:
+- ❌ Auto-update — manual download for 1.0
+- ❌ Telemetry — never (per non-goals)
+- ❌ Plugin system — never in 1.x
+- ❌ Localization — English only for 1.0
+- ❌ Code signing — defer until distribution path warrants it
+- 🟡 Settings persistence — 0.8
+- 🟡 Dual-root Library/Projects — 0.6
+- 🟡 In-app scrubber preview — 0.6
+- 🟡 Platform abstraction (Twitter/X) — 0.7
+- 🟡 FTS5 search — defer until LIKE perf hurts
 
-When in doubt, the per-module header comment is the contract; this doc
-just tells you which module to open.
+When in doubt, the per-module header comment is the contract; this
+doc just tells you which module to open.
