@@ -4,6 +4,7 @@
 // Milestone 0.2 in progress: `yt_fetch_metadata` (paste URL → metadata card).
 
 mod library;
+mod settings;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
@@ -1256,6 +1257,11 @@ pub fn run() {
                 library::init(&app_handle).await
             })?;
             app.manage(lib_state);
+            // Settings init is synchronous (just reads a tiny JSON file
+            // or accepts defaults). Failure here also accepts defaults
+            // — same philosophy as in settings::init.
+            let settings_state = settings::init(&app_handle)?;
+            app.manage(settings_state);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1281,6 +1287,8 @@ pub fn run() {
             library::project_finish,
             library::asset_set_project,
             library::library_find_by_url,
+            settings::settings_get,
+            settings::settings_set,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -152,6 +152,35 @@ export type Segment = {
 };
 
 // =====================================================================
+// Settings (0.8.A foundation, fields filled in B/C)
+// =====================================================================
+
+export type CookiesSource =
+  | { kind: "none" }
+  | { kind: "browser"; browser: string }
+  | { kind: "file"; path: string };
+
+export type Settings = {
+  cookies_source: CookiesSource;
+  library_root: string | null;
+  rename_template: string;
+  download_concurrency: number;
+  bandwidth_limit_kbps: number | null;
+  default_transcode_preset: string;
+  onboarding_complete: boolean;
+};
+
+export const DEFAULT_SETTINGS: Settings = {
+  cookies_source: { kind: "none" },
+  library_root: null,
+  rename_template: "",
+  download_concurrency: 3,
+  bandwidth_limit_kbps: null,
+  default_transcode_preset: "none",
+  onboarding_complete: false,
+};
+
+// =====================================================================
 // Projects (0.6 Phase A)
 // =====================================================================
 

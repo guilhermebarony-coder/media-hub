@@ -1458,6 +1458,19 @@ textarea.field-input {
 .stack { display: flex; flex-direction: column; gap: 18px; max-width: 980px; }
 
 /* ============================================================
+   Settings page placeholders (Phase A scaffolding)
+   ============================================================ */
+.settings-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--bg-2);
+  border: 1px dashed var(--line-hi);
+  border-radius: 5px;
+}
+
+/* ============================================================
    Scrubber (0.6 Phase D)
    ============================================================ */
 .scrubber {
