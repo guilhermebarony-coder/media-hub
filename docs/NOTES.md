@@ -208,6 +208,74 @@ the design intent.
 
 ---
 
+## 2026-05-21 (final) — 0.6 Phase D: in-app scrubber (closes 0.6)
+
+**Shipped:** the scrubber finally replaces the text-input In/Out row
+on the Download page. 0.6 is now complete end-to-end.
+
+**Rust:** `yt_resolve_stream_url(url)` runs `yt-dlp -g` with a format
+spec biased toward "browser-playable muxed MP4 ≤720p" (with falls
+back). Returns `{ url, has_audio }`. No download required — just the
+direct CDN URL the browser can stream via Range requests. Resolves
+in ~1-2s typical (network bound).
+
+**Frontend:** new `Scrubber` component in `src/components/` —
+- HTML5 `<video>` element points at the resolved URL
+- Custom transport: play/pause button, current/total time, fps indicator
+- Scrub bar with click-and-drag seek, In/Out vertical markers,
+  highlighted region between them, current-position playhead
+- Global keyboard listener (skips when a text input has focus):
+  - `Space`: play/pause
+  - `←` / `→`: frame-step (1/fps, fallback 1/30)
+  - `Shift + ←/→`: 1-second skip
+  - `I`: mark In at current time
+  - `O`: mark Out at current time
+- Set In / Set Out buttons mirror the keys for mouse-only users
+- Clear button when at least one marker is set
+- Resets on URL change; stream re-resolves automatically
+
+**Integration:** scrubber state (inSec/outSec as numbers) is now
+the source of truth on the Download page. Text inputs still exist
+but only when the user opens the "Manual timestamp entry" toggle —
+they override the scrubber when open. Useful for the cases where:
+- The stream URL fails (age-restricted etc.)
+- The user wants frame-perfect precision via typing
+- The user already knows the exact seconds without scrubbing
+
+**Why kept manual mode behind a toggle:** every user-facing field
+that exists "just in case" is permanent visual noise. Most of the
+time the scrubber is what you want. Manual is one click away when
+needed, invisible the rest of the time.
+
+**Format pick for streaming:** `best[ext=mp4][height<=720]` first,
+falls back. 720p is the sweet spot — plenty of resolution to mark
+In/Out by eye, well-supported by every browser/webview, ~5 MB to
+buffer the first chunk vs ~30 MB for 1080p. The DOWNLOAD itself
+still uses whatever format the user picks; the SCRUB is intentionally
+lower-fi.
+
+**Frame-step caveat:** HTML5 video has no native frame-step API. We
+step by `1 / fps` seconds. Close enough for editorial decisions; not
+suitable for color-bar level frame analysis (overkill for our use
+case anyway).
+
+**What I didn't ship in 0.6.D:**
+- Proxy fallback download (the NOTES.md "scratch-preview tier"
+  parking-lot idea). Reason: in practice, the `best[ext=mp4]≤720p`
+  format spec resolves to a playable URL for ~95% of public videos.
+  Build the proxy fallback only after we have data showing direct
+  stream fails often enough to bother
+- Waveform display (parked from the start)
+- Multi-segment marking from one scrub session (parked)
+- Drag-to-NLE on the scrubber's current frame (different feature
+  — file management vision note)
+
+**0.6 is now done.** The dual-root library + scrubber milestone
+closes. Next up: 0.7 (Twitter/X + platform abstraction) or 0.8
+(packaging + settings panel that addresses the cookies issue).
+
+---
+
 ## 2026-05-21 (later still) — 0.6 Phase C: duplicate detection + Finish Project
 
 **Shipped:**

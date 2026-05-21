@@ -18,6 +18,7 @@ import {
   videoCodecFor,
 } from "../lib/library";
 import { useActiveProject } from "../lib/activeProject";
+import { Scrubber } from "../components/Scrubber";
 import type {
   DownloadResult,
   DuplicateMatch,
@@ -118,6 +119,14 @@ function MetadataCard() {
   const [dlErr, setDlErr] = useState<string | null>(null);
   const [dlResult, setDlResult] = useState<DownloadResult | null>(null);
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
+  // In/Out markers in seconds. Source of truth — the scrubber sets
+  // them, the (hidden by default) text inputs reflect them for
+  // typing-based fine control. `null` = unset.
+  const [inSec, setInSec] = useState<number | null>(null);
+  const [outSec, setOutSec] = useState<number | null>(null);
+  // Manual text-entry mode for the rare case where the scrubber's
+  // stream can't load (age-gated, etc.). Defaults closed.
+  const [manualMode, setManualMode] = useState(false);
   const [inStr, setInStr] = useState("");
   const [outStr, setOutStr] = useState("");
 
@@ -159,6 +168,10 @@ function MetadataCard() {
     setDlResult(null);
     setDlErr(null);
     setDuplicate(null);
+    setInSec(null);
+    setOutSec(null);
+    setInStr("");
+    setOutStr("");
     try {
       // Run metadata fetch and dupe check in parallel — both are
       // network/IO so doing them sequentially would slow the UI
@@ -191,27 +204,39 @@ function MetadataCard() {
     if (!selectedFormat || !url.trim()) return;
     const { spec, mergeContainer } = composeFormatSpec(selectedFormat);
 
-    const inSec = parseTimestamp(inStr);
-    const outSec = parseTimestamp(outStr);
-    if (inStr.trim() !== "" && inSec == null) {
-      setDlErr(`Invalid In timestamp: "${inStr}"`);
-      return;
+    // Source of truth: scrubber state (inSec/outSec) when manualMode is
+    // off; parsed text inputs when on. Either way, validation rules are
+    // identical: both set or both null, In strictly < Out, Out within
+    // video duration.
+    let effectiveIn: number | null = inSec;
+    let effectiveOut: number | null = outSec;
+    if (manualMode) {
+      const i = parseTimestamp(inStr);
+      const o = parseTimestamp(outStr);
+      if (inStr.trim() !== "" && i == null) {
+        setDlErr(`Invalid In timestamp: "${inStr}"`);
+        return;
+      }
+      if (outStr.trim() !== "" && o == null) {
+        setDlErr(`Invalid Out timestamp: "${outStr}"`);
+        return;
+      }
+      effectiveIn = i;
+      effectiveOut = o;
     }
-    if (outStr.trim() !== "" && outSec == null) {
-      setDlErr(`Invalid Out timestamp: "${outStr}"`);
-      return;
-    }
-    if ((inSec == null) !== (outSec == null)) {
+    if ((effectiveIn == null) !== (effectiveOut == null)) {
       setDlErr("Specify both In and Out, or neither (for full video)");
       return;
     }
-    if (inSec != null && outSec != null) {
-      if (outSec <= inSec) {
+    if (effectiveIn != null && effectiveOut != null) {
+      if (effectiveOut <= effectiveIn) {
         setDlErr("Out must be after In");
         return;
       }
-      if (meta?.duration_sec != null && outSec > meta.duration_sec) {
-        setDlErr(`Out (${outSec}s) exceeds video duration (${Math.floor(meta.duration_sec)}s)`);
+      if (meta?.duration_sec != null && effectiveOut > meta.duration_sec) {
+        setDlErr(
+          `Out (${effectiveOut.toFixed(1)}s) exceeds video duration (${Math.floor(meta.duration_sec)}s)`,
+        );
         return;
       }
     }
@@ -236,8 +261,8 @@ function MetadataCard() {
         mergeContainer,
         totalBytesHint: bytesHint,
         videoId: meta?.id ?? "",
-        inSec,
-        outSec,
+        inSec: effectiveIn,
+        outSec: effectiveOut,
         projectId: targetProjectId,
       });
 
@@ -246,7 +271,9 @@ function MetadataCard() {
       if (transcodePreset !== "none") {
         setPhase("transcoding");
         const totalSecHint =
-          inSec != null && outSec != null ? outSec - inSec : meta?.duration_sec ?? null;
+          effectiveIn != null && effectiveOut != null
+            ? effectiveOut - effectiveIn
+            : meta?.duration_sec ?? null;
         try {
           const txRes = await invoke<TranscodeResult>("media_transcode", {
             srcPath: dlRes.path,
@@ -269,7 +296,9 @@ function MetadataCard() {
       // trimmed, source duration otherwise. Used as the seek hint for
       // mid-clip thumbnail extraction.
       const effectiveDuration =
-        inSec != null && outSec != null ? outSec - inSec : meta?.duration_sec ?? null;
+        effectiveIn != null && effectiveOut != null
+          ? effectiveOut - effectiveIn
+          : meta?.duration_sec ?? null;
 
       const assetId = await recordInLibrary({
         source_url: url,
@@ -278,8 +307,8 @@ function MetadataCard() {
         channel: meta?.channel ?? null,
         title: meta?.title ?? url,
         duration_sec: meta?.duration_sec ?? null,
-        in_sec: inSec,
-        out_sec: outSec,
+        in_sec: effectiveIn,
+        out_sec: effectiveOut,
         file_path: finalRes.path,
         file_size: finalRes.bytes ?? null,
         container: extFromPath(finalRes.path),
@@ -434,34 +463,55 @@ function MetadataCard() {
             </div>
           )}
 
+          <Scrubber
+            sourceUrl={url}
+            durationHint={meta.duration_sec}
+            fpsHint={selectedFormat?.fps ?? null}
+            inSec={inSec}
+            outSec={outSec}
+            onInChange={setInSec}
+            onOutChange={setOutSec}
+          />
+
           <div className="bar">
-            <span className="label">segment</span>
-            <label className="seg-input">
-              <span>in</span>
-              <input
-                type="text"
-                placeholder="—"
-                value={inStr}
-                onChange={(e) => setInStr(e.target.value)}
-                spellCheck={false}
-              />
-            </label>
-            <label className="seg-input">
-              <span>out</span>
-              <input
-                type="text"
-                placeholder="—"
-                value={outStr}
-                onChange={(e) => setOutStr(e.target.value)}
-                spellCheck={false}
-              />
-            </label>
-            <span className="hint-text">
-              {inStr || outStr
-                ? "Downloads full source, then ffmpeg stream-copy trim (~5–15s, no quality loss)."
-                : "mm:ss · hh:mm:ss · or seconds. Leave both empty for full video."}
-            </span>
+            <button
+              type="button"
+              className="meta-toggle"
+              onClick={() => setManualMode((m) => !m)}
+            >
+              {manualMode ? "▾" : "▸"} Manual timestamp entry{" "}
+              <span className="faint">(use when stream playback fails)</span>
+            </button>
           </div>
+
+          {manualMode && (
+            <div className="bar">
+              <span className="label">segment</span>
+              <label className="seg-input">
+                <span>in</span>
+                <input
+                  type="text"
+                  placeholder="—"
+                  value={inStr}
+                  onChange={(e) => setInStr(e.target.value)}
+                  spellCheck={false}
+                />
+              </label>
+              <label className="seg-input">
+                <span>out</span>
+                <input
+                  type="text"
+                  placeholder="—"
+                  value={outStr}
+                  onChange={(e) => setOutStr(e.target.value)}
+                  spellCheck={false}
+                />
+              </label>
+              <span className="hint-text">
+                mm:ss · hh:mm:ss · or seconds. Overrides the scrubber's markers when this row is open.
+              </span>
+            </div>
+          )}
 
           <div className="bar">
             <span className="label">transcode</span>

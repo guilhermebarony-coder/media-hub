@@ -105,6 +105,13 @@ What works end-to-end:
   assets to Library and OS-trashes the project folder — recoverable
   from Recycle Bin if finished too early. Projects page row gains a
   "Finish" button with three-way confirm (promote / trash all / cancel).
+- ✅ **0.6 Phase D — in-app scrubber preview.** `yt_resolve_stream_url`
+  gets a browser-playable direct stream URL via `yt-dlp -g` (no
+  download needed). New `Scrubber` component with HTML5 video, scrub
+  bar, In/Out markers, region highlight, and full keyboard control
+  (Space/play, ←→/frame-step, Shift+arrows/1s, I/O/mark). Replaces
+  text-input segment row; manual entry kept behind a toggle for
+  precision use and stream-failure fallback. **0.6 ships.**
 - ✅ **Local thumbnails** — ffmpeg extracts a mid-clip frame (480px wide
   JPG q=4, ~30–80 KB) into `~/Media Hub/_thumbnails/<asset_id>.jpg` on
   every successful download. UI prefers local thumbs over remote
@@ -162,7 +169,7 @@ dev0 ──┐
      0.6.A  ✅  project foundations (schema, CRUD, active scope)
      0.6.B  ✅  filesystem routing + physical move + delete-from-disk + Ctrl override
      0.6.C  ✅  duplicate detection + Finish Project (OS trash)
-     0.6.D  🟡  in-app scrubber preview (+ export-to-folder)
+     0.6.D  ✅  in-app scrubber preview (HTML5 video + I/O markers + keyboard)
        │
        ▼
      0.7.0  🟡  Twitter/X support + platform abstraction

@@ -1110,6 +1110,96 @@ async fn media_extract_thumbnail(
 }
 
 // =====================================================================
+// Direct stream URL resolution (0.6 Phase D — scrubber)
+// =====================================================================
+
+#[derive(Serialize)]
+pub struct StreamUrl {
+    pub url: String,
+    /// True when the resolved stream contains both video and audio in a
+    /// single track. False means yt-dlp picked separate streams and
+    /// the browser can only play the video track (used for visual
+    /// scrub-only previews when no muxed format exists).
+    pub has_audio: bool,
+}
+
+/// Resolve a direct, browser-playable stream URL for a YouTube video
+/// without downloading anything. Used by the in-app scrubber so the
+/// user can mark In/Out timestamps without committing bandwidth to a
+/// full source download first.
+///
+/// Format preference (cheapest-but-playable for scrubbing):
+///   1. Muxed MP4 ≤ 720p — single stream the <video> element loves
+///   2. Muxed MP4 at any height — most common up to 720p, sometimes 1080p
+///   3. Any ≤ 720p — fall back to WebM if MP4 isn't available
+///   4. Whatever yt-dlp's "best" thinks — last resort
+///
+/// `yt-dlp -g` prints the resolved URL(s) on stdout. For muxed
+/// formats it's one URL; for separate video+audio it'd be two
+/// (we'd discard audio — only video plays in the scrubber).
+#[tauri::command]
+async fn yt_resolve_stream_url(
+    app: AppHandle,
+    url: String,
+) -> Result<StreamUrl, String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err("URL is empty".into());
+    }
+
+    let shell = app.shell();
+    // The format spec biases toward muxed streams the browser can
+    // play. Falls back twice before giving up — final "best" is
+    // always defined for any playable YouTube URL.
+    let format_spec =
+        "best[ext=mp4][height<=720]/best[ext=mp4]/best[height<=720]/best";
+
+    let output = shell
+        .sidecar("yt-dlp")
+        .map_err(|e| format!("sidecar resolve: {e}"))?
+        .args([
+            "-g",
+            "--no-warnings",
+            "--no-playlist",
+            "-f",
+            format_spec,
+            trimmed,
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("yt-dlp -g failed: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let tail = stderr.lines().last().unwrap_or("(no stderr)").trim();
+        return Err(format!("yt-dlp -g: {tail}"));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let urls: Vec<&str> = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let first = urls
+        .first()
+        .ok_or("yt-dlp returned no stream URLs")?
+        .to_string();
+
+    // Heuristic: yt-dlp returns 1 URL for muxed, 2 for separate
+    // streams (video then audio). We can't easily tell from the URL
+    // alone whether audio is included — but the format spec above
+    // biases toward muxed, so 1 URL almost always means has_audio.
+    let has_audio = urls.len() == 1;
+
+    Ok(StreamUrl {
+        url: first,
+        has_audio,
+    })
+}
+
+// =====================================================================
 // Tauri bootstrap
 // =====================================================================
 
@@ -1133,6 +1223,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             binaries_version,
             yt_fetch_metadata,
+            yt_resolve_stream_url,
             yt_download,
             media_transcode,
             media_extract_thumbnail,

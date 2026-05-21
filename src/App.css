@@ -138,6 +138,11 @@ button { font-family: inherit; }
   font-family: inherit;
   color: inherit;
   font-size: inherit;
+  /* <button> default is text-align: center — that was making the
+     ACTIVE label center itself in the remaining column width even
+     after we added padding-left to indent it. Force left so padding
+     actually moves where text starts. */
+  text-align: left;
 }
 .proj-picker:hover { background: var(--bg-3); }
 .proj-picker .col {
@@ -1377,6 +1382,172 @@ textarea.field-input {
 .empty p { margin: 0; font-size: 12px; max-width: 360px; line-height: 1.5; }
 
 .stack { display: flex; flex-direction: column; gap: 18px; max-width: 980px; }
+
+/* ============================================================
+   Scrubber (0.6 Phase D)
+   ============================================================ */
+.scrubber {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.scrubber-player {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.scrubber-player video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  background: #000;
+}
+.scrubber-player-placeholder {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-3);
+  padding: 20px;
+  text-align: center;
+}
+.scrubber-error {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  right: 8px;
+  background: color-mix(in oklab, var(--err), transparent 70%);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 3px;
+}
+
+.scrubber-transport {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.scrubber-transport .ic-btn {
+  background: var(--bg-3);
+  color: var(--text-0);
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+}
+.scrubber-transport .ic-btn:hover { background: var(--bg-4); }
+.scrubber-transport .ic-btn:disabled { color: var(--text-3); cursor: not-allowed; }
+.scrubber-transport .btn {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 11.5px;
+}
+.scrubber-time { font-size: 12.5px; color: var(--text-0); }
+.scrubber-fps { font-size: 11px; }
+.scrubber-spacer { flex: 1; }
+
+/* The bar itself. Click-and-drag seeks; markers float on top. */
+.scrubber-bar {
+  position: relative;
+  height: 26px;
+  cursor: pointer;
+  padding: 11px 0;          /* visual height ~4px track, generous click area */
+  user-select: none;
+}
+.scrubber-bar-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 11px;
+  height: 4px;
+  background: var(--bg-3);
+  border-radius: 2px;
+}
+.scrubber-bar-region {
+  position: absolute;
+  top: 9px;
+  height: 8px;
+  background: var(--accent-dim);
+  border-top: 1px solid var(--accent-line);
+  border-bottom: 1px solid var(--accent-line);
+}
+.scrubber-bar-playhead {
+  position: absolute;
+  top: 5px;
+  width: 2px;
+  height: 16px;
+  margin-left: -1px;
+  background: var(--text-0);
+  border-radius: 1px;
+  pointer-events: none;
+}
+.scrubber-bar-marker {
+  position: absolute;
+  top: 3px;
+  width: 0;
+  height: 20px;
+  pointer-events: none;
+}
+.scrubber-bar-marker::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -1.5px;
+  width: 3px;
+  height: 20px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+.scrubber-bar-marker--in::before {
+  background: var(--accent);
+}
+.scrubber-bar-marker--out::before {
+  background: var(--accent);
+}
+.scrubber-bar-marker-label {
+  position: absolute;
+  top: -14px;
+  left: 0;
+  transform: translateX(-50%);
+  font-size: 9px;
+  color: var(--accent);
+  background: var(--bg-1);
+  padding: 0 4px;
+  border-radius: 2px;
+  letter-spacing: 0.06em;
+}
+
+.scrubber-summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 11px;
+  color: var(--text-1);
+  flex-wrap: wrap;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+.scrubber-summary .label {
+  color: var(--text-3);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-right: 4px;
+}
+.scrubber-summary .kbd {
+  margin: 0 1px;
+}
 
 /* ============================================================
    Projects page
