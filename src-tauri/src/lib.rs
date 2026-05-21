@@ -343,11 +343,18 @@ async fn yt_download(
     merge_container: Option<String>,
     total_bytes_hint: Option<u64>,
     video_id: String,
-    in_sec: Option<f64>,
-    out_sec: Option<f64>,
+    // 0.6.1: multi-segment support replaces the old in_sec / out_sec
+    // pair. Semantics:
+    //   - None or Some(empty)  → full video, returns single result
+    //   - Some(N >= 1)          → full source downloaded once, ffmpeg
+    //                             trims into N segment files, source
+    //                             is deleted, returns N results
+    // Single-segment downloads still work the same — just pass a vec
+    // with one (in, out) pair.
+    segments: Option<Vec<(f64, f64)>>,
     job_id: Option<String>,
     project_id: Option<String>,
-) -> Result<DownloadResult, String> {
+) -> Result<Vec<DownloadResult>, String> {
     // `format_spec` is an opaque yt-dlp -f argument — could be a single
     // format id ("18", "313") or a composed spec ("313+bestaudio/best").
     // `merge_container` is an optional yt-dlp --merge-output-format value
@@ -386,26 +393,29 @@ async fn yt_download(
     // bar sits at 0 the whole time.
     let temp_paths_arg = format!("temp:{}", dest_str);
 
-    // Segment validation: both must be set together (one without the
-    // other is meaningless), and in must be strictly before out.
-    let segment = match (in_sec, out_sec) {
-        (Some(i), Some(o)) if o > i && i >= 0.0 => Some((i, o)),
-        (Some(_), Some(_)) => return Err("In must be < Out and both >= 0".into()),
-        (None, None) => None,
-        _ => return Err("Specify both In and Out, or neither".into()),
+    // Segment validation: each pair must have in < out, both >= 0.
+    // Empty / None means "full video, no trims" — back-compat with the
+    // pre-0.6.1 single-segment API where the renderer passed null/null.
+    let trims: Vec<(f64, f64)> = match segments {
+        None => Vec::new(),
+        Some(v) => {
+            for (i, o) in &v {
+                if *i < 0.0 || *o <= *i {
+                    return Err(format!(
+                        "Invalid segment ({i}, {o}): require in >= 0 and out > in"
+                    ));
+                }
+            }
+            v
+        }
     };
 
-    // Output template — include segment range in the filename when set
-    // so re-downloading a different slice doesn't overwrite the previous.
-    let template_path = if let Some((i, o)) = segment {
-        dest.join(format!(
-            "%(title).180B [%(id)s] [{}_{}].%(ext)s",
-            fmt_segment_label(i),
-            fmt_segment_label(o)
-        ))
-    } else {
-        dest.join("%(title).180B [%(id)s].%(ext)s")
-    };
+    // Template is ALWAYS the full-video form now. Trims happen post-
+    // download with their own naming. For a single segment this is a
+    // wash — we used to embed the in/out in the yt-dlp template, but
+    // since we ffmpeg-trim after the download either way, the template
+    // doesn't need it.
+    let template_path = dest.join("%(title).180B [%(id)s].%(ext)s");
     let template_str = template_path.to_string_lossy().to_string();
 
     // When yt-dlp needs to mux (e.g. `313+bestaudio/best`), it shells out
@@ -636,9 +646,9 @@ async fn yt_download(
 
     let full_path = final_path.ok_or_else(|| "yt-dlp returned no output path".to_string())?;
 
-    // Post-download trim step (only when segment is set).
+    // Post-download trim step (only when at least one segment is set).
     //
-    // Approach: `ffmpeg -ss <in> -i <full> -t <dur> -c copy <segment>`
+    // Approach per segment: `ffmpeg -ss <in> -i <full> -t <dur> -c copy`
     // - `-ss BEFORE -i`: fast-seek (decoder-level) to the nearest
     //   keyframe at or before <in>. The first second or two of output
     //   may be a hair earlier than the user requested, which is
@@ -648,7 +658,12 @@ async fn yt_download(
     // - `-t <duration>`: stop after that many seconds. Using `-t`
     //   instead of `-to` is more reliable across ffmpeg versions when
     //   combined with input seek.
-    let final_path = if let Some((in_sec, out_sec)) = segment {
+    //
+    // For multi-segment downloads, we run N ffmpeg invocations
+    // sequentially. Could parallelize, but ffmpeg -c copy is I/O bound
+    // and parallel reads from the same source file would just thrash.
+    // Sequential is fine — each trim is ~5-15s, N usually small.
+    if !trims.is_empty() {
         // Stop the progress poller — download phase is complete. Emit
         // one last "100%" progress so the bar parks at the top during
         // the trim instead of falling back to indeterminate.
@@ -677,65 +692,88 @@ async fn yt_download(
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("mp4");
-        let seg_name = format!(
-            "{} [{}_{}].{}",
-            stem,
-            fmt_segment_label(in_sec),
-            fmt_segment_label(out_sec),
-            ext
-        );
-        let seg_path = parent.join(seg_name);
 
-        let in_arg = format!("{}", in_sec);
-        let dur_arg = format!("{}", (out_sec - in_sec).max(0.0));
-        let seg_path_str = seg_path
-            .to_str()
-            .ok_or("segment path is not valid UTF-8")?
-            .to_string();
-
-        let ffmpeg_cmd = app
+        let ffmpeg_cmd_path = app
             .shell()
             .sidecar("ffmpeg")
             .map_err(|e| format!("sidecar resolve ffmpeg: {e}"))?;
-        let ff_out = ffmpeg_cmd
-            .args([
-                "-y", // overwrite if exists
-                "-ss", in_arg.as_str(),
-                "-i", full_path.as_str(),
-                "-t", dur_arg.as_str(),
-                "-c", "copy",
-                "-movflags", "+faststart", // friendly mp4 layout
-                seg_path_str.as_str(),
-            ])
-            .output()
-            .await
-            .map_err(|e| format!("ffmpeg spawn: {e}"))?;
+        // Resolving the sidecar each iteration is cheap — it doesn't
+        // re-spawn, just builds the Command struct. But the type isn't
+        // Clone, so we re-resolve in the loop.
+        drop(ffmpeg_cmd_path);
 
-        if !ff_out.status.success() {
-            let stderr = String::from_utf8_lossy(&ff_out.stderr);
-            let tail = stderr
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .last()
-                .unwrap_or("(no stderr)");
-            return Err(format!("ffmpeg trim failed: {tail}"));
+        let mut results: Vec<DownloadResult> = Vec::with_capacity(trims.len());
+        for (in_sec, out_sec) in &trims {
+            let seg_name = format!(
+                "{} [{}_{}].{}",
+                stem,
+                fmt_segment_label(*in_sec),
+                fmt_segment_label(*out_sec),
+                ext
+            );
+            let seg_path = parent.join(seg_name);
+
+            let in_arg = format!("{}", in_sec);
+            let dur_arg = format!("{}", (out_sec - in_sec).max(0.0));
+            let seg_path_str = seg_path
+                .to_str()
+                .ok_or("segment path is not valid UTF-8")?
+                .to_string();
+
+            let ffmpeg_cmd = app
+                .shell()
+                .sidecar("ffmpeg")
+                .map_err(|e| format!("sidecar resolve ffmpeg: {e}"))?;
+            let ff_out = ffmpeg_cmd
+                .args([
+                    "-y", // overwrite if exists
+                    "-ss", in_arg.as_str(),
+                    "-i", full_path.as_str(),
+                    "-t", dur_arg.as_str(),
+                    "-c", "copy",
+                    "-movflags", "+faststart", // friendly mp4 layout
+                    seg_path_str.as_str(),
+                ])
+                .output()
+                .await
+                .map_err(|e| format!("ffmpeg spawn: {e}"))?;
+
+            if !ff_out.status.success() {
+                let stderr = String::from_utf8_lossy(&ff_out.stderr);
+                let tail = stderr
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .last()
+                    .unwrap_or("(no stderr)");
+                // Leave the full source on disk so the user can recover
+                // (or manually retry the trim). Earlier successful
+                // segments stay too — they're independently useful.
+                return Err(format!(
+                    "ffmpeg trim failed at segment ({in_sec},{out_sec}): {tail}"
+                ));
+            }
+
+            let bytes = std::fs::metadata(&seg_path_str).ok().map(|m| m.len());
+            results.push(DownloadResult {
+                path: seg_path_str,
+                bytes,
+            });
         }
 
-        // Trim succeeded — delete the full intermediate. We don't keep
-        // it for now (user explicitly asked for a segment). A future
-        // "keep source" setting could change this.
+        // All trims succeeded — delete the full intermediate. We don't
+        // keep it (user explicitly asked for segments). A future "keep
+        // source too" setting could change this.
         let _ = std::fs::remove_file(&full_path);
 
-        seg_path_str
+        Ok(results)
     } else {
-        full_path
-    };
-
-    let bytes = std::fs::metadata(&final_path).ok().map(|m| m.len());
-    Ok(DownloadResult {
-        path: final_path,
-        bytes,
-    })
+        // No segments — caller wanted the full video as-is.
+        let bytes = std::fs::metadata(&full_path).ok().map(|m| m.len());
+        Ok(vec![DownloadResult {
+            path: full_path,
+            bytes,
+        }])
+    }
 }
 
 // =====================================================================
@@ -1233,6 +1271,7 @@ pub fn run() {
             library::library_delete,
             library::library_set_thumbnail,
             library::library_thumbnails_missing,
+            library::library_siblings,
             library::tag_set_for_asset,
             library::tag_list_all,
             library::project_create,

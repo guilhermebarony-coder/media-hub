@@ -24,6 +24,7 @@ import type {
   DuplicateMatch,
   FormatOption,
   ProgressEvent,
+  Segment,
   TranscodePreset,
   TranscodeProgress,
   TranscodeResult,
@@ -119,16 +120,20 @@ function MetadataCard() {
   const [dlErr, setDlErr] = useState<string | null>(null);
   const [dlResult, setDlResult] = useState<DownloadResult | null>(null);
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
-  // In/Out markers in seconds. Source of truth — the scrubber sets
-  // them, the (hidden by default) text inputs reflect them for
-  // typing-based fine control. `null` = unset.
-  const [inSec, setInSec] = useState<number | null>(null);
-  const [outSec, setOutSec] = useState<number | null>(null);
-  // Manual text-entry mode for the rare case where the scrubber's
-  // stream can't load (age-gated, etc.). Defaults closed.
+  // 0.6.1: list of segments to trim from the single source download.
+  // Empty = full video. N = N independent clip files on disk after
+  // ffmpeg trims. The scrubber drives this entirely.
+  const [segments, setSegments] = useState<Segment[]>([]);
+  // Manual text-entry mode — when the scrubber's stream fails (age-
+  // gated, region-locked, etc.) or the user wants exact-second
+  // precision. Currently single-segment only; for multi-segment
+  // users should rely on the scrubber. Worth-its-keep fallback.
   const [manualMode, setManualMode] = useState(false);
   const [inStr, setInStr] = useState("");
   const [outStr, setOutStr] = useState("");
+  // Track the last batch of completed asset paths so the "downloaded"
+  // success message can list them.
+  const [downloadedPaths, setDownloadedPaths] = useState<string[]>([]);
 
   const [transcodePreset, setTranscodePreset] = useState<TranscodePreset>("none");
   const [transcodeProgress, setTranscodeProgress] = useState<TranscodeProgress | null>(null);
@@ -168,10 +173,10 @@ function MetadataCard() {
     setDlResult(null);
     setDlErr(null);
     setDuplicate(null);
-    setInSec(null);
-    setOutSec(null);
+    setSegments([]);
     setInStr("");
     setOutStr("");
+    setDownloadedPaths([]);
     try {
       // Run metadata fetch and dupe check in parallel — both are
       // network/IO so doing them sequentially would slow the UI
@@ -204,12 +209,10 @@ function MetadataCard() {
     if (!selectedFormat || !url.trim()) return;
     const { spec, mergeContainer } = composeFormatSpec(selectedFormat);
 
-    // Source of truth: scrubber state (inSec/outSec) when manualMode is
-    // off; parsed text inputs when on. Either way, validation rules are
-    // identical: both set or both null, In strictly < Out, Out within
-    // video duration.
-    let effectiveIn: number | null = inSec;
-    let effectiveOut: number | null = outSec;
+    // Resolve effective segment list. Manual mode wins when on (single
+    // segment). Otherwise the scrubber's committed list is the source
+    // of truth. Empty list = full-video download.
+    let effectiveSegments: Segment[] = segments;
     if (manualMode) {
       const i = parseTimestamp(inStr);
       const o = parseTimestamp(outStr);
@@ -221,21 +224,22 @@ function MetadataCard() {
         setDlErr(`Invalid Out timestamp: "${outStr}"`);
         return;
       }
-      effectiveIn = i;
-      effectiveOut = o;
-    }
-    if ((effectiveIn == null) !== (effectiveOut == null)) {
-      setDlErr("Specify both In and Out, or neither (for full video)");
-      return;
-    }
-    if (effectiveIn != null && effectiveOut != null) {
-      if (effectiveOut <= effectiveIn) {
-        setDlErr("Out must be after In");
+      if ((i == null) !== (o == null)) {
+        setDlErr("Specify both In and Out, or neither (for full video)");
         return;
       }
-      if (meta?.duration_sec != null && effectiveOut > meta.duration_sec) {
+      effectiveSegments = i != null && o != null ? [{ inSec: i, outSec: o }] : [];
+    }
+
+    // Per-segment validation: in < out, out within duration if known.
+    for (const seg of effectiveSegments) {
+      if (seg.outSec <= seg.inSec) {
+        setDlErr(`Invalid segment: Out (${seg.outSec.toFixed(1)}s) must be after In (${seg.inSec.toFixed(1)}s)`);
+        return;
+      }
+      if (meta?.duration_sec != null && seg.outSec > meta.duration_sec) {
         setDlErr(
-          `Out (${effectiveOut.toFixed(1)}s) exceeds video duration (${Math.floor(meta.duration_sec)}s)`,
+          `Segment Out (${seg.outSec.toFixed(1)}s) exceeds video duration (${Math.floor(meta.duration_sec)}s)`,
         );
         return;
       }
@@ -251,78 +255,98 @@ function MetadataCard() {
     setDownloading(true);
     setDlErr(null);
     setDlResult(null);
+    setDownloadedPaths([]);
     setProgress(null);
     setTranscodeProgress(null);
     setPhase("downloading");
     try {
-      const dlRes = await invoke<DownloadResult>("yt_download", {
+      // 0.6.1: yt_download now returns Vec<DownloadResult>. Full-video
+      // mode is just [single result]; segment mode is N results, one
+      // per trim. Backend deletes the source after all trims succeed.
+      const rustSegments = effectiveSegments.map((s) => [s.inSec, s.outSec] as [number, number]);
+      const dlResults = await invoke<DownloadResult[]>("yt_download", {
         url,
         formatSpec: spec,
         mergeContainer,
         totalBytesHint: bytesHint,
         videoId: meta?.id ?? "",
-        inSec: effectiveIn,
-        outSec: effectiveOut,
+        segments: rustSegments.length > 0 ? rustSegments : null,
         projectId: targetProjectId,
       });
 
-      let finalRes = dlRes;
-      let usedPreset: TranscodePreset = "none";
-      if (transcodePreset !== "none") {
-        setPhase("transcoding");
-        const totalSecHint =
-          effectiveIn != null && effectiveOut != null
-            ? effectiveOut - effectiveIn
-            : meta?.duration_sec ?? null;
-        try {
-          const txRes = await invoke<TranscodeResult>("media_transcode", {
-            srcPath: dlRes.path,
-            preset: transcodePreset,
-            totalSecHint,
-            jobId: null,
-          });
-          finalRes = txRes;
-          usedPreset = transcodePreset;
-          setDlResult(txRes);
-        } catch (e) {
-          setDlErr(`transcode failed: ${String(e)} (source kept: ${dlRes.path})`);
-          setDlResult(dlRes);
-        }
-      } else {
-        setDlResult(dlRes);
-      }
+      // Transcode + library-insert + thumbnail per result. Sequential
+      // because: transcodes are CPU-bound and parallel would thrash;
+      // library inserts are cheap but emitting library:changed once
+      // per row coalesces nicely in the UI; thumbnails are fire-and-
+      // forget anyway.
+      const finalPaths: string[] = [];
+      for (let i = 0; i < dlResults.length; i++) {
+        const dlRes = dlResults[i];
+        const seg = effectiveSegments[i]; // undefined for full-video mode
+        let finalRes = dlRes;
+        let usedPreset: TranscodePreset = "none";
 
-      // Effective duration of the file on disk: segment length when
-      // trimmed, source duration otherwise. Used as the seek hint for
-      // mid-clip thumbnail extraction.
-      const effectiveDuration =
-        effectiveIn != null && effectiveOut != null
-          ? effectiveOut - effectiveIn
+        if (transcodePreset !== "none") {
+          setPhase("transcoding");
+          const totalSecHint = seg
+            ? seg.outSec - seg.inSec
+            : meta?.duration_sec ?? null;
+          try {
+            const txRes = await invoke<TranscodeResult>("media_transcode", {
+              srcPath: dlRes.path,
+              preset: transcodePreset,
+              totalSecHint,
+              jobId: null,
+            });
+            finalRes = txRes;
+            usedPreset = transcodePreset;
+          } catch (e) {
+            // Surface the transcode failure but keep the source
+            // segment as the asset on disk. Continue with the rest
+            // — one bad transcode shouldn't abort the whole batch.
+            setDlErr(
+              `transcode failed for segment ${i + 1}: ${String(e)} (source kept: ${dlRes.path})`,
+            );
+          }
+        }
+
+        const effectiveDuration = seg
+          ? seg.outSec - seg.inSec
           : meta?.duration_sec ?? null;
 
-      const assetId = await recordInLibrary({
-        source_url: url,
-        platform: "youtube",
-        video_id: meta?.id ?? null,
-        channel: meta?.channel ?? null,
-        title: meta?.title ?? url,
-        duration_sec: meta?.duration_sec ?? null,
-        in_sec: effectiveIn,
-        out_sec: effectiveOut,
-        file_path: finalRes.path,
-        file_size: finalRes.bytes ?? null,
-        container: extFromPath(finalRes.path),
-        codec_video: videoCodecFor(usedPreset, selectedFormat.vcodec),
-        codec_audio: audioCodecFor(usedPreset, selectedFormat.acodec),
-        width: selectedFormat.width,
-        height: selectedFormat.height,
-        fps: selectedFormat.fps,
-        transcoded_to: usedPreset === "none" ? null : usedPreset,
-        thumbnail_url: meta?.thumbnail ?? null,
-        project_id: targetProjectId,
-      });
-      if (assetId) {
-        void attachLocalThumbnail(assetId, finalRes.path, effectiveDuration);
+        const assetId = await recordInLibrary({
+          source_url: url,
+          platform: "youtube",
+          video_id: meta?.id ?? null,
+          channel: meta?.channel ?? null,
+          title: meta?.title ?? url,
+          duration_sec: meta?.duration_sec ?? null,
+          in_sec: seg ? seg.inSec : null,
+          out_sec: seg ? seg.outSec : null,
+          file_path: finalRes.path,
+          file_size: finalRes.bytes ?? null,
+          container: extFromPath(finalRes.path),
+          codec_video: videoCodecFor(usedPreset, selectedFormat.vcodec),
+          codec_audio: audioCodecFor(usedPreset, selectedFormat.acodec),
+          width: selectedFormat.width,
+          height: selectedFormat.height,
+          fps: selectedFormat.fps,
+          transcoded_to: usedPreset === "none" ? null : usedPreset,
+          thumbnail_url: meta?.thumbnail ?? null,
+          project_id: targetProjectId,
+        });
+        if (assetId) {
+          void attachLocalThumbnail(assetId, finalRes.path, effectiveDuration);
+        }
+        finalPaths.push(finalRes.path);
+      }
+
+      // Show the LAST result as the canonical dlResult (drives the
+      // existing single-file success row). For multi-segment, also
+      // remember the full path list for the summary panel.
+      if (finalPaths.length > 0) {
+        setDlResult({ path: finalPaths[finalPaths.length - 1], bytes: null });
+        setDownloadedPaths(finalPaths);
       }
     } catch (e) {
       setDlErr(String(e));
@@ -467,10 +491,8 @@ function MetadataCard() {
             sourceUrl={url}
             durationHint={meta.duration_sec}
             fpsHint={selectedFormat?.fps ?? null}
-            inSec={inSec}
-            outSec={outSec}
-            onInChange={setInSec}
-            onOutChange={setOutSec}
+            segments={segments}
+            onSegmentsChange={setSegments}
           />
 
           <div className="bar">
@@ -568,8 +590,12 @@ function MetadataCard() {
               {downloading
                 ? "Downloading…"
                 : overrideLibrary
-                  ? "Download → Library"
-                  : "Download"}
+                  ? segments.length > 1
+                    ? `Download ${segments.length} → Library`
+                    : "Download → Library"
+                  : segments.length > 1
+                    ? `Download ${segments.length} segments`
+                    : "Download"}
             </button>
           </div>
 
@@ -615,13 +641,36 @@ function MetadataCard() {
             </div>
           )}
 
-          {dlResult && (
+          {dlResult && downloadedPaths.length <= 1 && (
             <div className="msg-row ok">
               <span className="label">downloaded</span>
               <code>{dlResult.path}</code>
               <button className="btn-secondary btn" onClick={() => revealFile(dlResult.path)}>
                 <Icon.folder width={12} height={12} /> Open
               </button>
+            </div>
+          )}
+          {downloadedPaths.length > 1 && (
+            <div className="msg-row ok" style={{ alignItems: "flex-start", flexDirection: "column", gap: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
+                <span className="label">downloaded</span>
+                <span className="mono" style={{ flex: 1 }}>
+                  {downloadedPaths.length} segments
+                </span>
+                <button
+                  className="btn-secondary btn"
+                  onClick={() => revealFile(downloadedPaths[0])}
+                >
+                  <Icon.folder width={12} height={12} /> Open folder
+                </button>
+              </div>
+              <ul style={{ margin: 0, paddingLeft: 16, fontSize: 11, color: "var(--text-2)", fontFamily: "var(--mono)" }}>
+                {downloadedPaths.map((p, i) => (
+                  <li key={p} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    #{i + 1}: {p.split(/[\\/]/).pop()}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
         </>
@@ -852,19 +901,23 @@ function QueueCard() {
 
     let dlRes: DownloadResult;
     try {
-      dlRes = await invoke<DownloadResult>("yt_download", {
+      // Batch queue is always full-video (no segments) — multi-segment
+      // is a single-URL workflow. The 0.6.1 yt_download returns a Vec,
+      // so unwrap the single element. Empty/None segments triggers the
+      // full-video path on the Rust side.
+      const results = await invoke<DownloadResult[]>("yt_download", {
         url: job.url,
         formatSpec: "bv*+ba/b",
         mergeContainer: "mp4",
         totalBytesHint: bestVideo?.filesize_bytes ?? null,
         videoId: meta.id,
-        inSec: null,
-        outSec: null,
+        segments: null,
         jobId: job.id,
         // Per-job projectId snapshot, locked at enqueue time. Phase B
         // honors this when computing dest dir on the Rust side.
         projectId: job.projectId,
       });
+      dlRes = results[0];
     } catch (e) {
       updateJob(job.id, { status: "failed", error: String(e) });
       return;

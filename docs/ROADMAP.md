@@ -181,7 +181,7 @@ dev0 ──┐
      0.6.D  ✅  in-app scrubber preview (HTML5 video + I/O markers + keyboard)
        │
        ▼
-     0.6.1  🟡  multi-segment marking + library sibling indicator   ← NEXT
+     0.6.1  ✅  multi-segment marking + library sibling indicator
        │
        ▼
      0.8.0  🟡  packaging, polish, public-ready (cookies, installer, onboarding)

@@ -226,6 +226,106 @@ the design intent.
 
 ---
 
+## 2026-05-21 (post-lunch) — 0.6.1: multi-segment + library siblings
+
+**Shipped:** the bandwidth-saving workflow. Mark N segments on one
+source, hit Download once, get N independent clips. Library makes
+sibling relationships visible without clicking through.
+
+**Backend (lib.rs):**
+- `yt_download` signature breaking change: replaced `in_sec`/`out_sec`
+  pair with `segments: Option<Vec<(f64, f64)>>`. Returns
+  `Vec<DownloadResult>` (single-element vec for full-video and
+  single-segment modes — clean back-compat).
+- Logic flow:
+  - Always full source download (yt-dlp), regardless of segment count
+  - If segments present: ffmpeg `-c copy` trim per pair, deletes
+    source after all trims succeed
+  - Per-trim filename: `<title> [<id>] [seg_<in>_<out>].<ext>`
+  - Partial failure leaves the source on disk + any successful
+    trims, so the user has something to recover
+
+**Backend (library.rs):**
+- `library_siblings(asset_id)` returns peers sharing the same
+  `source_url`, sorted by in_sec (so siblings appear in temporal
+  order from the source video).
+- New `SiblingSummary` projection (compact — id, title, thumbnails,
+  in/out, scope label) since the drawer's row UI doesn't need full
+  Asset rows. Less IPC payload, faster render.
+- `library_list` query now includes a `sibling_count` column via a
+  correlated `SELECT COUNT(*) FROM assets WHERE source_url = a.source_url AND id != a.id`.
+  Cost: O(N) per result row but each lookup hits the implicit
+  source_url index. Fine for <10k assets. Switch to a precomputed
+  count if it ever bottlenecks.
+
+**Frontend (Scrubber):**
+- Props: `segments: Segment[]` + `onSegmentsChange`. Replaces the
+  old inSec/outSec single-pair shape.
+- New `draftIn` local state. The mark flow is:
+  1. Hit `I` (or Set In button) → `draftIn` set to current time
+  2. Scrub to desired Out point
+  3. Hit `O` → segment auto-committed to the parent's array,
+     `draftIn` clears. Ready for the next `I` to start segment #2.
+- Visual:
+  - Each committed segment is a green band on the scrub bar
+  - Draft (after `I`, before `O`) renders as a lighter-tint band
+    that grows as the playhead moves
+  - Single IN marker on the bar while drafting (no OUT marker —
+    the committed band shows it)
+  - Segments list below the bar with `#1 0:24 → 1:15 (0:51) [×]`
+    rows. Click times to seek. × removes the segment.
+- Transient warning chip for invalid marks ("Set In first" /
+  "Out must be after In"). Auto-fades after ~2s.
+- Set Out button is disabled when no draft is open — visual nudge
+  to hit Set In first.
+
+**Frontend (Download flow):**
+- `MetadataCard` now drives `segments` state instead of inSec/outSec.
+- Manual fallback stays single-segment (the text-input row only
+  supports one pair). Acceptable: the manual fallback is for "stream
+  failed, type your one segment" edge case; multi-segment users will
+  rely on the working scrubber.
+- Download invoke passes `segments: [[in, out], ...]` (or null for
+  full video).
+- Result is `Vec<DownloadResult>` — iterate, transcode + library
+  insert + thumbnail per segment. Transcode failures on segment N
+  don't abort segments N+1..M, but the source clip is preserved as
+  the asset for the failed transcode.
+- Download button label scales: "Download" / "Download 3 segments"
+  (with Ctrl override variant: "Download 3 → Library").
+- Success row shows the list of N filenames when multi-segment;
+  single-file path otherwise.
+
+**Frontend (Library):**
+- Library card shows a small `+N` lime chip next to the channel
+  when `sibling_count > 0`.
+- Asset drawer adds "Other clips from this source · N" section
+  showing each sibling with a mini-thumb + title + in→out + scope.
+- Click any sibling row → drawer re-points at that asset (single
+  state change, scroll resets gracefully).
+- Sibling list refreshes on `library:changed` so newly-trimmed
+  peers appear without closing the drawer.
+
+**Queue card (back-compat tweak):**
+- `QueueCard.processOne` now unwraps `results[0]` from the new
+  Vec-shaped return. Batch queue stays single-clip per URL — multi-
+  segment is single-URL-only by design (out of scope for batch).
+
+**Exit criteria from ROADMAP 0.6.1 — verified by code review:**
+- [x] yt_download accepts segments array, returns Vec<DownloadResult>
+- [x] Source file deleted after all trims succeed
+- [x] Single-segment back-compat (queue keeps working)
+- [x] Library siblings command + drawer section
+- [x] Sibling chip on cards
+- [x] Click sibling → drawer switches
+
+**To verify manually next test session:** mark 3 segments on a long
+video, click download once, confirm 3 files land + 3 library rows
+appear + each card shows `+2` sibling chip + clicking through the
+drawer cycles between them.
+
+---
+
 ## 2026-05-21 (final) — 0.6 Phase D: in-app scrubber (closes 0.6)
 
 **Shipped:** the scrubber finally replaces the text-input In/Out row

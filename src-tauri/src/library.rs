@@ -73,6 +73,12 @@ struct AssetRow {
     pub thumbnail_path: Option<String>,
     pub project_id: Option<String>,
     pub downloaded_at: i64,
+    /// Count of OTHER assets sharing this asset's source_url. Computed
+    /// per row in library_list via a sub-select — drives the "+N
+    /// siblings" chip on library cards without a second round-trip.
+    /// Defaults to 0 when no other rows share the URL (typical case).
+    #[sqlx(default)]
+    pub sibling_count: i64,
 }
 
 /// What we serialize to the renderer — AssetRow + denormalized tag list
@@ -103,6 +109,9 @@ pub struct Asset {
     pub project_id: Option<String>,
     pub downloaded_at: i64,
     pub tags: Vec<String>,
+    /// Number of other assets that share this asset's source_url.
+    /// Drives the "+N siblings" chip on library cards.
+    pub sibling_count: i64,
 }
 
 impl From<AssetRow> for Asset {
@@ -131,6 +140,7 @@ impl From<AssetRow> for Asset {
             project_id: r.project_id,
             downloaded_at: r.downloaded_at,
             tags: Vec::new(),
+            sibling_count: r.sibling_count,
         }
     }
 }
@@ -425,8 +435,19 @@ pub async fn library_list(
         format!("WHERE {}", where_clauses.join(" AND "))
     };
 
+    // The correlated subquery counts OTHER assets sharing the same
+    // source_url. Cost: O(N) per result row, but each lookup hits the
+    // implicit index on source_url (sqlite auto-creates one for the
+    // equality predicate on a non-unique column with enough rows).
+    // For libraries up to ~10k assets this is fast enough. If it ever
+    // becomes a bottleneck, switch to a precomputed materialized count
+    // updated on insert/delete.
     let sql = format!(
-        r#"SELECT a.* FROM assets a {} ORDER BY a.downloaded_at DESC LIMIT ?"#,
+        r#"SELECT a.*,
+                  (SELECT COUNT(*) FROM assets s
+                   WHERE s.source_url = a.source_url AND s.id != a.id)
+                   AS sibling_count
+           FROM assets a {} ORDER BY a.downloaded_at DESC LIMIT ?"#,
         where_sql,
     );
 
@@ -665,6 +686,49 @@ pub struct DuplicateMatch {
     /// Computed in SQL via the JOIN so the renderer doesn't need a
     /// second round-trip.
     pub scope_label: String,
+}
+
+/// Return assets that share a source_url with the given asset id,
+/// excluding the asset itself. Used by the asset drawer's "Other clips
+/// from this source" section.
+///
+/// Returns a compact projection (id, title, thumbnail, in/out, scope)
+/// rather than full Asset rows — we don't need the full row for the
+/// thumbnail-strip UI, and shipping less over the IPC bridge is just
+/// nice.
+#[derive(Serialize, Debug, Clone, sqlx::FromRow)]
+pub struct SiblingSummary {
+    pub id: String,
+    pub title: String,
+    pub thumbnail_path: Option<String>,
+    pub thumbnail_url: Option<String>,
+    pub in_sec: Option<f64>,
+    pub out_sec: Option<f64>,
+    pub duration_sec: Option<f64>,
+    pub downloaded_at: i64,
+    pub scope_label: String,
+}
+
+#[tauri::command]
+pub async fn library_siblings(
+    state: State<'_, LibraryState>,
+    asset_id: String,
+) -> Result<Vec<SiblingSummary>, String> {
+    sqlx::query_as::<_, SiblingSummary>(
+        r#"SELECT a.id, a.title, a.thumbnail_path, a.thumbnail_url,
+                  a.in_sec, a.out_sec, a.duration_sec, a.downloaded_at,
+                  COALESCE(p.name, 'Library') AS scope_label
+           FROM assets a
+           LEFT JOIN projects p ON p.id = a.project_id
+           WHERE a.source_url = (SELECT source_url FROM assets WHERE id = ?)
+             AND a.id != ?
+           ORDER BY COALESCE(a.in_sec, 0) ASC, a.downloaded_at ASC"#,
+    )
+    .bind(&asset_id)
+    .bind(&asset_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("library_siblings: {e}"))
 }
 
 #[tauri::command]

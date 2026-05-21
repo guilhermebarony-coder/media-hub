@@ -5,7 +5,7 @@ import { Icon } from "../lib/icons";
 import { fmtBytes, fmtDuration } from "../lib/format";
 import { attachLocalThumbnail, revealFile, thumbnailSrc } from "../lib/library";
 import { scopeToFilter, useActiveProject } from "../lib/activeProject";
-import type { Asset, LibraryFilters, TagCount } from "../lib/types";
+import type { Asset, LibraryFilters, SiblingSummary, TagCount } from "../lib/types";
 
 type Bucket = "today" | "week" | "month" | "older";
 
@@ -385,6 +385,7 @@ export default function LibraryPage() {
           asset={selected}
           knownTags={allTags}
           onClose={() => setSelectedId(null)}
+          onSelectAsset={(id) => setSelectedId(id)}
         />
       )}
     </div>
@@ -516,6 +517,16 @@ function LibCard({
         <div className="title">{asset.title}</div>
         <div className="sub">
           <span className="ch">{asset.channel ?? "—"}</span>
+          {asset.sibling_count > 0 && (
+            <span
+              className="lib-card-siblings mono"
+              title={`${asset.sibling_count} other ${
+                asset.sibling_count === 1 ? "clip" : "clips"
+              } from the same source`}
+            >
+              +{asset.sibling_count}
+            </span>
+          )}
           {asset.width && asset.height && <span>{asset.height}p</span>}
         </div>
         {asset.tags.length > 0 && (
@@ -586,12 +597,45 @@ function AssetDrawer({
   asset,
   knownTags,
   onClose,
+  onSelectAsset,
 }: {
   asset: Asset;
   knownTags: TagCount[];
   onClose: () => void;
+  onSelectAsset: (id: string) => void;
 }) {
   const { projects } = useActiveProject();
+  const [siblings, setSiblings] = useState<SiblingSummary[]>([]);
+
+  // Pull sibling list (other assets with same source_url) whenever
+  // the drawer points at a new asset OR the library reports a change
+  // (so freshly-trimmed siblings appear without closing/reopening).
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh() {
+      if (asset.sibling_count === 0) {
+        if (!cancelled) setSiblings([]);
+        return;
+      }
+      try {
+        const res = await invoke<SiblingSummary[]>("library_siblings", {
+          assetId: asset.id,
+        });
+        if (!cancelled) setSiblings(res);
+      } catch (e) {
+        console.warn("library_siblings failed:", e);
+      }
+    }
+    void refresh();
+    let unlisten: UnlistenFn | null = null;
+    listen("library:changed", () => void refresh()).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [asset.id, asset.sibling_count]);
 
   // Close on Escape
   useEffect(() => {
@@ -733,6 +777,49 @@ function AssetDrawer({
             </div>
             <TagEditor asset={asset} knownTags={knownTags} />
           </div>
+
+          {siblings.length > 0 && (
+            <div>
+              <div className="mono faint" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
+                Other clips from this source · {siblings.length}
+              </div>
+              <ul className="sibling-list">
+                {siblings.map((s) => {
+                  const thumb = thumbnailSrc(s.thumbnail_path, s.thumbnail_url);
+                  const segLabel =
+                    s.in_sec != null && s.out_sec != null
+                      ? `${fmtDuration(s.in_sec)} → ${fmtDuration(s.out_sec)}`
+                      : "full";
+                  return (
+                    <li key={s.id}>
+                      <button
+                        type="button"
+                        className="sibling-row"
+                        onClick={() => onSelectAsset(s.id)}
+                        title={`Open ${s.title}`}
+                      >
+                        <div className="sibling-thumb">
+                          {thumb ? (
+                            <img src={thumb} alt="" loading="lazy" />
+                          ) : (
+                            <div className="sibling-thumb-empty" />
+                          )}
+                        </div>
+                        <div className="sibling-meta">
+                          <div className="sibling-title">{s.title}</div>
+                          <div className="sibling-sub mono">
+                            <span>{segLabel}</span>
+                            <span className="sep">·</span>
+                            <span>{s.scope_label}</span>
+                          </div>
+                        </div>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
 
           <div className="drawer-actions">
             <button className="btn btn-secondary" onClick={() => revealFile(asset.file_path)}>

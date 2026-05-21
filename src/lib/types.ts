@@ -128,6 +128,27 @@ export type Asset = AssetInput & {
    * `thumbnail_url` because for segment downloads the source's official
    * thumbnail no longer represents the trimmed file. */
   thumbnail_path: string | null;
+  /** Count of OTHER assets sharing this asset's source_url. Drives the
+   *  "+N siblings" chip on library cards. 0 for solo downloads. */
+  sibling_count: number;
+};
+
+export type SiblingSummary = {
+  id: string;
+  title: string;
+  thumbnail_path: string | null;
+  thumbnail_url: string | null;
+  in_sec: number | null;
+  out_sec: number | null;
+  duration_sec: number | null;
+  downloaded_at: number;
+  scope_label: string;
+};
+
+/** A single In/Out pair in seconds. */
+export type Segment = {
+  inSec: number;
+  outSec: number;
 };
 
 // =====================================================================

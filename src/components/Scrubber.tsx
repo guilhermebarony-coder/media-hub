@@ -29,6 +29,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { fmtDuration } from "../lib/format";
+import type { Segment } from "../lib/types";
 
 type StreamUrl = { url: string; has_audio: boolean };
 
@@ -40,18 +41,16 @@ type ScrubberProps = {
   durationHint: number | null;
   /** FPS hint for frame-step granularity. Falls back to 30. */
   fpsHint: number | null;
-  /** Current In/Out markers, in seconds. null = unset. */
-  inSec: number | null;
-  outSec: number | null;
-  /** Callbacks fired when user marks (I/O keys, Set In/Out buttons,
-   *  or drags markers on the scrub bar). */
-  onInChange: (sec: number | null) => void;
-  onOutChange: (sec: number | null) => void;
+  /** Committed segments. Empty array = full-video download.
+   *  N entries = N segment trims from the same source. */
+  segments: Segment[];
+  /** Replace the whole segment list. The component drives all mutations
+   *  through this single setter so the parent stays the source of truth. */
+  onSegmentsChange: (segs: Segment[]) => void;
 };
 
 export function Scrubber(props: ScrubberProps) {
-  const { sourceUrl, durationHint, fpsHint, inSec, outSec, onInChange, onOutChange } =
-    props;
+  const { sourceUrl, durationHint, fpsHint, segments, onSegmentsChange } = props;
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const scrubBarRef = useRef<HTMLDivElement>(null);
@@ -88,6 +87,18 @@ export function Scrubber(props: ScrubberProps) {
   // fall back to the hint while waiting.
   const [duration, setDuration] = useState<number>(durationHint ?? 0);
   const [videoErr, setVideoErr] = useState<string | null>(null);
+  // Draft In time — set when the user hits `I` (or Set In). Cleared
+  // when `O` commits a segment, or when the user clears manually.
+  // The "I then scrub then O" flow every NLE supports.
+  const [draftIn, setDraftIn] = useState<number | null>(null);
+  // Transient warning flash for invalid marks (Out before In, etc.).
+  // Auto-clears after ~2s.
+  const [markWarning, setMarkWarning] = useState<string | null>(null);
+  useEffect(() => {
+    if (!markWarning) return;
+    const id = setTimeout(() => setMarkWarning(null), 1800);
+    return () => clearTimeout(id);
+  }, [markWarning]);
 
   const fps = Math.max(1, Math.min(120, Math.round(fpsHint ?? 30)));
   const frameSec = 1 / fps;
@@ -100,6 +111,7 @@ export function Scrubber(props: ScrubberProps) {
     setDuration(durationHint ?? 0);
     setPlaying(false);
     setVideoErr(null);
+    setDraftIn(null);
     if (!sourceUrl.trim()) return;
     setResolving(true);
     invoke<StreamUrl>("yt_resolve_stream_url", { url: sourceUrl })
@@ -107,6 +119,44 @@ export function Scrubber(props: ScrubberProps) {
       .catch((e) => setStreamErr(String(e)))
       .finally(() => setResolving(false));
   }, [sourceUrl, durationHint]);
+
+  /**
+   * Mark functions. `I` and the Set In button → markIn; `O` and Set
+   * Out button → markOut. markOut commits the segment immediately when
+   * draftIn is set; otherwise warns the user to set In first.
+   */
+  function markIn() {
+    const v = videoRef.current;
+    if (!v) return;
+    setDraftIn(v.currentTime);
+    setMarkWarning(null);
+  }
+  function markOut() {
+    const v = videoRef.current;
+    if (!v) return;
+    const out = v.currentTime;
+    if (draftIn == null) {
+      setMarkWarning("Set In (I) first");
+      return;
+    }
+    if (out <= draftIn) {
+      setMarkWarning("Out must be after In");
+      return;
+    }
+    onSegmentsChange([...segments, { inSec: draftIn, outSec: out }]);
+    setDraftIn(null);
+  }
+  function clearDraft() {
+    setDraftIn(null);
+    setMarkWarning(null);
+  }
+  function removeSegment(index: number) {
+    onSegmentsChange(segments.filter((_, i) => i !== index));
+  }
+  function clearAll() {
+    onSegmentsChange([]);
+    setDraftIn(null);
+  }
 
   // Wire <video> events to React state.
   useEffect(() => {
@@ -217,15 +267,21 @@ export function Scrubber(props: ScrubberProps) {
         v.currentTime = Math.min(duration, v.currentTime + (e.shiftKey ? 1 : frameSec));
       } else if (e.code === "KeyI") {
         e.preventDefault();
-        onInChange(v.currentTime);
+        markIn();
       } else if (e.code === "KeyO") {
         e.preventDefault();
-        onOutChange(v.currentTime);
+        markOut();
       }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [streamUrl, frameSec, duration, onInChange, onOutChange]);
+    // markIn / markOut close over current state via setDraftIn /
+    // onSegmentsChange; they're stable across renders, so we don't
+    // need them as deps. But we DO want streamUrl + frameSec + draftIn
+    // + segments updates to refresh the listener so the next keypress
+    // sees current state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamUrl, frameSec, duration, draftIn, segments]);
 
   function togglePlay() {
     const v = videoRef.current;
@@ -290,18 +346,31 @@ export function Scrubber(props: ScrubberProps) {
   const posPct = (s: number | null): string | null =>
     s == null || duration <= 0 ? null : `${Math.max(0, Math.min(100, (s / duration) * 100))}%`;
 
-  const currentPct = posPct(currentTime) ?? "0%";
-  const inPct = posPct(inSec);
-  const outPct = posPct(outSec);
+  // Compute on-bar regions for each committed segment. Multiple bands
+  // can render side-by-side or even overlap (we don't validate
+  // overlapping segments — user can do what they want).
+  const segmentRegions = duration > 0
+    ? segments.map((seg, i) => ({
+        index: i,
+        left: posPct(seg.inSec) ?? "0%",
+        width: `${Math.max(0, ((seg.outSec - seg.inSec) / duration) * 100)}%`,
+        seg,
+      }))
+    : [];
 
-  // Region between In and Out — only when both are set and ordered.
-  const regionStyle =
-    inSec != null && outSec != null && outSec > inSec
+  // Draft region — visible from draftIn to the current playhead so
+  // the user gets live feedback on the segment they're marking.
+  // Renders in a lighter tint to distinguish from committed bands.
+  const draftRegion =
+    draftIn != null && duration > 0 && currentTime >= draftIn
       ? {
-          left: posPct(inSec) ?? "0%",
-          width: `${Math.max(0, ((outSec - inSec) / duration) * 100)}%`,
+          left: posPct(draftIn) ?? "0%",
+          width: `${Math.max(0, ((currentTime - draftIn) / duration) * 100)}%`,
         }
       : null;
+
+  // Position of the playhead on the bar (current % of duration).
+  const currentPct = posPct(currentTime) ?? "0%";
 
   return (
     <div className="scrubber">
@@ -411,8 +480,8 @@ export function Scrubber(props: ScrubberProps) {
 
         <span className="scrubber-spacer" />
         <button
-          className="btn btn-secondary"
-          onClick={() => onInChange(videoRef.current?.currentTime ?? null)}
+          className={"btn btn-secondary" + (draftIn != null ? " btn-active" : "")}
+          onClick={markIn}
           disabled={!streamUrl}
           title="Mark In at current position (I)"
         >
@@ -420,27 +489,24 @@ export function Scrubber(props: ScrubberProps) {
         </button>
         <button
           className="btn btn-secondary"
-          onClick={() => onOutChange(videoRef.current?.currentTime ?? null)}
-          disabled={!streamUrl}
-          title="Mark Out at current position (O)"
+          onClick={markOut}
+          disabled={!streamUrl || draftIn == null}
+          title={draftIn == null ? "Set In first" : "Mark Out + commit segment (O)"}
         >
           Set Out <span className="kbd">O</span>
         </button>
-        {(inSec != null || outSec != null) && (
+        {(segments.length > 0 || draftIn != null) && (
           <button
             className="btn btn-ghost"
-            onClick={() => {
-              onInChange(null);
-              onOutChange(null);
-            }}
-            title="Clear In/Out markers"
+            onClick={clearAll}
+            title="Clear all segments + draft"
           >
             Clear
           </button>
         )}
       </div>
 
-      {/* Scrub bar */}
+      {/* Scrub bar — committed segments + draft region + playhead */}
       <div
         className="scrubber-bar"
         ref={scrubBarRef}
@@ -451,42 +517,95 @@ export function Scrubber(props: ScrubberProps) {
         aria-valuenow={currentTime}
       >
         <div className="scrubber-bar-track" />
-        {regionStyle && <div className="scrubber-bar-region" style={regionStyle} />}
-        <div className="scrubber-bar-playhead" style={{ left: currentPct }} />
-        {inPct && (
-          <div className="scrubber-bar-marker scrubber-bar-marker--in" style={{ left: inPct }}>
-            <span className="scrubber-bar-marker-label mono">IN</span>
-          </div>
+        {segmentRegions.map((r) => (
+          <div
+            key={r.index}
+            className="scrubber-bar-region"
+            style={{ left: r.left, width: r.width }}
+            title={`Segment ${r.index + 1}: ${fmtDuration(r.seg.inSec)} → ${fmtDuration(r.seg.outSec)}`}
+          />
+        ))}
+        {draftRegion && (
+          <div
+            className="scrubber-bar-region scrubber-bar-region--draft"
+            style={draftRegion}
+            title="Drafting — hit O to commit"
+          />
         )}
-        {outPct && (
-          <div className="scrubber-bar-marker scrubber-bar-marker--out" style={{ left: outPct }}>
-            <span className="scrubber-bar-marker-label mono">OUT</span>
+        <div className="scrubber-bar-playhead" style={{ left: currentPct }} />
+        {draftIn != null && (
+          <div
+            className="scrubber-bar-marker scrubber-bar-marker--in"
+            style={{ left: posPct(draftIn) ?? "0%" }}
+          >
+            <span className="scrubber-bar-marker-label mono">IN</span>
           </div>
         )}
       </div>
 
-      {/* In/Out summary */}
+      {/* Segments list + summary */}
+      <div className="scrubber-segments">
+        {markWarning && <div className="scrubber-warn mono">{markWarning}</div>}
+        {draftIn != null && (
+          <div className="scrubber-segment-row scrubber-segment-row--draft mono">
+            <span className="idx">draft</span>
+            <span>
+              <span className="label">in</span> {fmtDuration(draftIn)}
+            </span>
+            <span className="faint">scrub then hit <span className="kbd">O</span> to commit</span>
+            <span className="scrubber-spacer" />
+            <button
+              className="ic-btn"
+              onClick={clearDraft}
+              title="Cancel draft"
+            >
+              <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round">
+                <path d="M4 4l8 8M12 4l-8 8" />
+              </svg>
+            </button>
+          </div>
+        )}
+        {segments.length === 0 && draftIn == null && (
+          <div className="scrubber-segment-empty mono faint">
+            No segments marked — Download will grab the full video. Hit{" "}
+            <span className="kbd">I</span> to start marking.
+          </div>
+        )}
+        {segments.map((seg, i) => (
+          <div key={i} className="scrubber-segment-row mono">
+            <span className="idx">#{i + 1}</span>
+            <button
+              type="button"
+              className="scrubber-segment-times"
+              onClick={() => seekTo(seg.inSec)}
+              title="Seek to this segment's In"
+            >
+              {fmtDuration(seg.inSec)} → {fmtDuration(seg.outSec)}
+              <span className="faint">  ({fmtDuration(seg.outSec - seg.inSec)})</span>
+            </button>
+            <span className="scrubber-spacer" />
+            <button
+              className="ic-btn"
+              onClick={() => removeSegment(i)}
+              title="Remove segment"
+            >
+              <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round">
+                <path d="M4 4l8 8M12 4l-8 8" />
+              </svg>
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Keyboard hint footer */}
       <div className="scrubber-summary mono">
-        <span>
-          <span className="label">in</span> {inSec != null ? fmtDuration(inSec) : "—"}
-        </span>
-        <span>
-          <span className="label">out</span> {outSec != null ? fmtDuration(outSec) : "—"}
-        </span>
-        <span>
-          <span className="label">dur</span>{" "}
-          {inSec != null && outSec != null && outSec > inSec
-            ? fmtDuration(outSec - inSec)
-            : "—"}
-        </span>
-        <span className="scrubber-spacer" />
         <span className="faint">
           <span className="kbd">Space</span> play ·{" "}
           <span className="kbd">←</span>
           <span className="kbd">→</span> frame ·{" "}
           <span className="kbd">⇧</span>+arrows = 1s ·{" "}
           <span className="kbd">I</span>
-          <span className="kbd">O</span> mark
+          <span className="kbd">O</span> mark segment (multi: hit I again after O)
         </span>
       </div>
     </div>

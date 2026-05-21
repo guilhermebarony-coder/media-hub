@@ -1194,6 +1194,80 @@ textarea.field-input {
   text-overflow: ellipsis;
 }
 .lib-card .tags { display: flex; gap: 4px; flex-wrap: wrap; }
+.lib-card-siblings {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-line);
+  border-radius: 8px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+/* Sibling list inside the asset drawer — small thumb + title + scope. */
+.sibling-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sibling-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.sibling-row:hover { background: var(--bg-3); border-color: var(--line-hi); }
+.sibling-thumb {
+  width: 56px;
+  flex: 0 0 56px;
+  aspect-ratio: 16 / 9;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--bg-3);
+}
+.sibling-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sibling-thumb-empty {
+  width: 100%;
+  height: 100%;
+  background: repeating-linear-gradient(135deg, #1a1a1e 0 10px, #16161a 10px 20px);
+}
+.sibling-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.sibling-title {
+  font-size: 11.5px;
+  color: var(--text-0);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sibling-sub {
+  display: flex;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--text-2);
+}
+.sibling-sub .sep { color: var(--text-3); }
 
 .lib-status {
   height: 26px;
@@ -1539,6 +1613,14 @@ textarea.field-input {
   border-top: 1px solid var(--accent-line);
   border-bottom: 1px solid var(--accent-line);
 }
+/* Draft region — segment being marked but not yet committed. Lighter
+   tint so users can tell at a glance which bands are "locked in"
+   vs the one they're still defining. */
+.scrubber-bar-region--draft {
+  background: rgba(199, 241, 84, 0.08);
+  border-top-color: rgba(199, 241, 84, 0.22);
+  border-bottom-color: rgba(199, 241, 84, 0.22);
+}
 .scrubber-bar-playhead {
   position: absolute;
   top: 5px;
@@ -1602,8 +1684,91 @@ textarea.field-input {
   letter-spacing: 0.06em;
   margin-right: 4px;
 }
-.scrubber-summary .kbd {
-  margin: 0 1px;
+.scrubber-summary .kbd { margin: 0 1px; }
+
+/* Segments list — committed segments + draft row + empty hint. */
+.scrubber-segments {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 4px;
+}
+.scrubber-segment-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+  padding: 0 10px;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 11.5px;
+  color: var(--text-1);
+}
+.scrubber-segment-row .idx {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 18px;
+  padding: 0 6px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-line);
+  border-radius: 3px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+.scrubber-segment-row--draft {
+  background: var(--bg-2);
+  border-style: dashed;
+}
+.scrubber-segment-row--draft .idx {
+  background: transparent;
+  border-color: var(--text-3);
+  color: var(--text-3);
+  text-transform: uppercase;
+}
+.scrubber-segment-row .label {
+  color: var(--text-3);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-right: 4px;
+}
+.scrubber-segment-times {
+  background: transparent;
+  border: none;
+  color: var(--text-0);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.scrubber-segment-times:hover {
+  background: var(--bg-4);
+  color: var(--accent);
+}
+.scrubber-segment-empty {
+  font-size: 11px;
+  padding: 6px 4px;
+}
+.scrubber-warn {
+  font-size: 11px;
+  color: var(--err);
+  background: color-mix(in oklab, var(--err), transparent 88%);
+  border: 1px solid color-mix(in oklab, var(--err), transparent 65%);
+  border-radius: 4px;
+  padding: 4px 10px;
+}
+
+/* Active state on the Set In button while a draft is open. */
+.btn-active {
+  background: var(--accent-dim);
+  border-color: var(--accent-line);
+  color: var(--accent);
 }
 
 /* ============================================================
