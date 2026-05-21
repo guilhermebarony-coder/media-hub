@@ -534,6 +534,46 @@ export function Scrubber(props: ScrubberProps) {
           />
         </div>
 
+        {/* Compact jog control — DaVinci-style. Drag the disc for
+            fine scrub (1s per ~80px). Arrows = single-frame step,
+            mirroring the keyboard ← / → for mouse-only users. */}
+        <div className="scrubber-jog">
+          <button
+            type="button"
+            className="scrubber-jog-step"
+            onClick={() => jogStep(-1)}
+            disabled={!streamUrl}
+            title="Step back 1 frame (←)"
+            aria-label="Step back one frame"
+          >
+            <svg viewBox="0 0 16 16" width={10} height={10} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M10 4L6 8l4 4" />
+            </svg>
+          </button>
+          <div
+            ref={jogDiscRef}
+            className={"scrubber-jog-track" + (jogActive ? " active" : "")}
+            onMouseDown={onJogMouseDown}
+            role="slider"
+            aria-label="Fine scrub"
+            title="Drag for fine scrub · 1s per ~80px"
+          >
+            <div className="scrubber-jog-disc" />
+          </div>
+          <button
+            type="button"
+            className="scrubber-jog-step"
+            onClick={() => jogStep(1)}
+            disabled={!streamUrl}
+            title="Step forward 1 frame (→)"
+            aria-label="Step forward one frame"
+          >
+            <svg viewBox="0 0 16 16" width={10} height={10} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 4l4 4-4 4" />
+            </svg>
+          </button>
+        </div>
+
         <span className="scrubber-spacer" />
         <button
           className={"btn btn-secondary" + (draftIn != null ? " btn-active" : "")}
@@ -597,49 +637,6 @@ export function Scrubber(props: ScrubberProps) {
             <span className="scrubber-bar-marker-label mono">IN</span>
           </div>
         )}
-      </div>
-
-      {/* Jog scrub — fine-precision drag for finding exact frames.
-          See onJogMouseDown for the math. ← and → step one frame each. */}
-      <div className="scrubber-jog">
-        <button
-          type="button"
-          className="ic-btn scrubber-jog-step"
-          onClick={() => jogStep(-1)}
-          disabled={!streamUrl}
-          title="Step back 1 frame (← also works)"
-          aria-label="Step back one frame"
-        >
-          <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
-            <path d="M10 4L6 8l4 4" />
-          </svg>
-        </button>
-        <div
-          ref={jogDiscRef}
-          className={"scrubber-jog-track" + (jogActive ? " active" : "")}
-          onMouseDown={onJogMouseDown}
-          role="slider"
-          aria-label="Fine scrub"
-          title="Drag to fine-scrub (1s per ~80 pixels of drag)"
-        >
-          <div className="scrubber-jog-disc" />
-          <div className="scrubber-jog-rail" />
-        </div>
-        <button
-          type="button"
-          className="ic-btn scrubber-jog-step"
-          onClick={() => jogStep(1)}
-          disabled={!streamUrl}
-          title="Step forward 1 frame (→ also works)"
-          aria-label="Step forward one frame"
-        >
-          <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
-            <path d="M6 4l4 4-4 4" />
-          </svg>
-        </button>
-        <span className="scrubber-jog-label mono faint">
-          fine scrub · 1s per ~80px
-        </span>
       </div>
 
       {/* Segments list + summary */}

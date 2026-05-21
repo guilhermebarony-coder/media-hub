@@ -1686,70 +1686,55 @@ textarea.field-input {
 }
 .scrubber-summary .kbd { margin: 0 1px; }
 
-/* Jog scrub — Resolve-style fine-precision scrub control. The rail
-   is a visual hint; actual drag captures the mouse and applies a
-   relative delta to currentTime (see onJogMouseDown). */
+/* Compact jog scrub — DaVinci-style pill that lives inline in the
+   transport bar. Three children: left step button, drag track with
+   center disc, right step button. ~80px wide total. */
 .scrubber-jog {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 2px 0;
-}
-.scrubber-jog-step {
-  width: 22px;
+  gap: 2px;
   height: 22px;
-  border-radius: 3px;
   background: var(--bg-3);
-  color: var(--text-1);
   border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 0 2px;
   flex-shrink: 0;
 }
-.scrubber-jog-step:hover { background: var(--bg-4); color: var(--text-0); }
-.scrubber-jog-step:disabled { opacity: 0.4; cursor: not-allowed; }
+.scrubber-jog-step {
+  width: 16px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: var(--text-2);
+  border: none;
+  cursor: pointer;
+  border-radius: 8px;
+  padding: 0;
+  flex-shrink: 0;
+}
+.scrubber-jog-step:hover { color: var(--text-0); background: var(--bg-4); }
+.scrubber-jog-step:disabled { opacity: 0.35; cursor: not-allowed; background: transparent; }
 .scrubber-jog-track {
-  position: relative;
-  flex: 0 0 220px;
-  height: 22px;
-  border-radius: 11px;
-  background: var(--bg-3);
-  border: 1px solid var(--line);
+  flex: 0 0 40px;
+  height: 18px;
+  display: grid;
+  place-items: center;
   cursor: ew-resize;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   user-select: none;
 }
-.scrubber-jog-track:hover { background: var(--bg-4); }
-.scrubber-jog-track.active {
-  border-color: var(--accent-line);
-  background: var(--bg-4);
-}
-.scrubber-jog-rail {
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  height: 1px;
-  background: var(--line-hi);
-  pointer-events: none;
-}
 .scrubber-jog-disc {
-  width: 10px;
-  height: 10px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: var(--text-1);
-  border: 1px solid var(--text-0);
-  position: relative;
-  z-index: 1;
+  background: var(--text-2);
   pointer-events: none;
-  transition: background 0.1s ease;
+  transition: background 0.1s ease, transform 0.1s ease;
 }
+.scrubber-jog-track:hover .scrubber-jog-disc { background: var(--text-0); }
 .scrubber-jog-track.active .scrubber-jog-disc {
   background: var(--accent);
-  border-color: var(--accent);
-}
-.scrubber-jog-label {
-  font-size: 10.5px;
-  margin-left: auto;
+  transform: scale(1.15);
 }
 
 /* Segments list — committed segments + draft row + empty hint. */
