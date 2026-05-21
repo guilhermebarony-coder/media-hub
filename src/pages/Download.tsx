@@ -20,7 +20,6 @@ import type {
   DownloadResult,
   FormatOption,
   ProgressEvent,
-  SidecarVersion,
   TranscodePreset,
   TranscodeProgress,
   TranscodeResult,
@@ -46,7 +45,6 @@ export default function DownloadPage() {
         <div className="stack">
           <MetadataCard />
           <QueueCard />
-          <SmokeCard />
         </div>
       </div>
     </div>
@@ -985,58 +983,7 @@ function QueueRow({ job }: { job: QueueJob }) {
   );
 }
 
-// =====================================================================
-// Sidecar smoke test (0.1 baseline)
-// =====================================================================
-function SmokeCard() {
-  const [results, setResults] = useState<SidecarVersion[] | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function runSmokeTest() {
-    setLoading(true);
-    setErr(null);
-    setResults(null);
-    try {
-      const out = await invoke<SidecarVersion[]>("binaries_version");
-      setResults(out);
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <section className="card-box">
-      <h2>
-        Sidecar smoke test <span className="chip">0.1 baseline</span>
-      </h2>
-      <p className="hint">
-        Spawns <code>yt-dlp --version</code> and <code>ffmpeg -version</code> via the Rust backend.
-      </p>
-      <div>
-        <button className="btn btn-secondary" onClick={runSmokeTest} disabled={loading}>
-          {loading ? "Running…" : "Run smoke test"}
-        </button>
-      </div>
-      {err && (
-        <div className="msg-row err">
-          <span className="label">error</span>
-          <code>{err}</code>
-        </div>
-      )}
-      {results && (
-        <ul className="queue-list" style={{ marginTop: 4 }}>
-          {results.map((r) => (
-            <li key={r.name} className={"msg-row " + (r.ok ? "ok" : "err")}>
-              <span className="label">{r.name}</span>
-              <code>{r.ok ? r.version : r.error ?? "(unknown error)"}</code>
-              <span className="mono faint">{r.ok ? "ok" : "fail"}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
+// Sidecar smoke test (0.1) lived here; removed once yt-dlp + ffmpeg
+// versions stopped being interesting to verify daily. The Rust
+// `binaries_version` command is still wired — re-add a tiny UI if we
+// ever need it again (e.g. for a Settings → diagnostics panel).

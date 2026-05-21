@@ -127,12 +127,12 @@ button { font-family: inherit; }
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 28px;
-  padding: 0 10px 0 8px;
+  height: 32px;
+  padding: 0 12px;
   background: var(--bg-2);
   border: 1px solid var(--line-hi);
   border-radius: 6px;
-  min-width: 240px;
+  min-width: 280px;
   cursor: pointer;
 }
 .proj-picker:hover { background: var(--bg-3); }
@@ -376,7 +376,21 @@ button { font-family: inherit; }
   font-family: var(--mono);
   white-space: nowrap;
 }
-.tag .x { color: var(--text-3); cursor: pointer; }
+.tag .x {
+  color: var(--text-3);
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin-left: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+}
+.tag .x:hover { color: var(--text-0); background: rgba(255, 255, 255, 0.06); }
 .tag.amber { background: var(--accent-dim); border-color: var(--accent-line); color: var(--accent); }
 
 .progress {
