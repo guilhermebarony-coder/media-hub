@@ -978,6 +978,124 @@ async fn media_transcode(
 }
 
 // =====================================================================
+// Thumbnail extraction (0.5.1)
+// =====================================================================
+
+#[derive(Serialize)]
+pub struct ThumbnailResult {
+    pub path: String,
+}
+
+/// Extract a single representative frame from a clip and save it as
+/// JPEG into `~/Media Hub/_thumbnails/<asset_id>.jpg`. Returns the
+/// final path so the caller can hand it to `library_set_thumbnail`.
+///
+/// Seek strategy: jump to `duration/2` when we have a duration, else
+/// fall back to `1.0s`. Mid-clip avoids the typical opening
+/// black/title-card and is representative enough for a thumbnail.
+///
+/// Output is 480px wide (height auto, divisible by 2 for codec
+/// happiness) at JPEG q=4 — ~30-80 KB per thumb, good enough for grid
+/// rendering at any reasonable card size.
+///
+/// We use `-ss` BEFORE `-i` for fast keyframe seek (decoder skips
+/// straight to the nearest keyframe before the requested timestamp).
+/// Frame-accurate seeking would need `-ss` after `-i` and is overkill
+/// for a thumbnail.
+#[tauri::command]
+async fn media_extract_thumbnail(
+    app: AppHandle,
+    src_path: String,
+    asset_id: String,
+    duration_sec: Option<f64>,
+) -> Result<ThumbnailResult, String> {
+    if src_path.trim().is_empty() {
+        return Err("src_path is empty".into());
+    }
+    if asset_id.trim().is_empty() {
+        return Err("asset_id is empty".into());
+    }
+    let src_pb = std::path::PathBuf::from(&src_path);
+    if !src_pb.exists() {
+        return Err(format!("source file does not exist: {src_path}"));
+    }
+
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| format!("resolve home dir: {e}"))?;
+    let thumb_dir = home.join("Media Hub").join("_thumbnails");
+    std::fs::create_dir_all(&thumb_dir).map_err(|e| format!("create thumbnails dir: {e}"))?;
+    let out_path = thumb_dir.join(format!("{asset_id}.jpg"));
+    let out_path_str = out_path
+        .to_str()
+        .ok_or("thumbnail path is not valid UTF-8")?
+        .to_string();
+
+    let seek = duration_sec
+        .filter(|d| *d > 2.0)
+        .map(|d| d / 2.0)
+        .unwrap_or(1.0);
+    let seek_str = format!("{:.3}", seek);
+
+    let ffmpeg = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| format!("sidecar resolve ffmpeg: {e}"))?;
+
+    let args: Vec<&str> = vec![
+        "-y",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-ss", seek_str.as_str(),
+        "-i", src_path.as_str(),
+        "-frames:v", "1",
+        // scale=480:-2 keeps aspect ratio, rounds height to even
+        // (some codecs / players choke on odd dimensions even for stills).
+        "-vf", "scale=480:-2:flags=lanczos",
+        "-q:v", "4",
+        out_path_str.as_str(),
+    ];
+
+    let (mut rx, _child) = ffmpeg
+        .args(args)
+        .spawn()
+        .map_err(|e| format!("ffmpeg spawn: {e}"))?;
+
+    let mut stderr_tail: Vec<String> = Vec::new();
+    let mut exit_code: Option<i32> = None;
+    while let Some(event) = rx.recv().await {
+        match event {
+            CommandEvent::Stderr(bytes) => {
+                let line = String::from_utf8_lossy(&bytes).trim().to_string();
+                if !line.is_empty() {
+                    stderr_tail.push(line);
+                    if stderr_tail.len() > 20 {
+                        stderr_tail.remove(0);
+                    }
+                }
+            }
+            CommandEvent::Terminated(payload) => {
+                exit_code = payload.code;
+            }
+            _ => {}
+        }
+    }
+
+    if exit_code != Some(0) {
+        let tail = stderr_tail
+            .last()
+            .cloned()
+            .unwrap_or_else(|| "(no stderr)".into());
+        return Err(format!("ffmpeg thumbnail failed: {tail}"));
+    }
+
+    Ok(ThumbnailResult {
+        path: out_path_str,
+    })
+}
+
+// =====================================================================
 // Tauri bootstrap
 // =====================================================================
 
@@ -1003,10 +1121,13 @@ pub fn run() {
             yt_fetch_metadata,
             yt_download,
             media_transcode,
+            media_extract_thumbnail,
             library::library_insert,
             library::library_list,
             library::library_count,
             library::library_delete,
+            library::library_set_thumbnail,
+            library::library_thumbnails_missing,
             library::tag_set_for_asset,
             library::tag_list_all,
         ])

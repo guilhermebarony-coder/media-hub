@@ -1,19 +1,62 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { AssetInput, TranscodePreset } from "./types";
 
 /**
- * Record an asset row in the SQLite library. Wrapped so callers don't
- * need to remember the command name and so we can swallow errors
- * without breaking the download flow — the file is already on disk;
- * library indexing is non-essential UX.
+ * Record an asset row in the SQLite library and return its id. Wrapped
+ * so callers don't need to remember the command name and so we can
+ * swallow errors without breaking the download flow — the file is
+ * already on disk; library indexing is non-essential UX.
+ *
+ * Returns null on failure so the caller can skip the follow-up
+ * thumbnail attach without extra error handling.
  */
-export async function recordInLibrary(input: AssetInput): Promise<void> {
+export async function recordInLibrary(input: AssetInput): Promise<string | null> {
   try {
-    await invoke<string>("library_insert", { input });
+    return await invoke<string>("library_insert", { input });
   } catch (e) {
     console.warn("library_insert failed (non-fatal):", e);
+    return null;
   }
+}
+
+/**
+ * Extract a mid-clip frame from the downloaded file and record it
+ * against the asset. Fire-and-forget — runs after the download flow
+ * has already finished and the user sees their result. Library
+ * refresh fires automatically via the `library:changed` event so the
+ * card updates as soon as the JPG lands on disk.
+ */
+export async function attachLocalThumbnail(
+  assetId: string,
+  srcPath: string,
+  durationSec: number | null,
+): Promise<void> {
+  try {
+    const res = await invoke<{ path: string }>("media_extract_thumbnail", {
+      srcPath,
+      assetId,
+      durationSec,
+    });
+    await invoke("library_set_thumbnail", { assetId, path: res.path });
+  } catch (e) {
+    console.warn("thumbnail extract/set failed (non-fatal):", e);
+  }
+}
+
+/**
+ * Resolve an asset's thumbnail to a renderable URL. Prefers the local
+ * extracted frame (correct for segment downloads), falls back to the
+ * remote YouTube/X CDN URL, then null. Local paths go through
+ * `convertFileSrc` so the webview's asset protocol can serve them.
+ */
+export function thumbnailSrc(
+  localPath: string | null,
+  remoteUrl: string | null,
+): string | null {
+  if (localPath) return convertFileSrc(localPath);
+  if (remoteUrl) return remoteUrl;
+  return null;
 }
 
 /**

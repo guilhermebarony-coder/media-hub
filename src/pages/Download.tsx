@@ -11,6 +11,7 @@ import {
   extFromPath,
 } from "../lib/format";
 import {
+  attachLocalThumbnail,
   audioCodecFor,
   recordInLibrary,
   revealFile,
@@ -197,7 +198,13 @@ function MetadataCard() {
         setDlResult(dlRes);
       }
 
-      void recordInLibrary({
+      // Effective duration of the file on disk: segment length when
+      // trimmed, source duration otherwise. Used as the seek hint for
+      // mid-clip thumbnail extraction.
+      const effectiveDuration =
+        inSec != null && outSec != null ? outSec - inSec : meta?.duration_sec ?? null;
+
+      const assetId = await recordInLibrary({
         source_url: url,
         platform: "youtube",
         video_id: meta?.id ?? null,
@@ -217,6 +224,9 @@ function MetadataCard() {
         transcoded_to: usedPreset === "none" ? null : usedPreset,
         thumbnail_url: meta?.thumbnail ?? null,
       });
+      if (assetId) {
+        void attachLocalThumbnail(assetId, finalRes.path, effectiveDuration);
+      }
     } catch (e) {
       setDlErr(String(e));
     } finally {
@@ -731,7 +741,7 @@ function QueueCard() {
       updateJob(job.id, { status: "done", resultPath: dlRes.path, resultBytes: dlRes.bytes });
     }
 
-    void recordInLibrary({
+    const assetId = await recordInLibrary({
       source_url: job.url,
       platform: "youtube",
       video_id: meta.id,
@@ -751,6 +761,9 @@ function QueueCard() {
       transcoded_to: usedPreset === "none" ? null : usedPreset,
       thumbnail_url: meta.thumbnail,
     });
+    if (assetId) {
+      void attachLocalThumbnail(assetId, finalPath, meta.duration_sec ?? null);
+    }
   }
 
   function queueAll() {

@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Icon } from "../lib/icons";
 import { fmtBytes, fmtDuration } from "../lib/format";
-import { revealFile } from "../lib/library";
+import { attachLocalThumbnail, revealFile, thumbnailSrc } from "../lib/library";
 import type { Asset, LibraryFilters, TagCount } from "../lib/types";
 
 type Bucket = "today" | "week" | "month" | "older";
@@ -80,6 +80,36 @@ export default function LibraryPage() {
       unlisten?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Backfill thumbnails for assets that landed before this feature
+  // existed (or any other reason thumbnail_path is null). Runs once
+  // per Library mount, serially with a small pause so we don't peg
+  // the CPU when there are hundreds. Library:changed events from
+  // each successful set fire the normal refresh and the cards update
+  // live as they fill in.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const missing = await invoke<
+          Array<{ id: string; file_path: string; duration_sec: number | null }>
+        >("library_thumbnails_missing");
+        for (const m of missing) {
+          if (cancelled) return;
+          await attachLocalThumbnail(m.id, m.file_path, m.duration_sec);
+          // Tiny breather between extractions — keeps the UI snappy
+          // and lets the event loop process the library:changed
+          // refresh that each extraction triggers.
+          await new Promise((r) => setTimeout(r, 150));
+        }
+      } catch (e) {
+        console.warn("thumbnail backfill failed:", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Client-side platform + bucket filtering on top of what SQL gives us.
@@ -445,6 +475,7 @@ function LibCard({
   selected: boolean;
   onClick: () => void;
 }) {
+  const thumb = thumbnailSrc(asset.thumbnail_path, asset.thumbnail_url);
   return (
     <button className={"lib-card" + (selected ? " selected" : "")} onClick={onClick}>
       <div className="thumb">
@@ -461,7 +492,7 @@ function LibCard({
             asset.platform.toUpperCase()
           )}
         </span>
-        {asset.thumbnail_url && <img src={asset.thumbnail_url} alt="" loading="lazy" />}
+        {thumb && <img src={thumb} alt="" loading="lazy" />}
         {asset.duration_sec != null && <span className="dur">{fmtDuration(asset.duration_sec)}</span>}
       </div>
       <div className="info">
@@ -554,11 +585,10 @@ function AssetDrawer({
         </div>
         <div className="drawer-body">
           <div className="drawer-thumb">
-            {asset.thumbnail_url ? (
-              <img src={asset.thumbnail_url} alt="" />
-            ) : (
-              <div className="drawer-thumb-empty" />
-            )}
+            {(() => {
+              const t = thumbnailSrc(asset.thumbnail_path, asset.thumbnail_url);
+              return t ? <img src={t} alt="" /> : <div className="drawer-thumb-empty" />;
+            })()}
           </div>
 
           <dl className="drawer-grid">

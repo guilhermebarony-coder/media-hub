@@ -85,6 +85,12 @@ What works end-to-end:
   brand + active-project picker stub + global-search stub, left nav
   (Download / Library / Projects / Settings), `react-router-dom`
   hash routing, route-based screens. Default route is `/library`.
+- ✅ **Local thumbnails** — ffmpeg extracts a mid-clip frame (480px wide
+  JPG q=4, ~30–80 KB) into `~/Media Hub/_thumbnails/<asset_id>.jpg` on
+  every successful download. UI prefers local thumbs over remote
+  (correct for segment downloads where the source's official thumbnail
+  no longer represents the trimmed file). Backfills existing assets
+  serially on Library mount.
 - ✅ **Library grid page** — proper grid (auto-fill 220px) replacing
   the dev card. Sidebar facets (Source / Tags / Added) with live
   counts that reflect the SQL-filtered set. Active-filter chip row
@@ -92,8 +98,6 @@ What works end-to-end:
   with full metadata table, tag editor, Reveal-in-Explorer, Forget.
 
 What's deferred (not done, won't be done this session):
-- 🟡 Thumbnails on library cards — needs ffmpeg mid-clip frame extract
-  on download complete; cards show diagonal-stripe placeholder for now
 - 🟡 Pause / resume in batch queue (Windows process signaling)
 - 🟡 Export to project folder (needs `@tauri-apps/plugin-dialog` for
   folder picker — separate plugin install + capability)

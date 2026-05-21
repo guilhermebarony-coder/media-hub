@@ -10,6 +10,42 @@ written so future-me (or future-Claude) can pick it up cold.
 
 ---
 
+## 2026-05-20 (late) — Local thumbnails
+
+**Shipped:** every download (single-URL or batch) triggers a fire-and-
+forget ffmpeg pass that extracts a mid-clip frame into
+`~/Media Hub/_thumbnails/<asset_id>.jpg` (480px wide, JPG q=4 → ~30-80
+KB each). The path is stored in a new `thumbnail_path` column.
+
+**Why local-preferred:** segment downloads are the killer feature.
+Their YouTube CDN thumbnail shows the FULL video's representative
+frame, which usually has nothing to do with the 15-second clip the
+user actually downloaded. A frame extracted from the file on disk
+shows what's actually there.
+
+**Seek strategy:** jump to `duration/2` when known, else `1.0s`.
+Mid-clip dodges intros / title cards. We use `-ss` BEFORE `-i` for
+fast keyframe seek — frame-accurate seek would need `-ss` after `-i`
+and is overkill for a thumbnail.
+
+**Backfill:** on Library mount we query `library_thumbnails_missing`
+and walk the list serially with a 150ms breather between extractions.
+That fills in pre-feature assets over time without CPU thrashing.
+Each successful set fires `library:changed` so cards update live.
+
+**Asset protocol:** `tauri.conf.json` got `assetProtocol.enable = true`
+with scope `$HOME/**`. Frontend uses `convertFileSrc(localPath)` to
+turn a Windows path into an `asset.localhost/...` URL the webview can
+load. Works identically in dev and packaged builds.
+
+**Schema migration:** added `003_thumbnails.sql` with a single
+`ALTER TABLE assets ADD COLUMN thumbnail_path TEXT`. SQLite's ALTER
+isn't idempotent so the migration loop now swallows "duplicate column
+name" errors specifically — a graceful workaround until we adopt a
+real migrations tracking table.
+
+---
+
 ## 2026-05-20 (evening) — UI shell: react-router + handoff tokens
 
 **Shipped:** the dev-stack layout (three cards in a column under a

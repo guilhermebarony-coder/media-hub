@@ -66,6 +66,7 @@ struct AssetRow {
     pub fps: Option<f64>,
     pub transcoded_to: Option<String>,
     pub thumbnail_url: Option<String>,
+    pub thumbnail_path: Option<String>,
     pub downloaded_at: i64,
 }
 
@@ -93,6 +94,7 @@ pub struct Asset {
     pub fps: Option<f64>,
     pub transcoded_to: Option<String>,
     pub thumbnail_url: Option<String>,
+    pub thumbnail_path: Option<String>,
     pub downloaded_at: i64,
     pub tags: Vec<String>,
 }
@@ -119,6 +121,7 @@ impl From<AssetRow> for Asset {
             fps: r.fps,
             transcoded_to: r.transcoded_to,
             thumbnail_url: r.thumbnail_url,
+            thumbnail_path: r.thumbnail_path,
             downloaded_at: r.downloaded_at,
             tags: Vec::new(),
         }
@@ -200,12 +203,20 @@ pub async fn init(app: &AppHandle) -> Result<LibraryState, String> {
     for schema in [
         include_str!("../migrations/001_initial.sql"),
         include_str!("../migrations/002_tags.sql"),
+        include_str!("../migrations/003_thumbnails.sql"),
     ] {
         for stmt in split_sql_statements(schema) {
-            sqlx::query(&stmt)
-                .execute(&pool)
-                .await
-                .map_err(|e| format!("apply schema: {e}"))?;
+            if let Err(e) = sqlx::query(&stmt).execute(&pool).await {
+                let s = e.to_string();
+                // SQLite's `ALTER TABLE ADD COLUMN` has no IF NOT EXISTS.
+                // The migration loop is idempotent for CREATE statements
+                // but ALTER errors on second launch. Until we adopt a
+                // real migrations table, swallow that specific error.
+                if s.contains("duplicate column name") {
+                    continue;
+                }
+                return Err(format!("apply schema: {s}"));
+            }
         }
     }
 
@@ -491,4 +502,53 @@ pub async fn tag_list_all(state: State<'_, LibraryState>) -> Result<Vec<TagCount
     .fetch_all(&state.pool)
     .await
     .map_err(|e| format!("tag_list_all: {e}"))
+}
+
+/// One row of the backfill list — assets that have no local thumbnail
+/// yet. The frontend feeds these through media_extract_thumbnail one
+/// by one on startup so existing libraries get filled in over time
+/// without thrashing CPU.
+#[derive(Serialize, Debug, Clone, sqlx::FromRow)]
+pub struct ThumbnailMissing {
+    pub id: String,
+    pub file_path: String,
+    pub duration_sec: Option<f64>,
+}
+
+#[tauri::command]
+pub async fn library_thumbnails_missing(
+    state: State<'_, LibraryState>,
+) -> Result<Vec<ThumbnailMissing>, String> {
+    sqlx::query_as::<_, ThumbnailMissing>(
+        r#"SELECT id, file_path, duration_sec
+           FROM assets
+           WHERE thumbnail_path IS NULL
+           ORDER BY downloaded_at DESC"#,
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("library_thumbnails_missing: {e}"))
+}
+
+/// Record a local thumbnail path against an asset. Used by the post-
+/// download thumbnail extraction flow (see `media_extract_thumbnail`
+/// in lib.rs). Non-fatal if the asset row is gone (user might forget
+/// it before extraction completes) — returns Ok in that case.
+#[tauri::command]
+pub async fn library_set_thumbnail(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    asset_id: String,
+    path: String,
+) -> Result<(), String> {
+    let res = sqlx::query("UPDATE assets SET thumbnail_path = ? WHERE id = ?")
+        .bind(&path)
+        .bind(&asset_id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("library_set_thumbnail: {e}"))?;
+    if res.rows_affected() > 0 {
+        let _ = app.emit("library:changed", ());
+    }
+    Ok(())
 }

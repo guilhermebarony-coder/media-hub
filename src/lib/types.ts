@@ -120,6 +120,11 @@ export type Asset = AssetInput & {
   id: string;
   downloaded_at: number;
   tags: string[];
+  /** Local path to extracted thumbnail JPG (~/Media Hub/_thumbnails/<id>.jpg).
+   * Null until the post-download extract runs. UI prefers this over
+   * `thumbnail_url` because for segment downloads the source's official
+   * thumbnail no longer represents the trimmed file. */
+  thumbnail_path: string | null;
 };
 
 export type TagCount = {
