@@ -10,6 +10,69 @@ written so future-me (or future-Claude) can pick it up cold.
 
 ---
 
+## 2026-05-20 (parked) — Library folders (in addition to tags)
+
+**Owner note (2026-05-20):** "starting to think we're gonna need
+folders to organize the library besides the tags, i'll sit on it but
+write it and remember me when i ask"
+
+**The idea:** keep the flat tag model AND give users hierarchical
+folders (or collections, or whatever we end up calling them) for
+project-y organization. Tags are good for cross-cutting metadata
+("aerial", "golden-hour", "tutorial") but folders are good for
+"everything belonging to the Q3 brand spot, in the order I dragged
+them in."
+
+**Why this might be more than tags + projects can cover:**
+- The dual-root Library/Projects split (0.6) is one-level: each asset
+  is in EXACTLY one project (or the Library). That's fine for
+  "deletable as a unit" but not for "I want subgrouping inside a
+  project" (e.g. Project/Interviews/, Project/B-roll/, Project/Stills/).
+- Tags don't preserve order. Folders do (drag-reorder, manual
+  curation, hand-built reels).
+- Some workflows are folder-native and force-fitting them into tags
+  feels wrong (e.g. "scene 1 / scene 2 / scene 3").
+
+**Open questions to revisit when owner picks this up:**
+- Are folders nested under projects, or a parallel concept?
+- Can an asset live in multiple folders (symlink-style) or only one?
+- Do folders carry their own tag-set / facets, or inherit?
+- UX: tree in the left sidebar? Or breadcrumbs? Both?
+- Does this push us toward a fully tree-shaped library (chiral-style
+  collections) or stay flat-with-grouping?
+
+**Implementation sketch (don't build yet):**
+- New `folders` table (id, name, parent_id nullable, project_id
+  nullable, sort_order)
+- New `asset_folders` linking table (asset_id, folder_id,
+  position) — many-to-many if we go symlink-style
+- Library sidebar gets a "Folders" group above "Tags" with the tree
+- Asset detail drawer gets a "Folders" section alongside Tags
+
+**When to revisit:** owner will surface this. Pinged in this session
+to keep the idea from disappearing into chat.
+
+---
+
+## 2026-05-20 (parked) — Download page header copy reads weird
+
+**The page-header subtitle "paste · pick · trim · transcode"** sits
+next to the "Download" title and reads more like a stage indicator
+than a useful label. Owner: "this words seem weird, either we change
+or remove, can decide when we change the UI tho."
+
+**Decision:** parked. Revisit when we do the Download page redesign
+(handoff `screen-download.jsx` layout) — that pass will rework the
+content-header anyway, so changing the copy in isolation now is
+wasted churn.
+
+**Candidate replacements to consider:**
+- Remove entirely (let the page title carry it)
+- Replace with active-state info ("Queue: 3 active · 1 done")
+- Replace with destination ("Saving to: Library" / active project)
+
+---
+
 ## 2026-05-20 (late) — Local thumbnails
 
 **Shipped:** every download (single-URL or batch) triggers a fire-and-
