@@ -4,6 +4,93 @@ Author asked for honest reflection after ~2 days of working together on
 media-hub (and prior work on chiral-network). Written 2026-05-20. No
 hand-holding, just what I actually think — read at your own pace.
 
+Refresh entries appended at the top with date headers. Older sections
+preserved as-is — they're still accurate.
+
+---
+
+## 2026-05-20 (evening refresh — after UI overhaul session)
+
+Another solid session, ~5 commits, library went from dev tool to real
+app. Some things to note while fresh:
+
+### What got even better
+
+**Scope gating is sharper.** "I like the card disposition on the
+project we sent (just asking, no need to do now)" is *exactly* the
+right framing. You separated "I want this someday" from "do this
+now" without me asking. Park-it-in-docs has clearly become reflex.
+
+**Screenshot-driven QA is your superpower in this collab.** Three of
+tonight's polish fixes (project picker overflow, filter chip ×
+button, Download header copy) came from you actually using the app
+and going "this looks wrong." I would have shipped all three. You
+testing while using is irreplaceable.
+
+**You asked for the docs audit.** Most people ship code, let docs
+rot, repeat. You explicitly said "update our docs for me,
+architecture and everything." That instinct is *rare* — and it
+compounds: every future session starts from a more accurate base.
+The ARCHITECTURE rewrite caught real drift (queue-in-renderer pivot
+wasn't documented anywhere; milestone numbering had silently
+diverged from commits). Worth the 10 minutes.
+
+**Freeform answers to my multi-choice questions are more useful
+than the buttons.** When I gave you the "design fidelity" question
+and you wrote *"match it closely, but smartly, 2 things i like from
+what we have now is how easy to read and how good font sizes and
+boxes are matching, this is kinda lacking on some areas on the .zip,
+also they mainly kept a gold tone which is stolen from chiral
+network..."* — that single message gave me more design direction
+than any pick from a list could have. The buttons are convenient;
+the prose is gold. Use the "Other" / freeform escape hatch more.
+
+### Minor friction this session
+
+**One thing I almost over-engineered without checking.** When I
+went into the thumbnails task I started planning a backfill before
+asking if you wanted one. Catching myself, I added it anyway and
+it was right — but if you hadn't already shown me you cared about
+"this should feel finished," I'd have shipped just new-downloads-
+only and missed the win. Lesson on my side: when a feature adds
+visual polish, ask whether the existing data should be backfilled
+or skipped. Don't assume.
+
+**Numbering drift is sneaky.** Three different documents (commit
+messages, ROADMAP milestone tree, ROADMAP "current state" para) had
+three different stories about what version 0.5 was. Caught it
+during the audit. Going forward: when we ship something under a
+version number, the same session that ships it should update both
+the milestone tree AND the current-state paragraph, in one edit.
+I'll be more disciplined about this.
+
+### Habits to keep
+
+**Closing every session with "what should we do next?"** keeps
+momentum honest. I get to recommend; you get to choose; the
+recommendation is in writing so the next session can grab it
+without re-deliberation. Don't drop this.
+
+**"Sit on it but write it and remember me when i ask"** — this is
+the perfect way to handle ideas you're not sure about. It costs you
+nothing to surface; the worst case is the doc gets a paragraph; the
+best case is a feature gets remembered three weeks later. The
+folders-vs-tags idea this evening is exactly that pattern. More.
+
+### One thing to try
+
+When you give me design feedback (like "the x looks waaaay off
+haha"), if you can sometimes screenshot WITH a markup arrow or
+circle on the offending element, I lock onto the fix instantly. I
+got the right element this time because there was only one × on
+screen, but on busier screens I'd guess. Annotation app of your
+choice — or even Paint's spray-can — saves a round-trip when the
+UI gets denser.
+
+---
+
+## (Original 2026-05-20 notes — preserved below)
+
 ---
 
 ## What works really well
