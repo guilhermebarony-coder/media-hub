@@ -158,6 +158,62 @@ export function Scrubber(props: ScrubberProps) {
     setDraftIn(null);
   }
 
+  /**
+   * Jog scrub — Resolve-style fine-scrub control. The main bar is
+   * "position = whole video" so on long sources each pixel is many
+   * seconds. The jog converts mouse-drag distance into a SMALL time
+   * delta (~1 second per 80px) so users can hunt for a specific frame
+   * by hand without needing keyboard arrow-step.
+   *
+   * On mousedown we capture the starting mouseX and currentTime.
+   * On mousemove we compute the delta and seek directly. On mouseup
+   * we end the drag. The disc visually returns to center — it's not
+   * a slider where the dot tracks position, it's a "scrub wheel"
+   * where the dot is just the grab handle.
+   *
+   * Pauses while jogging (same as main bar drag) so we don't fight
+   * the playhead. Resumes on release if it was playing.
+   */
+  const SECONDS_PER_PIXEL = 1 / 80; // 80px drag = 1 second
+  const jogDiscRef = useRef<HTMLDivElement>(null);
+  const [jogActive, setJogActive] = useState(false);
+
+  function onJogMouseDown(e: React.MouseEvent<HTMLDivElement>) {
+    const v = videoRef.current;
+    if (!v || duration <= 0) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startTime = v.currentTime;
+    const wasPlaying = !v.paused;
+    v.pause();
+    setJogActive(true);
+
+    const onMove = (ev: MouseEvent) => {
+      const delta = (ev.clientX - startX) * SECONDS_PER_PIXEL;
+      const next = Math.max(0, Math.min(duration, startTime + delta));
+      // Direct seek — different from the main bar's deferred seek.
+      // The whole point of jog is real-time fine control, and the
+      // delta-per-pixel is so small that we're not requesting wildly
+      // different ranges; CDN handles this gracefully.
+      v.currentTime = next;
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      setJogActive(false);
+      if (wasPlaying) void v.play();
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  function jogStep(direction: 1 | -1) {
+    const v = videoRef.current;
+    if (!v) return;
+    v.pause();
+    v.currentTime = Math.max(0, Math.min(duration, v.currentTime + direction * frameSec));
+  }
+
   // Wire <video> events to React state.
   useEffect(() => {
     const v = videoRef.current;
@@ -541,6 +597,49 @@ export function Scrubber(props: ScrubberProps) {
             <span className="scrubber-bar-marker-label mono">IN</span>
           </div>
         )}
+      </div>
+
+      {/* Jog scrub — fine-precision drag for finding exact frames.
+          See onJogMouseDown for the math. ← and → step one frame each. */}
+      <div className="scrubber-jog">
+        <button
+          type="button"
+          className="ic-btn scrubber-jog-step"
+          onClick={() => jogStep(-1)}
+          disabled={!streamUrl}
+          title="Step back 1 frame (← also works)"
+          aria-label="Step back one frame"
+        >
+          <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M10 4L6 8l4 4" />
+          </svg>
+        </button>
+        <div
+          ref={jogDiscRef}
+          className={"scrubber-jog-track" + (jogActive ? " active" : "")}
+          onMouseDown={onJogMouseDown}
+          role="slider"
+          aria-label="Fine scrub"
+          title="Drag to fine-scrub (1s per ~80 pixels of drag)"
+        >
+          <div className="scrubber-jog-disc" />
+          <div className="scrubber-jog-rail" />
+        </div>
+        <button
+          type="button"
+          className="ic-btn scrubber-jog-step"
+          onClick={() => jogStep(1)}
+          disabled={!streamUrl}
+          title="Step forward 1 frame (→ also works)"
+          aria-label="Step forward one frame"
+        >
+          <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 4l4 4-4 4" />
+          </svg>
+        </button>
+        <span className="scrubber-jog-label mono faint">
+          fine scrub · 1s per ~80px
+        </span>
       </div>
 
       {/* Segments list + summary */}

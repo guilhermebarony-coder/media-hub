@@ -1686,6 +1686,72 @@ textarea.field-input {
 }
 .scrubber-summary .kbd { margin: 0 1px; }
 
+/* Jog scrub — Resolve-style fine-precision scrub control. The rail
+   is a visual hint; actual drag captures the mouse and applies a
+   relative delta to currentTime (see onJogMouseDown). */
+.scrubber-jog {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0;
+}
+.scrubber-jog-step {
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
+  background: var(--bg-3);
+  color: var(--text-1);
+  border: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.scrubber-jog-step:hover { background: var(--bg-4); color: var(--text-0); }
+.scrubber-jog-step:disabled { opacity: 0.4; cursor: not-allowed; }
+.scrubber-jog-track {
+  position: relative;
+  flex: 0 0 220px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  cursor: ew-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+.scrubber-jog-track:hover { background: var(--bg-4); }
+.scrubber-jog-track.active {
+  border-color: var(--accent-line);
+  background: var(--bg-4);
+}
+.scrubber-jog-rail {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  height: 1px;
+  background: var(--line-hi);
+  pointer-events: none;
+}
+.scrubber-jog-disc {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-1);
+  border: 1px solid var(--text-0);
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+  transition: background 0.1s ease;
+}
+.scrubber-jog-track.active .scrubber-jog-disc {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.scrubber-jog-label {
+  font-size: 10.5px;
+  margin-left: auto;
+}
+
 /* Segments list — committed segments + draft row + empty hint. */
 .scrubber-segments {
   display: flex;
