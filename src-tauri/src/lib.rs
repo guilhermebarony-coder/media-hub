@@ -1130,6 +1130,11 @@ pub fn run() {
             library::library_thumbnails_missing,
             library::tag_set_for_asset,
             library::tag_list_all,
+            library::project_create,
+            library::project_list,
+            library::project_rename,
+            library::project_delete,
+            library::asset_set_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

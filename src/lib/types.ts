@@ -114,6 +114,9 @@ export type AssetInput = {
   fps: number | null;
   transcoded_to: string | null;
   thumbnail_url: string | null;
+  /** Project this asset belongs to. NULL = Library. Phase A: Download
+   * always passes null. Phase B wires it to the active-project picker. */
+  project_id: string | null;
 };
 
 export type Asset = AssetInput & {
@@ -127,13 +130,38 @@ export type Asset = AssetInput & {
   thumbnail_path: string | null;
 };
 
-export type TagCount = {
+// =====================================================================
+// Projects (0.6 Phase A)
+// =====================================================================
+
+export type Project = {
+  id: string;
   name: string;
-  count: number;
+  slug: string;
+  created_at: number;
+  asset_count: number;
 };
+
+/** Active scope drives both the library filter and (in Phase B) where
+ *  new downloads land. */
+export type ActiveScope =
+  | { kind: "library" }
+  | { kind: "project"; id: string; name: string };
+
+/** Tagged-enum filter shape matching Rust's LibraryScope. */
+export type LibraryScope =
+  | { kind: "any" }
+  | { kind: "library" }
+  | { kind: "project"; id: string };
 
 export type LibraryFilters = {
   query?: string | null;
   tags?: string[] | null;
+  scope?: LibraryScope | null;
   limit?: number | null;
+};
+
+export type TagCount = {
+  name: string;
+  count: number;
 };

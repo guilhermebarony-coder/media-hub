@@ -42,6 +42,10 @@ pub struct AssetInput {
     pub fps: Option<f64>,
     pub transcoded_to: Option<String>,
     pub thumbnail_url: Option<String>,
+    /// Scope this asset to a project. NULL = Library. Phase A: the
+    /// Download flow doesn't pass this yet (always Library); Phase B
+    /// wires it to the active-project picker.
+    pub project_id: Option<String>,
 }
 
 /// 1:1 with the `assets` table — what sqlx::FromRow can directly decode.
@@ -67,6 +71,7 @@ struct AssetRow {
     pub transcoded_to: Option<String>,
     pub thumbnail_url: Option<String>,
     pub thumbnail_path: Option<String>,
+    pub project_id: Option<String>,
     pub downloaded_at: i64,
 }
 
@@ -95,6 +100,7 @@ pub struct Asset {
     pub transcoded_to: Option<String>,
     pub thumbnail_url: Option<String>,
     pub thumbnail_path: Option<String>,
+    pub project_id: Option<String>,
     pub downloaded_at: i64,
     pub tags: Vec<String>,
 }
@@ -122,6 +128,7 @@ impl From<AssetRow> for Asset {
             transcoded_to: r.transcoded_to,
             thumbnail_url: r.thumbnail_url,
             thumbnail_path: r.thumbnail_path,
+            project_id: r.project_id,
             downloaded_at: r.downloaded_at,
             tags: Vec::new(),
         }
@@ -132,6 +139,42 @@ impl From<AssetRow> for Asset {
 pub struct TagCount {
     pub name: String,
     pub count: i64,
+}
+
+/// What we serialize to the renderer — a project row + denormalized asset
+/// count. The count drives the UI "(N clips)" hint without a separate
+/// round-trip per project.
+#[derive(Serialize, Debug, Clone)]
+pub struct Project {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub created_at: i64,
+    pub asset_count: i64,
+}
+
+/// Scope filter for `library_list` and `library_count`. Tagged enum
+/// keeps the JSON shape unambiguous from the renderer's side.
+///
+///   { kind: "any" }                 → no filter, all rows
+///   { kind: "library" }             → project_id IS NULL
+///   { kind: "project", id: "..." }  → project_id = id
+///
+/// Defaults to Any when omitted — matches the pre-projects behavior so
+/// older callers (and the Download page, which doesn't care about
+/// scope) keep working.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LibraryScope {
+    Any,
+    Library,
+    Project { id: String },
+}
+
+impl Default for LibraryScope {
+    fn default() -> Self {
+        LibraryScope::Any
+    }
 }
 
 /// Held in Tauri's State<>. Single SqlitePool, shared across commands.
@@ -204,6 +247,7 @@ pub async fn init(app: &AppHandle) -> Result<LibraryState, String> {
         include_str!("../migrations/001_initial.sql"),
         include_str!("../migrations/002_tags.sql"),
         include_str!("../migrations/003_thumbnails.sql"),
+        include_str!("../migrations/004_projects.sql"),
     ] {
         for stmt in split_sql_statements(schema) {
             if let Err(e) = sqlx::query(&stmt).execute(&pool).await {
@@ -275,8 +319,8 @@ pub async fn library_insert(
             duration_sec, in_sec, out_sec,
             file_path, file_size, container,
             codec_video, codec_audio, width, height, fps,
-            transcoded_to, thumbnail_url, downloaded_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            transcoded_to, thumbnail_url, project_id, downloaded_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
     )
     .bind(&id)
     .bind(&input.source_url)
@@ -297,6 +341,7 @@ pub async fn library_insert(
     .bind(input.fps)
     .bind(&input.transcoded_to)
     .bind(&input.thumbnail_url)
+    .bind(&input.project_id)
     .bind(now)
     .execute(&state.pool)
     .await
@@ -316,6 +361,8 @@ pub struct LibraryFilters {
     /// Asset must have ALL of these tag names (AND semantics, matches
     /// the typical "narrow down by adding more chips" UX).
     pub tags: Option<Vec<String>>,
+    /// Project scope filter. Defaults to Any (no filter) when omitted.
+    pub scope: Option<LibraryScope>,
     pub limit: Option<i64>,
 }
 
@@ -356,6 +403,19 @@ pub async fn library_list(
                 "EXISTS (SELECT 1 FROM asset_tags at JOIN tags t ON t.id=at.tag_id WHERE at.asset_id = a.id AND t.name = ? COLLATE NOCASE)".into(),
             );
             bindings.push(tag.clone());
+        }
+    }
+
+    // Scope filter. `Any` adds no clause; `Library` and `Project` are
+    // mutually exclusive predicates on assets.project_id.
+    match filters.scope.unwrap_or_default() {
+        LibraryScope::Any => {}
+        LibraryScope::Library => {
+            where_clauses.push("a.project_id IS NULL".into());
+        }
+        LibraryScope::Project { id } => {
+            where_clauses.push("a.project_id = ?".into());
+            bindings.push(id);
         }
     }
 
@@ -401,8 +461,29 @@ pub async fn library_list(
 }
 
 #[tauri::command]
-pub async fn library_count(state: State<'_, LibraryState>) -> Result<i64, String> {
-    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM assets")
+pub async fn library_count(
+    state: State<'_, LibraryState>,
+    scope: Option<LibraryScope>,
+) -> Result<i64, String> {
+    // Mirrors the scope semantics of library_list. Renderer uses this
+    // for the "X clips" header counter, which should reflect the
+    // current active project, not the global asset count.
+    let (sql, bind_id): (&str, Option<String>) = match scope.unwrap_or_default() {
+        LibraryScope::Any => ("SELECT COUNT(*) FROM assets", None),
+        LibraryScope::Library => (
+            "SELECT COUNT(*) FROM assets WHERE project_id IS NULL",
+            None,
+        ),
+        LibraryScope::Project { id } => (
+            "SELECT COUNT(*) FROM assets WHERE project_id = ?",
+            Some(id),
+        ),
+    };
+    let mut q = sqlx::query_as::<_, (i64,)>(sql);
+    if let Some(id) = bind_id {
+        q = q.bind(id);
+    }
+    let row = q
         .fetch_one(&state.pool)
         .await
         .map_err(|e| format!("library_count: {e}"))?;
@@ -534,6 +615,269 @@ pub async fn library_thumbnails_missing(
 /// download thumbnail extraction flow (see `media_extract_thumbnail`
 /// in lib.rs). Non-fatal if the asset row is gone (user might forget
 /// it before extraction completes) — returns Ok in that case.
+// =====================================================================
+// Projects (0.6 Phase A)
+// =====================================================================
+
+/// Sanitize a user-typed project name into a filesystem-safe slug.
+/// Used at create-time only — the slug is then stable for the
+/// project's lifetime, so renaming the display name doesn't strand
+/// folders on disk (filesystem routing lands in Phase B but the slug
+/// needs to be locked in now).
+///
+/// Rules:
+///   - Lowercase
+///   - Replace whitespace and `/`, `\` with `-`
+///   - Strip anything not `[a-z0-9_-]`
+///   - Collapse runs of `-`
+///   - Trim leading/trailing `-`
+///   - Cap at 50 chars
+///   - Fall back to "project" if empty after sanitization
+fn slugify(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut last_hyphen = false;
+    for ch in name.trim().chars() {
+        let lower = ch.to_ascii_lowercase();
+        let is_word = lower.is_ascii_alphanumeric() || lower == '_';
+        if is_word {
+            out.push(lower);
+            last_hyphen = false;
+        } else if !last_hyphen && !out.is_empty() {
+            out.push('-');
+            last_hyphen = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        return "project".to_string();
+    }
+    if out.len() > 50 {
+        out.truncate(50);
+        while out.ends_with('-') {
+            out.pop();
+        }
+    }
+    out
+}
+
+/// Ensure the slug is unique in the projects table by appending
+/// `-2`, `-3`, ... on collision. The base slug is tried first.
+async fn unique_slug(pool: &SqlitePool, base: &str) -> Result<String, sqlx::Error> {
+    let exists = |slug: &str| {
+        let pool = pool.clone();
+        let slug = slug.to_string();
+        async move {
+            let row: Option<(i64,)> =
+                sqlx::query_as("SELECT 1 FROM projects WHERE slug = ? LIMIT 1")
+                    .bind(slug)
+                    .fetch_optional(&pool)
+                    .await?;
+            Ok::<bool, sqlx::Error>(row.is_some())
+        }
+    };
+    if !exists(base).await? {
+        return Ok(base.to_string());
+    }
+    for n in 2..1000 {
+        let candidate = format!("{base}-{n}");
+        if !exists(&candidate).await? {
+            return Ok(candidate);
+        }
+    }
+    // Catastrophically unlikely — bail with a UUID suffix.
+    Ok(format!("{base}-{}", uuid::Uuid::new_v4().simple()))
+}
+
+#[tauri::command]
+pub async fn project_create(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    name: String,
+) -> Result<Project, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("project name is empty".into());
+    }
+    if trimmed.len() > 80 {
+        return Err("project name exceeds 80 chars".into());
+    }
+
+    // Pre-check display-name uniqueness (case-insensitive). The DB
+    // UNIQUE COLLATE NOCASE will catch this too, but a user-facing
+    // message is friendlier than a sqlx error string.
+    let dupe: Option<(i64,)> =
+        sqlx::query_as("SELECT 1 FROM projects WHERE name = ? COLLATE NOCASE LIMIT 1")
+            .bind(trimmed)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|e| format!("project_create dupe-check: {e}"))?;
+    if dupe.is_some() {
+        return Err(format!("project named \"{trimmed}\" already exists"));
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let slug_base = slugify(trimmed);
+    let slug = unique_slug(&state.pool, &slug_base)
+        .await
+        .map_err(|e| format!("project_create slug: {e}"))?;
+    let now = chrono::Utc::now().timestamp();
+
+    sqlx::query("INSERT INTO projects (id, name, slug, created_at) VALUES (?, ?, ?, ?)")
+        .bind(&id)
+        .bind(trimmed)
+        .bind(&slug)
+        .bind(now)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("project_create: {e}"))?;
+
+    let _ = app.emit("library:changed", ());
+
+    Ok(Project {
+        id,
+        name: trimmed.to_string(),
+        slug,
+        created_at: now,
+        asset_count: 0,
+    })
+}
+
+#[tauri::command]
+pub async fn project_list(state: State<'_, LibraryState>) -> Result<Vec<Project>, String> {
+    // LEFT JOIN keeps zero-asset projects in the result. ORDER BY
+    // created_at DESC so newest projects float up (matches the
+    // "I just made this, where is it" expectation).
+    let rows = sqlx::query_as::<_, (String, String, String, i64, i64)>(
+        r#"SELECT p.id, p.name, p.slug, p.created_at,
+                  COALESCE(COUNT(a.id), 0) AS asset_count
+           FROM projects p
+           LEFT JOIN assets a ON a.project_id = p.id
+           GROUP BY p.id
+           ORDER BY p.created_at DESC"#,
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("project_list: {e}"))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, slug, created_at, asset_count)| Project {
+            id,
+            name,
+            slug,
+            created_at,
+            asset_count,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn project_rename(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    id: String,
+    name: String,
+) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("project name is empty".into());
+    }
+    if trimmed.len() > 80 {
+        return Err("project name exceeds 80 chars".into());
+    }
+
+    // Reject duplicate (other than this row).
+    let dupe: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM projects WHERE name = ? COLLATE NOCASE AND id != ? LIMIT 1",
+    )
+    .bind(trimmed)
+    .bind(&id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| format!("project_rename dupe-check: {e}"))?;
+    if dupe.is_some() {
+        return Err(format!("project named \"{trimmed}\" already exists"));
+    }
+
+    // Slug is intentionally NOT updated on rename — keeps the folder
+    // on disk (Phase B) stable so we don't strand directories.
+    let res = sqlx::query("UPDATE projects SET name = ? WHERE id = ?")
+        .bind(trimmed)
+        .bind(&id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("project_rename: {e}"))?;
+    if res.rows_affected() == 0 {
+        return Err(format!("project {id} not found"));
+    }
+    let _ = app.emit("library:changed", ());
+    Ok(())
+}
+
+/// Move an asset between Library and a project (or vice versa).
+/// `project_id = null` returns the asset to the Library scope.
+/// Phase A: meta-only — the file on disk doesn't physically move.
+/// Phase B will pair this with an os::rename inside the library root.
+#[tauri::command]
+pub async fn asset_set_project(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    asset_id: String,
+    project_id: Option<String>,
+) -> Result<(), String> {
+    // Validate the target project exists (NULL is always valid).
+    if let Some(ref pid) = project_id {
+        let exists: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM projects WHERE id = ? LIMIT 1")
+                .bind(pid)
+                .fetch_optional(&state.pool)
+                .await
+                .map_err(|e| format!("asset_set_project lookup: {e}"))?;
+        if exists.is_none() {
+            return Err(format!("project {pid} not found"));
+        }
+    }
+    let res = sqlx::query("UPDATE assets SET project_id = ? WHERE id = ?")
+        .bind(&project_id)
+        .bind(&asset_id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("asset_set_project: {e}"))?;
+    if res.rows_affected() == 0 {
+        return Err(format!("asset {asset_id} not found"));
+    }
+    let _ = app.emit("library:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn project_delete(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    id: String,
+) -> Result<(), String> {
+    // ON DELETE SET NULL on assets.project_id means deleting a project
+    // returns its assets to the Library (project_id = NULL) rather
+    // than removing them. File system migration (move out of the
+    // project folder) is Phase B; tonight this is metadata-only.
+    let res = sqlx::query("DELETE FROM projects WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("project_delete: {e}"))?;
+    if res.rows_affected() == 0 {
+        return Err(format!("project {id} not found"));
+    }
+    let _ = app.emit("library:changed", ());
+    Ok(())
+}
+
+// =====================================================================
+// Thumbnail commands
+// =====================================================================
+
 #[tauri::command]
 pub async fn library_set_thumbnail(
     app: AppHandle,

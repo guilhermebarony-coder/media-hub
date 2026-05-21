@@ -22,6 +22,92 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-05-21 — 0.6 Phase A: project foundations (metadata-only)
+
+**Shipped:** the dual-root mental model lands, schema-first. New
+migration `004_projects.sql` adds a `projects` table and an
+`assets.project_id` column (nullable; NULL = Library). Every asset is
+in exactly one scope: Library or one specific project.
+
+**What's wired:**
+- Rust commands: `project_create / list / rename / delete` +
+  `asset_set_project` for moving an asset between scopes
+- `LibraryScope` filter on `library_list` and `library_count` —
+  tagged enum (`any` / `library` / `project { id }`) so the JSON
+  shape is unambiguous from the renderer
+- React `ActiveProjectProvider` context, persisted to localStorage
+  (`mh.activeScope.v1`). Subscribes to `library:changed` so the
+  picker refreshes when projects are created/renamed/deleted from
+  any screen
+- Top-bar picker is real now (dropdown listing Library + projects +
+  "New project…" shortcut to /projects)
+- Projects page has list, create form, rename, delete. Creating
+  auto-activates the new project (matches "I just made this, where
+  is it" reflex)
+- Library page filters by the active scope; content-header title
+  reflects the active scope name
+- Download page header shows where new downloads will be assigned
+  (metadata-level only)
+- Queue jobs capture the project assignment at enqueue time
+  (matching how transcode preset is locked at enqueue)
+- Asset drawer has a Scope dropdown so any asset can be moved
+  between Library / projects without re-downloading
+
+**What's NOT wired (intentional, Phase B):**
+- File on disk stays in `Downloads/_test/`. The `slug` column is
+  stored at create-time so Phase B can route into `Projects/<slug>/`
+  without renaming directories on rename
+- Ctrl+Space "send to Library" download shortcut — only meaningful
+  once routing actually exists. See "Ctrl+Space shortcut" note below
+- Promote / Copy / Finish Project / Reveal — also Phase B
+
+**Schema gotcha (carry from 0.5.1):** `ALTER TABLE ADD COLUMN` isn't
+idempotent in SQLite. We added `assets.project_id` as the second
+ALTER and the migration loop already swallows "duplicate column name"
+errors. Worked first try. Pattern still holds — when we hit the
+fifth ALTER it's time for a real migrations-tracking table.
+
+**Why metadata-only Phase A is the right slice:**
+- The risky cross-cutting work is the schema + Rust contract + state
+  shape. All of that landed tonight, build-verified
+- Phase B is now isolated: just file-routing in `yt_download` (and
+  the move-on-scope-change in `asset_set_project`). No more
+  user-facing types to design
+- We get a usable scope filter immediately — you can create projects
+  and start tagging assets into them tonight even though the files
+  haven't physically moved
+
+---
+
+## 2026-05-21 (parked) — Ctrl+Space "send to Library" shortcut
+
+**Owner request (2026-05-20):** when an active project is set,
+default routing should send new downloads to that project, BUT a
+keyboard shortcut like Ctrl+Space should re-route the click to
+Library instead. The reasoning: mid-project sometimes you grab a
+piece of B-roll / a background clip that doesn't belong to the
+current project — without a shortcut you'd have to switch project,
+download, switch back. The handoff design has a `⌘⇧V` modifier on
+the Download button for this.
+
+**When to build:** Phase B (file routing). The shortcut is
+meaningless without actual routing — tonight everything still lands
+in `Downloads/_test/`. Once Phase B lands, the implementation is:
+- Add a `targetScope?: LibraryScope` parameter to recordInLibrary
+- Wire a `useEffect` on the Download button that listens for
+  `keydown` with `code === "Space"` and `ctrlKey`, sets a transient
+  state "next click → Library"
+- Visual feedback: button label changes to "Download to Library"
+  while the modifier is held (matches handoff design)
+- Same for the Queue Card's "Queue all" — Ctrl+Space → queue into
+  Library regardless of active scope
+
+**Alternative:** could be a UI toggle next to the button instead of
+a keyboard-only modifier. Two clicks is still fewer than switch +
+download + switch-back. Decide when we build.
+
+---
+
 ## 2026-05-20 (parked) — Library folders (in addition to tags)
 
 **Owner note (2026-05-20):** "starting to think we're gonna need

@@ -56,11 +56,11 @@ Decided 2026-05-19. Captured here because *why* matters more than *what*.
 
 ---
 
-## Current state — 2026-05-20 (evening)
+## Current state — 2026-05-21
 
-Three days in, milestones 0.1 → 0.5 shipped end-to-end, plus a full UI
-overhaul replacing the dev-stack layout with a real app shell + routed
-screens. 14 commits on `main`.
+Four days in, milestones 0.1 → 0.5.1 shipped end-to-end. 0.6 Phase A
+(project foundations, metadata-only) shipped tonight. ~20 commits on
+`main`.
 
 What works end-to-end:
 - ✅ Tauri 2 + React 19 + TS scaffold, dark theme, 1400×900 window
@@ -85,6 +85,13 @@ What works end-to-end:
   brand + active-project picker stub + global-search stub, left nav
   (Download / Library / Projects / Settings), `react-router-dom`
   hash routing, route-based screens. Default route is `/library`.
+- ✅ **0.6 Phase A — project foundations** (metadata-only). `projects`
+  table + `assets.project_id`. ActiveProjectProvider context. Real
+  top-bar picker (Library + projects + "New project…" shortcut).
+  Projects page with create / rename / delete. Library page filters by
+  active scope. Asset drawer can move between scopes. Downloads tag
+  themselves with the active project at insert time. Files on disk
+  still land in `Downloads/_test/` — Phase B does the physical routing.
 - ✅ **Local thumbnails** — ffmpeg extracts a mid-clip frame (480px wide
   JPG q=4, ~30–80 KB) into `~/Media Hub/_thumbnails/<asset_id>.jpg` on
   every successful download. UI prefers local thumbs over remote
@@ -139,7 +146,10 @@ dev0 ──┐
      0.5.1  ✅  local thumbnails
        │
        ▼
-     0.6.0  🟡  dual-root (Library + Projects) + in-app scrubber preview
+     0.6.A  ✅  project foundations (schema, CRUD, active scope) ← metadata-only
+     0.6.B  🟡  filesystem routing + project actions (move, export, reveal)
+     0.6.C  🟡  project lifecycle (Finish Project, duplicate detection)
+     0.6.D  🟡  in-app scrubber preview
        │
        ▼
      0.7.0  🟡  Twitter/X support + platform abstraction

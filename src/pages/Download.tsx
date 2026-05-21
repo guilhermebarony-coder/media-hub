@@ -17,6 +17,7 @@ import {
   revealFile,
   videoCodecFor,
 } from "../lib/library";
+import { useActiveProject } from "../lib/activeProject";
 import type {
   DownloadResult,
   FormatOption,
@@ -32,14 +33,19 @@ import { TRANSCODE_PRESETS } from "../lib/types";
 // Page wrapper
 // =====================================================================
 export default function DownloadPage() {
+  const { scope } = useActiveProject();
+  const target =
+    scope.kind === "library" ? "Library" : `project · ${scope.name}`;
   return (
     <div className="content">
       <div className="content-header">
         <div className="ch-title">Download</div>
-        <span className="ch-meta">paste · pick · trim · transcode</span>
+        <span className="ch-meta">
+          saving to <strong style={{ color: "var(--text-0)" }}>{target}</strong>
+        </span>
         <div className="ch-spacer" />
         <span className="mono faint" style={{ fontSize: 11 }}>
-          single-URL above · batch queue below
+          change scope from the top-bar picker
         </span>
       </div>
       <div className="content-body">
@@ -56,6 +62,7 @@ export default function DownloadPage() {
 // Metadata + single-URL download
 // =====================================================================
 function MetadataCard() {
+  const { scope } = useActiveProject();
   const [url, setUrl] = useState("");
   const [meta, setMeta] = useState<VideoMetadata | null>(null);
   const [loading, setLoading] = useState(false);
@@ -223,6 +230,10 @@ function MetadataCard() {
         fps: selectedFormat.fps,
         transcoded_to: usedPreset === "none" ? null : usedPreset,
         thumbnail_url: meta?.thumbnail ?? null,
+        // Phase A: route into the active scope at the metadata level.
+        // The file on disk is still under Downloads/_test/ — Phase B
+        // moves it into the right project folder.
+        project_id: scope.kind === "project" ? scope.id : null,
       });
       if (assetId) {
         void attachLocalThumbnail(assetId, finalRes.path, effectiveDuration);
@@ -515,6 +526,10 @@ type QueueJob = {
   url: string;
   status: QueueStatus;
   transcodePreset: TranscodePreset;
+  /** Project id captured at enqueue time. NULL = Library. Locked at
+   *  enqueue so changing the active scope mid-batch doesn't reroute
+   *  already-queued jobs. */
+  projectId: string | null;
   title?: string;
   channel?: string;
   thumbnail?: string | null;
@@ -576,6 +591,7 @@ const cpuTranscodeSem = new Semaphore(1);
 const gpuTranscodeSem = new Semaphore(1);
 
 function QueueCard() {
+  const { scope } = useActiveProject();
   const [urlsInput, setUrlsInput] = useState("");
   const [jobs, setJobs] = useState<QueueJob[]>(() => loadQueueFromStorage());
   const [batchTranscode, setBatchTranscode] = useState<TranscodePreset>("none");
@@ -760,6 +776,9 @@ function QueueCard() {
       fps: bestVideo?.fps ?? null,
       transcoded_to: usedPreset === "none" ? null : usedPreset,
       thumbnail_url: meta.thumbnail,
+      // Project assignment is captured at enqueue time below; we
+      // resolve it from the job, not the live `scope` ref.
+      project_id: job.projectId ?? null,
     });
     if (assetId) {
       void attachLocalThumbnail(assetId, finalPath, meta.duration_sec ?? null);
@@ -773,11 +792,17 @@ function QueueCard() {
       .filter((s) => s.length > 0);
     if (urls.length === 0) return;
     const presetSnapshot = batchTranscode;
+    // Snapshot the project assignment too — same reasoning as the
+    // preset capture: the user's expectation is that what they
+    // pressed Queue with is what runs, even if they switch scope
+    // afterward.
+    const projectSnapshot = scope.kind === "project" ? scope.id : null;
     const newJobs: QueueJob[] = urls.map((url) => ({
       id: newJobId(),
       url,
       status: "queued",
       transcodePreset: presetSnapshot,
+      projectId: projectSnapshot,
     }));
     setJobs((prev) => [...prev, ...newJobs]);
     setUrlsInput("");

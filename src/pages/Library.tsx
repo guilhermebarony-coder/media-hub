@@ -4,6 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Icon } from "../lib/icons";
 import { fmtBytes, fmtDuration } from "../lib/format";
 import { attachLocalThumbnail, revealFile, thumbnailSrc } from "../lib/library";
+import { scopeToFilter, useActiveProject } from "../lib/activeProject";
 import type { Asset, LibraryFilters, TagCount } from "../lib/types";
 
 type Bucket = "today" | "week" | "month" | "older";
@@ -20,6 +21,7 @@ type Bucket = "today" | "week" | "month" | "older";
  * (added-date, duration).
  */
 export default function LibraryPage() {
+  const { scope } = useActiveProject();
   const [assets, setAssets] = useState<Asset[]>([]);
   const [count, setCount] = useState<number>(0);
   const [err, setErr] = useState<string | null>(null);
@@ -43,14 +45,16 @@ export default function LibraryPage() {
 
   async function refresh() {
     try {
+      const scopeFilter = scopeToFilter(scope);
       const filters: LibraryFilters = {
         query: debouncedQuery || null,
         tags: activeTags.size > 0 ? Array.from(activeTags) : null,
+        scope: scopeFilter,
         limit: 500,
       };
       const [list, n, tags] = await Promise.all([
         invoke<Asset[]>("library_list", { filters }),
-        invoke<number>("library_count"),
+        invoke<number>("library_count", { scope: scopeFilter }),
         invoke<TagCount[]>("tag_list_all"),
       ]);
       setAssets(list);
@@ -65,7 +69,7 @@ export default function LibraryPage() {
   useEffect(() => {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedQuery, activeTags]);
+  }, [debouncedQuery, activeTags, scope]);
 
   // Event-driven refresh — Rust emits library:changed after every
   // insert/delete/tag mutation. No polling.
@@ -170,9 +174,18 @@ export default function LibraryPage() {
   return (
     <div className="content">
       <div className="content-header">
-        <div className="ch-title">Library</div>
+        <div className="ch-title">
+          {scope.kind === "library" ? "Library" : scope.name}
+        </div>
         <span className="ch-meta">
-          {count.toLocaleString()} clips · {fmtBytes(totalSize(assets))}
+          {scope.kind === "project" && (
+            <>
+              <span className="mono faint">project</span>
+              <span className="ch-sep"> · </span>
+            </>
+          )}
+          {count.toLocaleString()} {count === 1 ? "clip" : "clips"} ·{" "}
+          {fmtBytes(totalSize(assets))}
         </span>
         <div className="ch-spacer" />
         <div className="ch-tabs">
@@ -326,7 +339,11 @@ export default function LibraryPage() {
 
           <div className="lib-grid-scroll">
             {filtered.length === 0 ? (
-              <EmptyState hasFilters={hasFilters} totalCount={count} />
+              <EmptyState
+                hasFilters={hasFilters}
+                totalCount={count}
+                scopeName={scope.kind === "project" ? scope.name : null}
+              />
             ) : (
               <div className="lib-grid">
                 {filtered.map((a) => (
@@ -516,15 +533,35 @@ function LibCard({
   );
 }
 
-function EmptyState({ hasFilters, totalCount }: { hasFilters: boolean; totalCount: number }) {
+function EmptyState({
+  hasFilters,
+  totalCount,
+  scopeName,
+}: {
+  hasFilters: boolean;
+  totalCount: number;
+  scopeName: string | null;
+}) {
   if (totalCount === 0) {
     return (
       <div className="empty">
         <Icon.library width={28} height={28} style={{ color: "var(--text-3)" }} />
-        <h3>Your library is empty</h3>
+        <h3>
+          {scopeName ? `"${scopeName}" is empty` : "Your library is empty"}
+        </h3>
         <p>
-          Head to the <strong>Download</strong> tab and grab your first clip.
-          Every successful download lands here automatically.
+          {scopeName ? (
+            <>
+              No clips have been downloaded into this project yet. Folder
+              routing arrives next session (Phase B); for now you can move
+              existing assets into projects from the asset drawer.
+            </>
+          ) : (
+            <>
+              Head to the <strong>Download</strong> tab and grab your first clip.
+              Every successful download lands here automatically.
+            </>
+          )}
         </p>
       </div>
     );
@@ -554,6 +591,8 @@ function AssetDrawer({
   knownTags: TagCount[];
   onClose: () => void;
 }) {
+  const { projects } = useActiveProject();
+
   // Close on Escape
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -562,6 +601,14 @@ function AssetDrawer({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  async function moveTo(projectId: string | null) {
+    try {
+      await invoke("asset_set_project", { assetId: asset.id, projectId });
+    } catch (e) {
+      alert(`Move failed: ${String(e)}`);
+    }
+  }
 
   async function del() {
     if (!confirm(`Forget "${asset.title}" from the library?\n\n(The file on disk is NOT deleted.)`)) return;
@@ -632,6 +679,28 @@ function AssetDrawer({
             <dt>Path</dt>
             <dd style={{ fontSize: 10.5 }}>{asset.file_path}</dd>
           </dl>
+
+          <div>
+            <div className="mono faint" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
+              Scope
+            </div>
+            <select
+              className="field-select"
+              style={{ width: "100%", height: 30 }}
+              value={asset.project_id ?? "__library__"}
+              onChange={(e) => {
+                const v = e.target.value;
+                void moveTo(v === "__library__" ? null : v);
+              }}
+            >
+              <option value="__library__">Library</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
 
           <div>
             <div className="mono faint" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
