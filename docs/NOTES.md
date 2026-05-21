@@ -10,6 +10,52 @@ written so future-me (or future-Claude) can pick it up cold.
 
 ---
 
+## 2026-05-20 (evening) — UI shell: react-router + handoff tokens
+
+**Shipped:** the dev-stack layout (three cards in a column under a
+single header) is gone. Replaced with a real shell mirroring the
+`design-reference/Media Hub Wireframes.html` spec: 44px top bar
+(brand · active-project picker · search · settings), 216px left nav
+(Workspace: Download/Library/Projects · System: Settings), routed
+content area. `react-router-dom` with **HashRouter** — `tauri://` in
+prod and `http://localhost` in dev have different origins, hash
+routing sidesteps that completely.
+
+**Design tokens:** lifted verbatim from the handoff CSS (bg-0..4,
+text-0..3, line/line-hi, mono/sans, ok/err semantic colors) with one
+swap — the handoff's amber accent (`oklch(0.78 0.13 75)`) is replaced
+by our lime `#c7f154`. Same role, different identity. Brand square
+in the top-left is lime-stroked. Bundled Geist + Geist Mono via
+`@fontsource` so no network at runtime.
+
+**Why not shadcn (yet):** the handoff is pure-CSS components, not
+Tailwind utilities. Adding shadcn would require Tailwind + postcss
+config + migrating every existing class. None of the screens we
+needed (Download, Library, Projects, Settings) used primitives
+complex enough to be worth that cost. Defer until we actually need
+a Dialog or Combobox we don't want to hand-roll.
+
+**Library page (real grid):** auto-fill 220px column grid. Cards
+have placeholder thumbnail (diagonal-stripe) + title + sub-line +
+up-to-3 tag chips. Sidebar facets for **Source, Tags, Added** with
+counts from the SQL-filtered set (reflect current context). Search
+box in the toolbar (debounced 150ms, event-driven refresh on
+`library:changed`). Selecting a card opens a **slide-over drawer**
+from the right with full metadata table, inline tag editor,
+Reveal-in-Explorer, Forget. `Escape` closes.
+
+**Deliberate gaps:** thumbnails are placeholders (need ffmpeg
+mid-clip frame extract on download complete — separate task). The
+List/Grid toggle shows both tabs but List is disabled. cmd-K
+palette is decorative. Projects picker is decorative. Settings
+panel is a stub. Each gap is logged in ROADMAP "deferred" so they
+don't get lost.
+
+**Default route is `/library`:** "open app → see what you have →
+click Download when you need more" is the actual workflow.
+
+---
+
 ## 2026-05-19 — Scratch-preview tier (idea, possibly killer)
 
 **The idea:** Before any "real" download, fetch a tiny low-res proxy

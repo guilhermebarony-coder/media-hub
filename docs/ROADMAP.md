@@ -56,10 +56,11 @@ Decided 2026-05-19. Captured here because *why* matters more than *what*.
 
 ---
 
-## Current state — 2026-05-20
+## Current state — 2026-05-20 (evening)
 
-Two days in, milestones 0.1 → 0.4 shipped, 0.5 foundation + tags + search
-shipped (proper library page UI deferred). 13 commits on `main`.
+Three days in, milestones 0.1 → 0.5 shipped end-to-end, plus a full UI
+overhaul replacing the dev-stack layout with a real app shell + routed
+screens. 14 commits on `main`.
 
 What works end-to-end:
 - ✅ Tauri 2 + React 19 + TS scaffold, dark theme, 1400×900 window
@@ -80,16 +81,19 @@ What works end-to-end:
 - ✅ Library (SQLite + sqlx): every download writes a row; tags with
   inline chip editor + autocomplete; tag-filter cloud; LIKE search with
   150ms debounce; event-driven refresh via `library:changed`
-
-What's partially done (counts as 0.5 but not all of it):
-- ✅ assets schema + insert/list/delete commands
-- ✅ tags + asset_tags schema with CASCADE delete
-- ✅ Per-asset tag editor in dev UI
-- ✅ Tag cloud filter + free-text search
-- 🟡 Library UI is the "dev view" — functional but not the proper grid
-  from the design reference. Real library page lands with the UI overhaul.
+- ✅ **App shell** — Geist + Geist Mono, lime accent, top bar with
+  brand + active-project picker stub + global-search stub, left nav
+  (Download / Library / Projects / Settings), `react-router-dom`
+  hash routing, route-based screens. Default route is `/library`.
+- ✅ **Library grid page** — proper grid (auto-fill 220px) replacing
+  the dev card. Sidebar facets (Source / Tags / Added) with live
+  counts that reflect the SQL-filtered set. Active-filter chip row
+  with one-click removal. Asset detail drawer (slide-over from right)
+  with full metadata table, tag editor, Reveal-in-Explorer, Forget.
 
 What's deferred (not done, won't be done this session):
+- 🟡 Thumbnails on library cards — needs ffmpeg mid-clip frame extract
+  on download complete; cards show diagonal-stripe placeholder for now
 - 🟡 Pause / resume in batch queue (Windows process signaling)
 - 🟡 Export to project folder (needs `@tauri-apps/plugin-dialog` for
   folder picker — separate plugin install + capability)
@@ -97,8 +101,10 @@ What's deferred (not done, won't be done this session):
   settings panel which doesn't exist)
 - 🟡 FTS5 search upgrade (current LIKE is fine for <10k assets; revisit
   if needed)
-- 🟡 Proper UI overhaul (top bar, nav, route-based screens) — pairs
-  naturally with the library page rebuild
+- 🟡 cmd-K global search palette (top-bar search box is decorative)
+- 🟡 List view toggle in library (Grid/List tabs; List disabled for now)
+- 🟡 Projects feature — picker in top bar is decorative; Projects page
+  is a stub. Real dual-root + active-project switching lands with 0.6
 
 ---
 
