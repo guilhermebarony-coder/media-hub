@@ -56,11 +56,20 @@ Decided 2026-05-19. Captured here because *why* matters more than *what*.
 
 ---
 
-## Current state — 2026-05-21
+## Current state — 2026-05-21 (post-lunch replan)
 
-Four days in, milestones 0.1 → 0.5.1 shipped end-to-end. 0.6 Phase A
-(project foundations, metadata-only) shipped tonight. ~20 commits on
-`main`.
+Four days in. **0.1 → 0.6 complete end-to-end.** ~30 commits on `main`.
+
+**Path to 1.0 — replanned post 0.6:**
+
+| Order | Milestone | Why next |
+|-------|-----------|----------|
+| **1** | 0.6.1 multi-segment | Bandwidth-saving workflow we keep wanting. Small. ~1 session. |
+| **2** | 0.8 packaging + settings | Cookies fix for age-restricted YT. Installer crosses "give to a friend" line. ~2-3 sessions. |
+| **3** | 1.0 release | QA pass, README, tag. ~1-2 sessions. |
+| post-1.0 | 0.7 / 1.x platforms | Twitter / TikTok / etc. Owner: "nice but not priority." Better to design the trait against 2+ known platforms. |
+
+See decision log entry **2026-05-21 — Replan: 0.6.1 → 0.8 → 1.0, 0.7 post-1.0**.
 
 What works end-to-end:
 - ✅ Tauri 2 + React 19 + TS scaffold, dark theme, 1400×900 window
@@ -170,6 +179,18 @@ dev0 ──┐
      0.6.B  ✅  filesystem routing + physical move + delete-from-disk + Ctrl override
      0.6.C  ✅  duplicate detection + Finish Project (OS trash)
      0.6.D  ✅  in-app scrubber preview (HTML5 video + I/O markers + keyboard)
+       │
+       ▼
+     0.6.1  🟡  multi-segment marking + library sibling indicator   ← NEXT
+       │
+       ▼
+     0.8.0  🟡  packaging, polish, public-ready (cookies, installer, onboarding)
+       │
+       ▼
+     1.0.0  🟡  release
+       │
+       ▼  post-1.0
+     1.x    🟡  platform abstraction + Twitter/X/TikTok (was 0.7)
        │
        ▼
      0.7.0  🟡  Twitter/X support + platform abstraction
@@ -490,7 +511,57 @@ together is half the work of doing them separately.
 
 ---
 
-### 0.7.0 — Twitter/X + platform abstraction *(~4–6 dev builds)*
+### 0.6.1 — Multi-segment marking + library sibling indicator *(~1–2 dev builds)*
+
+**Goal:** Mark N segments from a single source, download the source
+**once**, ffmpeg-trim into N independent assets. Library makes it
+obvious when multiple clips share a source.
+
+**Scope (in):**
+
+- Scrubber UI: hitting `I`/`O` builds up an array of `{in, out}` pairs
+  instead of replacing a single pair. Visual: scrub bar shows all
+  completed segments as green chunks + the current in-progress
+  segment in a lighter tint
+- "Segments" list below the bar with `<title> <in→out> <duration> [×]`
+  per row. Click a row to seek the playhead to its In.
+- Download button label scales: "Download" / "Download 3 segments"
+- `yt_download` extends to accept `segments: Vec<(f64, f64)>`. When
+  set, downloads source once, ffmpeg `-c copy` trims each segment,
+  deletes the source.
+- Each segment lands as its own asset row in the library, sharing
+  `source_url` across siblings.
+- `library_siblings(source_url, exclude_id)` returns peer assets.
+- Library card: a small `#1/N` chip when an asset has siblings.
+- Asset drawer: "Other clips from this source" section with thumbnails
+  of sibling assets (click → opens that asset's drawer).
+
+**Out of scope (cut):**
+
+- ❌ Drag-to-reorder segments (just append-only)
+- ❌ Per-segment transcode preset (whole batch uses one preset)
+- ❌ Per-segment file naming overrides (auto-named from In/Out)
+- ❌ Combining segments from different sources into one batch
+
+**Exit criteria:**
+
+- [ ] Mark 3 segments on a 10-min video, click Download once,
+      receive 3 trimmed files
+- [ ] Library page shows the 3 cards each with `#N/3` sibling chip
+- [ ] Open any of the 3 in the drawer, see the other 2 in
+      "Other clips from this source"
+- [ ] Source file is cleaned up after successful trim
+- [ ] One-segment download still works unchanged (back-compat)
+
+---
+
+### 0.7.0 — Twitter/X + platform abstraction *(~4–6 dev builds)*  *(deferred to post-1.0)*
+
+**Status (2026-05-21):** moved to post-1.0. Owner: "twitter/x is
+necessary at some point, but no rush, it's not my main source." See
+decision log. The original scope below stays for when we pick it up
+— probably as 1.1 or 1.2 once 1.0 has shipped and real-world usage
+informs which other platforms (TikTok, Vimeo, Reddit) matter.
 
 **Goal:** Twitter/X public tweets work end-to-end through every pipeline
 above. Architecture refactored to a `Platform` trait so adding the next
@@ -601,14 +672,38 @@ decision picked.
 Captured here so we don't lose ideas, but explicitly **not** scoped
 until 1.0 ships:
 
-- v1.1 — whatever the author actually needs after using 1.0 daily
-- v1.2 — Envato Elements (authenticated session, careful ToS read)
-- v1.3 — additional platforms (Vimeo, TikTok, Reddit — based on use)
-- v1.5 — watched-folders mode for the library
-- v2.0 — chiral-network integration (drop clips directly into a Chiral
-  project's source folder; possibly Resolve media-pool import via the
-  same Python bridge Chiral already uses)
-- 2.x — duplicate detection, smart playlists, custom transcode presets
+**1.1 — platform abstraction + first new platform** (was 0.7)
+- `Platform` trait refactor in Rust (YouTube + N impls)
+- Twitter/X public tweets (no auth)
+- URL routing on paste
+- Designed against ≥2 real platforms, not guessed
+
+**1.2 — workflow polish from real usage**
+- Whatever the author actually needs after using 1.0 daily
+- Likely candidates: command palette (Ctrl+Space, see NOTES), drag
+  cards to NLE, color labels / star rating / per-asset notes, source
+  attribution export (credits TXT for video descriptions)
+
+**1.3 — more platforms (use-driven)**
+- TikTok, Vimeo, Reddit — whichever shows up in actual workflow
+- Envato Elements stays risky (no API, ToS-sensitive) — re-evaluate
+
+**1.5 — library structure expansions**
+- Library folders alongside tags (parked in NOTES)
+- Watched-folders mode
+- Eagle integration (folder export → API push)
+
+**2.0 — chiral-network integration**
+- Drop clips directly into a Chiral project's source folder
+- Possibly Resolve media-pool import via Chiral's Python bridge
+
+**2.x — long-tail**
+- Smart playlists / saved searches
+- Custom transcode presets
+- Cross-library duplicate detection (more than just URL-match)
+- Burned-in subtitle detection
+- Export library subset as CSV
+- `mediahub://` custom URL protocol handler
 
 Anything more speculative than this belongs in `docs/NOTES.md` under
 "parking lot," not the roadmap.
@@ -618,6 +713,26 @@ Anything more speculative than this belongs in `docs/NOTES.md` under
 ## Decision log
 
 Newest first. Every entry: what we decided, when, and *why*.
+
+### 2026-05-21 — Replan: 0.6.1 → 0.8 → 1.0, 0.7 post-1.0
+
+- Decision: after shipping 0.6, the path to 1.0 is **0.6.1**
+  (multi-segment marking + sibling indicator) → **0.8** (packaging +
+  settings) → **1.0** (release). The original 0.7 (Twitter/X +
+  platform abstraction) moves to **post-1.0** as 1.1.
+- Why:
+  - Owner's signal: Twitter is "necessary at some point, but no rush,
+    it's not my main source." YouTube covers 95%+ of editorial B-roll.
+  - Multi-segment is a real bandwidth-saving workflow improvement
+    that came up organically — "wanna be able to cut multiple parts
+    before downloading instead of redownloading per cut."
+  - 0.8 (cookies + settings + installer) unlocks age-restricted YT
+    **today** AND crosses the "I'd give this to a friend" line.
+  - 0.7 (Platform trait) is architecturally important but designs
+    better against ≥2 real platforms than against YT + speculative
+    Twitter. Deferring lets us shape the abstraction around concrete
+    usage (TikTok + Twitter? Vimeo + Reddit?) instead of guessing.
+- Trade-off: ship date for Twitter slips. Owner explicitly accepted.
 
 ### 2026-05-20 — Milestone renumbering after consolidating transcode + UI
 

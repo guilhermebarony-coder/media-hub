@@ -22,7 +22,7 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
-## 2026-05-21 (parked) — Command palette (Ctrl+Space)
+## 2026-05-21 (parked, target 1.2) — Command palette (Ctrl+Space)
 
 **Owner note (2026-05-21):** wants to reserve Ctrl+Space for a future
 **fx-console / search palette**. The Ctrl-only override for "send to
@@ -55,7 +55,7 @@ the library gets big enough that finding things is painful.
 
 ---
 
-## 2026-05-21 (parked) — Eagle integration / inspiration
+## 2026-05-21 (parked, target 1.5) — Eagle integration / inspiration
 
 **Owner note (2026-05-21):** "we can get some of the library controls
 from eagle app, and maybe even do a integration somehow, being able
@@ -106,7 +106,11 @@ worth borrowing or directly integrating with.
 
 ---
 
-## 2026-05-21 (parked) — File management vision
+## 2026-05-21 (partially shipped) — File management vision
+
+**Status (2026-05-21 update):** ✅ #1 delete-from-disk shipped in Phase B.
+🟡 #2 drag-to-NLE → target 1.2. ✅ #3 NLE watch-folder works today
+(point your NLE at `Projects/<name>/raw/`); needs docs in 0.8 onboarding.
 
 **Owner notes (2026-05-21):** "we also need a good way to manage our
 files properly, wanna be able to delete them from directory from the
@@ -165,7 +169,7 @@ document it in a "Set up your NLE" onboarding section (0.8).
 
 ---
 
-## 2026-05-21 (parked) — Age-restricted YouTube videos / cookies
+## 2026-05-21 (parked, target 0.8) — Age-restricted YouTube videos / cookies
 
 **The bug (2026-05-21):** age-restricted YouTube URLs (e.g. game
 trailers with violence flags) fail with:
@@ -443,36 +447,7 @@ fifth ALTER it's time for a real migrations-tracking table.
 
 ---
 
-## 2026-05-21 (parked) — Ctrl+Space "send to Library" shortcut
-
-**Owner request (2026-05-20):** when an active project is set,
-default routing should send new downloads to that project, BUT a
-keyboard shortcut like Ctrl+Space should re-route the click to
-Library instead. The reasoning: mid-project sometimes you grab a
-piece of B-roll / a background clip that doesn't belong to the
-current project — without a shortcut you'd have to switch project,
-download, switch back. The handoff design has a `⌘⇧V` modifier on
-the Download button for this.
-
-**When to build:** Phase B (file routing). The shortcut is
-meaningless without actual routing — tonight everything still lands
-in `Downloads/_test/`. Once Phase B lands, the implementation is:
-- Add a `targetScope?: LibraryScope` parameter to recordInLibrary
-- Wire a `useEffect` on the Download button that listens for
-  `keydown` with `code === "Space"` and `ctrlKey`, sets a transient
-  state "next click → Library"
-- Visual feedback: button label changes to "Download to Library"
-  while the modifier is held (matches handoff design)
-- Same for the Queue Card's "Queue all" — Ctrl+Space → queue into
-  Library regardless of active scope
-
-**Alternative:** could be a UI toggle next to the button instead of
-a keyboard-only modifier. Two clicks is still fewer than switch +
-download + switch-back. Decide when we build.
-
----
-
-## 2026-05-20 (parked) — Library folders (in addition to tags)
+## 2026-05-20 (parked, target 1.5) — Library folders (in addition to tags)
 
 **Owner note (2026-05-20):** "starting to think we're gonna need
 folders to organize the library besides the tags, i'll sit on it but
@@ -513,25 +488,6 @@ them in."
 
 **When to revisit:** owner will surface this. Pinged in this session
 to keep the idea from disappearing into chat.
-
----
-
-## 2026-05-20 (parked) — Download page header copy reads weird
-
-**The page-header subtitle "paste · pick · trim · transcode"** sits
-next to the "Download" title and reads more like a stage indicator
-than a useful label. Owner: "this words seem weird, either we change
-or remove, can decide when we change the UI tho."
-
-**Decision:** parked. Revisit when we do the Download page redesign
-(handoff `screen-download.jsx` layout) — that pass will rework the
-content-header anyway, so changing the copy in isolation now is
-wasted churn.
-
-**Candidate replacements to consider:**
-- Remove entirely (let the page title carry it)
-- Replace with active-state info ("Queue: 3 active · 1 done")
-- Replace with destination ("Saving to: Library" / active project)
 
 ---
 
@@ -1278,19 +1234,46 @@ similar pre-muxed row for tests.
 
 ---
 
-## Parking lot (uncategorized ideas, drop in here as they surface)
+## Parking lot (categorized by target milestone)
 
-- Bandwidth throttle in settings (single global limit, applies across queue)
-- Per-platform format-preset memory (last format chosen for YouTube stays sticky)
-- Auto-rename rule presets (a few common patterns shipped, not just
-  freeform tokens)
-- "Mark for re-download at higher quality" — when you grabbed a 480p
-  proxy and want the real thing later
-- Dark mode (just inherit from OS; no separate light/dark toggle)
-- Export library subset as CSV (for inventory / handoff to clients)
-- Detect when a downloaded video has burned-in subtitles and warn
-  (some YouTube videos have hardcoded captions; bad for editing)
-- "Source attribution" export — generate a credits-list TXT/CSV of
+When a parking-lot item gets picked up, it earns its own dated NOTES
+section above. When milestones converge, the corresponding ROADMAP
+section absorbs the item. New uncategorized ideas → add to **? open**
+and we'll triage next pass.
+
+### Target 0.8 (packaging + settings)
+
+- **Auto-rename rule presets** — a few common patterns shipped
+  (`{channel} - {title}`, `{date} - {title}`, etc.) alongside the
+  freeform token field
+- **Bandwidth throttle in settings** — single global limit applied
+  across the queue (yt-dlp's `--limit-rate` flag)
+- **Per-platform format-preset memory** — last format chosen for
+  YouTube stays sticky on next paste
+
+### Target 1.2 (workflow polish from real usage)
+
+- **"Mark for re-download at higher quality"** — when you grabbed a
+  480p proxy and want the real thing later. Adds a button on the
+  asset drawer that re-runs the download with a different format
+- **Source attribution export** — generate a credits-list TXT/CSV of
   all clips used in a project, for video descriptions / due diligence
-- Custom URL protocol handler (`mediahub://`) — possibly subsumes
-  browser extension for the 80% case
+- **Color labels** — Eagle-inspired 5-color palette per asset for
+  fast at-a-glance status (review / approved / hero / etc.)
+- **Star rating + per-asset notes** — also Eagle-inspired
+
+### Target 2.x (long tail)
+
+- **Detect burned-in subtitles** and warn (some YouTube videos have
+  hardcoded captions; bad for editing)
+- **Export library subset as CSV** — for inventory / handoff to clients
+- **Custom URL protocol handler** (`mediahub://`) — possibly subsumes
+  the browser extension for the 80% case
+
+### ? open
+
+(empty — drop new uncategorized ideas here as they surface)
+
+### Cut (decided no)
+
+- Dark mode toggle — we're dark, OS-inherit, no work needed
