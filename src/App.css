@@ -1431,7 +1431,23 @@ textarea.field-input {
   font-size: 11px;
   padding: 4px 8px;
   border-radius: 3px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
+.scrubber-error-retry {
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  padding: 2px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.scrubber-error-retry:hover { background: rgba(255, 255, 255, 0.3); }
 
 .scrubber-transport {
   display: flex;

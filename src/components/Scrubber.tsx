@@ -100,24 +100,70 @@ export function Scrubber(props: ScrubberProps) {
       }
     };
     const onError = () => {
-      // The video element's error is opaque (1-4 codes that map to
-      // generic categories). Surface a generic message — the user's
-      // fallback is the text input below.
-      setVideoErr("playback failed — use the text inputs below");
+      // The video element's error is opaque (codes 1-4 mapping to
+      // generic categories: aborted / network / decode / src not
+      // supported). Most of what we see in practice is "seeked past
+      // a not-yet-buffered range and CDN choked" — recoverable by
+      // re-loading the same URL.
+      setVideoErr("playback failed — retry or use manual entry below");
+    };
+    const onCanPlay = () => {
+      // Recovered from a previous error (e.g. user clicked Retry
+      // or the network blip cleared). Drop the message.
+      setVideoErr(null);
     };
     v.addEventListener("timeupdate", onTime);
     v.addEventListener("play", onPlay);
     v.addEventListener("pause", onPause);
     v.addEventListener("loadedmetadata", onLoaded);
     v.addEventListener("error", onError);
+    v.addEventListener("canplay", onCanPlay);
     return () => {
       v.removeEventListener("timeupdate", onTime);
       v.removeEventListener("play", onPlay);
       v.removeEventListener("pause", onPause);
       v.removeEventListener("loadedmetadata", onLoaded);
       v.removeEventListener("error", onError);
+      v.removeEventListener("canplay", onCanPlay);
     };
   }, [streamUrl]);
+
+  /**
+   * Re-attempt playback after an error. Two recovery paths:
+   *   1. Same URL — cheapest, handles transient network blips. We
+   *      call v.load() to reset the element's state machine and
+   *      let it re-request the URL.
+   *   2. Re-resolve URL — when the signed URL has expired (rare in
+   *      under an hour but possible). Forces a new `yt-dlp -g`.
+   *
+   * Try #1 first; if the error fires again on the same URL within
+   * a few seconds, the user can hit Retry again to force #2.
+   */
+  const retryAttemptRef = useRef(0);
+  function retryPlayback() {
+    setVideoErr(null);
+    retryAttemptRef.current++;
+    const v = videoRef.current;
+    if (retryAttemptRef.current >= 2) {
+      // Second retry — re-resolve the stream URL from scratch.
+      retryAttemptRef.current = 0;
+      setStreamUrl(null);
+      setResolving(true);
+      invoke<StreamUrl>("yt_resolve_stream_url", { url: sourceUrl })
+        .then((res) => setStreamUrl(res.url))
+        .catch((e) => setStreamErr(String(e)))
+        .finally(() => setResolving(false));
+      return;
+    }
+    // First retry — just reload the existing source.
+    if (v) {
+      v.load();
+      void v.play().catch(() => {
+        // Autoplay can fail without user interaction — that's fine,
+        // the user just clicked Retry so they'll click play next.
+      });
+    }
+  }
 
   // Global keyboard shortcuts. We deliberately listen on document
   // (not the video element) so the user can keep the URL input
@@ -238,7 +284,14 @@ export function Scrubber(props: ScrubberProps) {
                 : "Fetch metadata to enable scrubbing."}
           </div>
         )}
-        {videoErr && <div className="scrubber-error">{videoErr}</div>}
+        {videoErr && (
+          <div className="scrubber-error">
+            <span>{videoErr}</span>
+            <button type="button" className="scrubber-error-retry" onClick={retryPlayback}>
+              Retry
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Transport bar */}
