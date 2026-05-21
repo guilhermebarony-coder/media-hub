@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 // =====================================================================
@@ -495,15 +495,50 @@ pub async fn library_delete(
     app: AppHandle,
     state: State<'_, LibraryState>,
     id: String,
+    delete_file: Option<bool>,
 ) -> Result<(), String> {
-    // Remove the row only. File on disk is left alone — the user can
-    // manually delete it from Explorer/Finder. asset_tags rows go via
-    // ON DELETE CASCADE.
+    // Default behavior (delete_file = false / None): remove only the
+    // DB row. File on disk is left alone — the user can manually
+    // delete it from Explorer/Finder. asset_tags rows + project_id
+    // refs go via ON DELETE CASCADE / SET NULL.
+    //
+    // With delete_file = true: also remove the file. We grab the
+    // path BEFORE the DELETE so we still have it after the row is
+    // gone. Missing files are non-fatal (the row is gone anyway —
+    // arguably the file was already cleaned up out-of-band).
+    let should_delete_file = delete_file.unwrap_or(false);
+    let path: Option<(String,)> = if should_delete_file {
+        sqlx::query_as("SELECT file_path FROM assets WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|e| format!("library_delete fetch path: {e}"))?
+    } else {
+        None
+    };
+
     sqlx::query("DELETE FROM assets WHERE id = ?")
         .bind(&id)
         .execute(&state.pool)
         .await
         .map_err(|e| format!("library_delete: {e}"))?;
+
+    if let Some((file_path,)) = path {
+        if let Err(e) = std::fs::remove_file(&file_path) {
+            // Don't fail the whole op — DB row is gone, that's the
+            // primary user-visible action. Just warn in logs.
+            eprintln!("library_delete: removing {file_path}: {e}");
+        }
+        // Best-effort thumbnail cleanup too.
+        if let Ok(home) = app.path().home_dir() {
+            let thumb = home
+                .join("Media Hub")
+                .join("_thumbnails")
+                .join(format!("{id}.jpg"));
+            let _ = std::fs::remove_file(thumb);
+        }
+    }
+
     let _ = app.emit("library:changed", ());
     Ok(())
 }
@@ -615,6 +650,87 @@ pub async fn library_thumbnails_missing(
 /// download thumbnail extraction flow (see `media_extract_thumbnail`
 /// in lib.rs). Non-fatal if the asset row is gone (user might forget
 /// it before extraction completes) — returns Ok in that case.
+// =====================================================================
+// Filesystem layout helpers (0.6 Phase B)
+// =====================================================================
+
+/// Look up a project's slug from its id. Returns None if the project
+/// doesn't exist (caller decides whether to fail or fall back).
+async fn project_slug_for(pool: &SqlitePool, id: &str) -> Result<Option<String>, sqlx::Error> {
+    let row: Option<(String,)> = sqlx::query_as("SELECT slug FROM projects WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|(s,)| s))
+}
+
+/// Compute the on-disk download directory for a given scope.
+///
+///   None         → <home>/Media Hub/Library/raw/
+///   Some(id)     → <home>/Media Hub/Projects/<slug>/raw/
+///
+/// The `raw/` subfolder gives us room for future siblings without
+/// reorganizing — e.g. `proxies/` for 0.6 scrubber low-res files,
+/// `exports/` if we ever generate user-facing exports. Resolve / NLEs
+/// pointed at the project root pick up `raw/` naturally.
+///
+/// If `project_id` is Some but the project no longer exists, falls
+/// back to Library. Defensive — better than failing the download.
+pub async fn resolve_download_dir(
+    state: &LibraryState,
+    home: &Path,
+    project_id: Option<&str>,
+) -> Result<PathBuf, String> {
+    let root = home.join("Media Hub");
+    match project_id {
+        None => Ok(root.join("Library").join("raw")),
+        Some(id) => {
+            let slug = project_slug_for(&state.pool, id)
+                .await
+                .map_err(|e| format!("resolve_download_dir lookup: {e}"))?;
+            match slug {
+                Some(s) => Ok(root.join("Projects").join(s).join("raw")),
+                None => {
+                    eprintln!(
+                        "resolve_download_dir: project {id} not found; falling back to Library"
+                    );
+                    Ok(root.join("Library").join("raw"))
+                }
+            }
+        }
+    }
+}
+
+/// Build a non-colliding target path for moving a file into a new
+/// directory. If `<dir>/<basename>` already exists, append ` (N)`
+/// before the extension and increment until free.
+fn unique_target_path(dir: &Path, src: &Path) -> PathBuf {
+    let file_name = src.file_name().unwrap_or_default();
+    let candidate = dir.join(file_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let stem = src
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file");
+    let ext = src.extension().and_then(|s| s.to_str()).unwrap_or("");
+    for n in 2..1000 {
+        let new_name = if ext.is_empty() {
+            format!("{stem} ({n})")
+        } else {
+            format!("{stem} ({n}).{ext}")
+        };
+        let p = dir.join(new_name);
+        if !p.exists() {
+            return p;
+        }
+    }
+    // Hyper-unlikely; just return the original (caller will fail on
+    // rename, surfacing the conflict).
+    candidate
+}
+
 // =====================================================================
 // Projects (0.6 Phase A)
 // =====================================================================
@@ -817,9 +933,20 @@ pub async fn project_rename(
 }
 
 /// Move an asset between Library and a project (or vice versa).
-/// `project_id = null` returns the asset to the Library scope.
-/// Phase A: meta-only — the file on disk doesn't physically move.
-/// Phase B will pair this with an os::rename inside the library root.
+/// Phase B: physically moves the file from the source scope's folder
+/// into the target scope's folder, updates `file_path` in the DB to
+/// match, and finally updates `project_id`.
+///
+/// Robustness:
+/// - If the source file doesn't exist (deleted out-of-band), we just
+///   update the DB. The path will still be wrong but the row is no
+///   longer worse than it was — and the user can see the path in the
+///   drawer to investigate.
+/// - If the target dir doesn't exist, we create it.
+/// - If a file with the same name already lives in the target dir,
+///   we append " (2)", " (3)", etc. before the extension.
+/// - If the rename across filesystems would fail (uncommon — Tauri
+///   keeps everything in $HOME), we fall back to copy + delete.
 #[tauri::command]
 pub async fn asset_set_project(
     app: AppHandle,
@@ -827,7 +954,7 @@ pub async fn asset_set_project(
     asset_id: String,
     project_id: Option<String>,
 ) -> Result<(), String> {
-    // Validate the target project exists (NULL is always valid).
+    // Validate target project exists (NULL is always valid).
     if let Some(ref pid) = project_id {
         let exists: Option<(i64,)> =
             sqlx::query_as("SELECT 1 FROM projects WHERE id = ? LIMIT 1")
@@ -839,15 +966,63 @@ pub async fn asset_set_project(
             return Err(format!("project {pid} not found"));
         }
     }
-    let res = sqlx::query("UPDATE assets SET project_id = ? WHERE id = ?")
+
+    // Fetch current file_path so we can move it.
+    let row: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT file_path, project_id FROM assets WHERE id = ?",
+    )
+    .bind(&asset_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| format!("asset_set_project fetch: {e}"))?;
+    let (current_path, current_project) = row
+        .ok_or_else(|| format!("asset {asset_id} not found"))?;
+
+    // Short-circuit: same scope, nothing to do.
+    if current_project == project_id {
+        return Ok(());
+    }
+
+    // Compute target directory based on the new project (or Library).
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| format!("resolve home dir: {e}"))?;
+    let target_dir = resolve_download_dir(&state, &home, project_id.as_deref()).await?;
+
+    let src = PathBuf::from(&current_path);
+    let new_path = if src.exists() {
+        std::fs::create_dir_all(&target_dir)
+            .map_err(|e| format!("create target dir {}: {e}", target_dir.display()))?;
+        let target = unique_target_path(&target_dir, &src);
+        // Try a fast rename first. On Windows, rename across volumes
+        // fails with ERROR_NOT_SAME_DEVICE — copy+delete is the
+        // standard fallback.
+        if let Err(rename_err) = std::fs::rename(&src, &target) {
+            std::fs::copy(&src, &target)
+                .map_err(|e| format!("copy fallback ({rename_err}): {e}"))?;
+            std::fs::remove_file(&src)
+                .map_err(|e| format!("cleanup after copy fallback: {e}"))?;
+        }
+        target.to_string_lossy().to_string()
+    } else {
+        // Source missing — log and keep the existing path string. The
+        // DB project_id still updates, which is the primary user
+        // intent.
+        eprintln!(
+            "asset_set_project: source file missing at {current_path}; updating DB only"
+        );
+        current_path
+    };
+
+    sqlx::query("UPDATE assets SET project_id = ?, file_path = ? WHERE id = ?")
         .bind(&project_id)
+        .bind(&new_path)
         .bind(&asset_id)
         .execute(&state.pool)
         .await
-        .map_err(|e| format!("asset_set_project: {e}"))?;
-    if res.rows_affected() == 0 {
-        return Err(format!("asset {asset_id} not found"));
-    }
+        .map_err(|e| format!("asset_set_project update: {e}"))?;
+
     let _ = app.emit("library:changed", ());
     Ok(())
 }

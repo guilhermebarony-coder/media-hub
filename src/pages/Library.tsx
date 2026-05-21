@@ -610,10 +610,35 @@ function AssetDrawer({
     }
   }
 
-  async function del() {
-    if (!confirm(`Forget "${asset.title}" from the library?\n\n(The file on disk is NOT deleted.)`)) return;
+  async function forget() {
+    if (
+      !confirm(
+        `Forget "${asset.title}" from the library?\n\nThe file on disk is NOT deleted (you'll find it at:\n${asset.file_path}).`,
+      )
+    )
+      return;
     try {
-      await invoke("library_delete", { id: asset.id });
+      await invoke("library_delete", { id: asset.id, deleteFile: false });
+      onClose();
+    } catch (e) {
+      alert(`Forget failed: ${String(e)}`);
+    }
+  }
+
+  async function deleteFromDisk() {
+    // Two-stage confirm because this is destructive. First confirm
+    // sets the user up to read the actual path; second is the
+    // commit. The thumbnail JPG is also removed inside the Rust
+    // command — no need to mention it here.
+    if (
+      !confirm(
+        `Delete "${asset.title}" from disk?\n\nThis removes the FILE at:\n${asset.file_path}\n\nThe row will be removed from the library too. Files moved to OS trash are unrecoverable from inside the app.`,
+      )
+    )
+      return;
+    if (!confirm("This cannot be undone from inside Media Hub. Proceed?")) return;
+    try {
+      await invoke("library_delete", { id: asset.id, deleteFile: true });
       onClose();
     } catch (e) {
       alert(`Delete failed: ${String(e)}`);
@@ -713,8 +738,19 @@ function AssetDrawer({
             <button className="btn btn-secondary" onClick={() => revealFile(asset.file_path)}>
               <Icon.folder width={12} height={12} /> Reveal in Explorer
             </button>
-            <button className="btn btn-danger" onClick={del}>
+            <button
+              className="btn btn-secondary"
+              onClick={forget}
+              title="Remove from library only — file on disk is kept"
+            >
               Forget
+            </button>
+            <button
+              className="btn btn-danger"
+              onClick={deleteFromDisk}
+              title="Remove from library AND delete the file on disk"
+            >
+              Delete file
             </button>
           </div>
         </div>

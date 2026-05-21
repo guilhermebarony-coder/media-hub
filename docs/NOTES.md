@@ -22,6 +22,167 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-05-21 (parked) — File management vision
+
+**Owner notes (2026-05-21):** "we also need a good way to manage our
+files properly, wanna be able to delete them from directory from the
+app and if possible, drag them from the app to import directly to the
+apps, or even a watch folder that when you download on a project it
+imports to the project on a folder for you, anyways, i want it to be a
+good way to manage my footage."
+
+Three distinct asks here, each with a different difficulty / payoff:
+
+### 1. Delete files from disk via the app
+**Easy.** Today's "Forget" button removes the DB row but leaves the
+file on disk. Add a "Delete file" option (with double-confirm — this
+is destructive) that also `std::fs::remove_file`s the path. Use OS
+trash if we can find a small crate (`trash` crate on crates.io does
+this cross-platform). Should land in Phase B alongside the routing
+work — natural pair.
+
+### 2. Drag-from-app to NLE / external app
+**Doable, ~medium.** Tauri webviews participate in OS drag-drop. The
+recipe:
+- HTML5 `<img>` or `<div draggable>` fires `ondragstart`
+- We need to call `event.dataTransfer.setData("DownloadURL", ...)`
+  with a `file://<path>` and a sensible mime type
+- For native OS drag-drop (drag the card OUT of the app window into
+  Premiere / Resolve / Finder), Tauri 2 has experimental support via
+  `window.start_drag_drop` (Rust side) — needs verification
+- Drop targets that accept file paths: Resolve media pool, Premiere
+  bin, Final Cut event, system Finder/Explorer. They all accept a
+  dropped MP4 / MOV file.
+- Multi-select drag (drag 5 cards in) is a stretch goal
+
+**Catch:** the dragged file needs to physically exist at a stable
+path. Phase B's project routing helps here — once files live in
+`Library/raw/...` or `Projects/<slug>/raw/...`, those paths are
+durable and editor-friendly.
+
+### 3. NLE watch-folder integration
+**Not really our problem — but we can make it trivial.** Most NLEs
+support watching a folder and auto-importing new files:
+- Resolve: Media Pool → right-click bin → "Auto-Sync to Bin"
+- Premiere: Media Browser is a near-equivalent
+- Final Cut: drop into Smart Collections via watched event folder
+
+The user-side workflow becomes: "point Premiere's media browser at
+`~/Media Hub/Projects/<active>/raw/`. From now on, every clip you
+download into that project auto-imports." This needs ZERO Media Hub
+work — the dual-root structure already enables it. We just need to
+document it in a "Set up your NLE" onboarding section (0.8).
+
+### Priority call
+- **#1 (delete from disk)** ships in Phase B tonight.
+- **#3 (NLE watch folder docs)** ships as part of 0.8 onboarding.
+- **#2 (drag-to-NLE)** is a 0.7-ish polish feature. Worth a session
+  of its own once we know Phase B routing works.
+
+---
+
+## 2026-05-21 (parked) — Age-restricted YouTube videos / cookies
+
+**The bug (2026-05-21):** age-restricted YouTube URLs (e.g. game
+trailers with violence flags) fail with:
+> Sign in to confirm your age. This video may be inappropriate for
+> some users. Use --cookies-from-browser or --cookies for the
+> authentication.
+
+**The fix yt-dlp offers** is to pass cookies. Two approaches:
+
+1. `--cookies-from-browser <browser>` — yt-dlp reads cookies directly
+   from a browser's local profile. Browsers supported: chrome,
+   chromium, brave, edge, firefox, opera, safari, vivaldi.
+   - Pros: zero user effort, just pick the browser once
+   - Cons: requires user to be signed in to YouTube in that browser;
+     on Windows the browser must be closed (file lock) for Chrome
+     family, Firefox is more forgiving
+
+2. `--cookies <path/to/cookies.txt>` — user exports their cookies
+   manually via a browser extension (e.g. "Get cookies.txt")
+   - Pros: works even with closed/locked browsers
+   - Cons: user effort, file goes stale, gross UX
+
+**Recommended implementation** (paired with 0.8 settings panel):
+- Settings field: "YouTube cookies source" with options:
+  - None (default — most public videos work)
+  - From browser: dropdown (Chrome / Firefox / Edge)
+  - From file: path picker
+- When set, `yt_fetch_metadata` and `yt_download` add the relevant
+  flag to the yt-dlp argv
+- Visual indicator on the Download page header: "Cookies: Chrome ●"
+  matching the handoff design
+
+**Until then:** the error message is captured and shown (works
+today). User has to know to skip these URLs. Annoying but not
+blocking — most editorial B-roll isn't age-restricted.
+
+**Note:** the handoff design's Download screen mockup explicitly
+shows "Cookies: Loaded" in the top-right, so this was always part of
+the design intent.
+
+---
+
+## 2026-05-21 (later) — 0.6 Phase B: filesystem routing + scope moves
+
+**Shipped:**
+- `yt_download` accepts `project_id`. Rust resolves the slug from the
+  projects table and computes the dest dir:
+    - `None`            → `~/Media Hub/Library/raw/`
+    - `Some(id)`        → `~/Media Hub/Projects/<slug>/raw/`
+- `asset_set_project` is no longer metadata-only. It physically moves
+  the file from source → target scope's folder, updates `file_path`
+  in the DB, then sets `project_id`. Robust to: source-file-missing
+  (DB-only update), target-dir-missing (creates), filename collisions
+  (appends ` (2)`, ` (3)`...), cross-volume renames (copy + delete
+  fallback).
+- `library_delete` accepts an optional `delete_file: bool`. With
+  `false` (default), preserves the file. With `true`, removes the
+  file AND the thumbnail. Asset drawer now has two buttons: "Forget"
+  (DB only) and "Delete file" (DB + disk + thumbnail), the latter
+  double-confirmed.
+- **Ctrl+Space override:** hold during the Download click and the
+  asset routes to Library instead of the active project. Button
+  swaps to "Download → Library" / "Queue → Library" while held,
+  with a subtle outline+glow so the change is unmissable. Works for
+  both single-URL and batch (whole batch inherits the override at
+  enqueue time).
+
+**Filesystem layout now:**
+```
+~/Media Hub/
+├── Library/raw/<title> [<id>].<ext>
+├── Projects/<slug>/raw/<title> [<id>].<ext>
+├── _thumbnails/<asset_id>.jpg
+└── library.db
+```
+The `raw/` subfolder per scope gives room for future siblings
+(`proxies/` for the scrubber, `exports/` if we ever produce derived
+files) without reorganizing. NLEs pointed at the project root pick
+up `raw/` automatically.
+
+**Slug stability:** project slug is computed at create-time and
+NEVER recomputed on rename. Renaming a project's display name keeps
+the folder name on disk stable. Visible in the projects page where
+the slug shows next to the name as `mono faint` text.
+
+**Migration note:** existing assets in `Downloads/_test/` keep
+their old file_path strings. Reveal will fail for any whose file
+the user deleted (most of them, since author has been pruning). New
+downloads land in the new structure. Eventually we could add a
+"relocate orphans" maintenance command, but for the author's actual
+use case (clean library) it's not worth the engineering.
+
+**What's left for Phase C:**
+- Finish Project action (promote-first dialog, then OS trash on
+  the folder)
+- Duplicate detection on download (skip / overwrite / rename UX)
+- `plugin-dialog` install + Export-to-folder action
+- Scrubber (Phase D)
+
+---
+
 ## 2026-05-21 — 0.6 Phase A: project foundations (metadata-only)
 
 **Shipped:** the dual-root mental model lands, schema-first. New

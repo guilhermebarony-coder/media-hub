@@ -95,10 +95,12 @@ function ActiveProject() {
         aria-haspopup="listbox"
         aria-expanded={open}
       >
-        <span className="dot" />
         <div className="col">
           <span className="label">Active</span>
-          <span className="name">{label}</span>
+          <span className="name-row">
+            <span className="dot" />
+            <span className="name">{label}</span>
+          </span>
         </div>
         <span className="chev">
           <Icon.chev width={10} height={10} />

@@ -61,8 +61,50 @@ export default function DownloadPage() {
 // =====================================================================
 // Metadata + single-URL download
 // =====================================================================
+/**
+ * Ctrl+Space "send to Library" override hook.
+ *
+ * Returns `overrideToLibrary` (true while Ctrl+Space is being held)
+ * and an `effectiveProjectId` resolver. While the modifier is held,
+ * the next download goes to Library regardless of active scope.
+ *
+ * We use Space (not B / L / etc.) because Space is rarely bound in
+ * web UIs without a focus context, and Ctrl+Space won't fire any
+ * built-in browser/Tauri action. Listen on window so the modifier
+ * works whether the user is hovered over the button or anywhere.
+ */
+function useLibraryOverride(): boolean {
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    const onDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && (e.code === "Space" || e.key === " ")) {
+        e.preventDefault();
+        setHeld(true);
+      }
+    };
+    const onUp = (e: KeyboardEvent) => {
+      if (e.code === "Space" || e.key === " " || e.key === "Control") {
+        setHeld(false);
+      }
+    };
+    // Also drop on blur — modifier release while window is out of
+    // focus would otherwise leave the override stuck on.
+    const onBlur = () => setHeld(false);
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onDown);
+      window.removeEventListener("keyup", onUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
+  return held;
+}
+
 function MetadataCard() {
   const { scope } = useActiveProject();
+  const overrideLibrary = useLibraryOverride();
   const [url, setUrl] = useState("");
   const [meta, setMeta] = useState<VideoMetadata | null>(null);
   const [loading, setLoading] = useState(false);
@@ -164,6 +206,11 @@ function MetadataCard() {
 
     const bytesHint = selectedFormat.filesize_bytes;
 
+    // Resolve target scope at click time, respecting Ctrl+Space.
+    // Capture into a local so subsequent state changes don't leak in.
+    const targetProjectId =
+      !overrideLibrary && scope.kind === "project" ? scope.id : null;
+
     setDownloading(true);
     setDlErr(null);
     setDlResult(null);
@@ -179,6 +226,7 @@ function MetadataCard() {
         videoId: meta?.id ?? "",
         inSec,
         outSec,
+        projectId: targetProjectId,
       });
 
       let finalRes = dlRes;
@@ -230,10 +278,7 @@ function MetadataCard() {
         fps: selectedFormat.fps,
         transcoded_to: usedPreset === "none" ? null : usedPreset,
         thumbnail_url: meta?.thumbnail ?? null,
-        // Phase A: route into the active scope at the metadata level.
-        // The file on disk is still under Downloads/_test/ — Phase B
-        // moves it into the right project folder.
-        project_id: scope.kind === "project" ? scope.id : null,
+        project_id: targetProjectId,
       });
       if (assetId) {
         void attachLocalThumbnail(assetId, finalRes.path, effectiveDuration);
@@ -418,15 +463,37 @@ function MetadataCard() {
                   {selectedFormat.has_video && !selectedFormat.has_audio && (
                     <span className="hint-chip">+ audio → .{composeFormatSpec(selectedFormat).mergeContainer}</span>
                   )}
-                  <span className="dlbar-dest">→ ~/Media Hub/Downloads/_test/</span>
+                  <span className="dlbar-dest">
+                    →{" "}
+                    {overrideLibrary
+                      ? "Library (override)"
+                      : scope.kind === "project"
+                        ? `Projects/${scope.name}/`
+                        : "Library/"}
+                  </span>
                 </>
               ) : (
-                <span className="faint">Click a format row above, then download.</span>
+                <span className="faint">
+                  Click a format row above, then download.{" "}
+                  <span className="mono">
+                    Hold <span className="kbd">Ctrl</span>
+                    <span className="kbd">Space</span> to override → Library
+                  </span>
+                </span>
               )}
             </div>
-            <button className="btn" onClick={download} disabled={!selectedFormat || downloading}>
+            <button
+              className={"btn" + (overrideLibrary ? " btn-override" : "")}
+              onClick={download}
+              disabled={!selectedFormat || downloading}
+              title={overrideLibrary ? "Send to Library (Ctrl+Space held)" : undefined}
+            >
               <Icon.download width={13} height={13} />
-              {downloading ? "Downloading…" : "Download"}
+              {downloading
+                ? "Downloading…"
+                : overrideLibrary
+                  ? "Download → Library"
+                  : "Download"}
             </button>
           </div>
 
@@ -592,6 +659,7 @@ const gpuTranscodeSem = new Semaphore(1);
 
 function QueueCard() {
   const { scope } = useActiveProject();
+  const overrideLibrary = useLibraryOverride();
   const [urlsInput, setUrlsInput] = useState("");
   const [jobs, setJobs] = useState<QueueJob[]>(() => loadQueueFromStorage());
   const [batchTranscode, setBatchTranscode] = useState<TranscodePreset>("none");
@@ -717,6 +785,9 @@ function QueueCard() {
         inSec: null,
         outSec: null,
         jobId: job.id,
+        // Per-job projectId snapshot, locked at enqueue time. Phase B
+        // honors this when computing dest dir on the Rust side.
+        projectId: job.projectId,
       });
     } catch (e) {
       updateJob(job.id, { status: "failed", error: String(e) });
@@ -795,8 +866,9 @@ function QueueCard() {
     // Snapshot the project assignment too — same reasoning as the
     // preset capture: the user's expectation is that what they
     // pressed Queue with is what runs, even if they switch scope
-    // afterward.
-    const projectSnapshot = scope.kind === "project" ? scope.id : null;
+    // afterward. Ctrl+Space override applies to the whole batch.
+    const projectSnapshot =
+      !overrideLibrary && scope.kind === "project" ? scope.id : null;
     const newJobs: QueueJob[] = urls.map((url) => ({
       id: newJobId(),
       url,
@@ -895,8 +967,13 @@ function QueueCard() {
       </div>
 
       <div className="queue-actions">
-        <button className="btn" onClick={queueAll} disabled={!urlsInput.trim()}>
-          Queue all
+        <button
+          className={"btn" + (overrideLibrary ? " btn-override" : "")}
+          onClick={queueAll}
+          disabled={!urlsInput.trim()}
+          title={overrideLibrary ? "Queue into Library (Ctrl+Space held)" : undefined}
+        >
+          {overrideLibrary ? "Queue → Library" : "Queue all"}
         </button>
         <button className="btn btn-secondary" onClick={clearCompleted}>
           Clear completed

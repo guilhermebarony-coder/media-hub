@@ -140,20 +140,13 @@ button { font-family: inherit; }
   font-size: inherit;
 }
 .proj-picker:hover { background: var(--bg-3); }
-.proj-picker .dot {
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: var(--text-2);
-}
-.proj-picker.proj .dot {
-  background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-dim);
-}
 .proj-picker .col {
   display: flex;
   flex-direction: column;
   line-height: 1.15;
   gap: 2px;
+  flex: 1;
+  min-width: 0;
 }
 .proj-picker .label {
   font-size: 10px;
@@ -162,10 +155,35 @@ button { font-family: inherit; }
   text-transform: uppercase;
   font-weight: 500;
 }
+/* Dot lives inline with .name so it aligns with the name baseline
+   regardless of how tall the picker is or how many lines the col has.
+   Earlier version placed the dot as a sibling of .col and flex
+   center-aligned it against the picker height — which put the dot
+   between the "ACTIVE" label and the project name. Visually wrong;
+   the glow on the project variant made it especially obvious. */
+.proj-picker .name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.proj-picker .dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--text-2);
+  flex: 0 0 6px;
+}
+.proj-picker.proj .dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
 .proj-picker .name {
   font-size: 13px;
   color: var(--text-1);
   font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .proj-picker.proj .name { color: var(--text-0); }
 .proj-picker .chev {
@@ -640,6 +658,20 @@ textarea.field-input {
   border-color: color-mix(in oklab, var(--err), transparent 60%);
 }
 .btn-danger:hover { background: color-mix(in oklab, var(--err), transparent 85%); }
+
+/* Visual feedback while Ctrl+Space is held — the primary button
+   swaps in a "send to Library" framing. Outline + dim glow communicate
+   "different target, same action." */
+.btn-override {
+  background: var(--bg-3);
+  color: var(--text-0);
+  border-color: var(--text-2);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--text-1), transparent 80%);
+}
+.btn-override:hover {
+  background: var(--bg-4);
+  filter: none;
+}
 
 .msg-row {
   background: var(--bg-2);

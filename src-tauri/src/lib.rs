@@ -256,8 +256,11 @@ async fn yt_fetch_metadata(app: AppHandle, url: String) -> Result<VideoMetadata,
 // Rust, and forward structured events to the renderer via Tauri's event
 // system. The renderer subscribes with @tauri-apps/api/event `listen`.
 //
-// Destination is still hardcoded to ~/Media Hub/Downloads/_test/ for
-// this slice; proper Library/Project routing lands with milestone 0.6.
+// Destination resolves per active scope (0.6 Phase B):
+//   project_id = None         → ~/Media Hub/Library/raw/
+//   project_id = Some(id)     → ~/Media Hub/Projects/<slug>/raw/
+// The slug is looked up from the projects table — single source of
+// truth, can't drift from what was set at create-time.
 
 #[derive(Serialize)]
 pub struct DownloadResult {
@@ -334,6 +337,7 @@ fn fmt_segment_label(sec: f64) -> String {
 #[tauri::command]
 async fn yt_download(
     app: AppHandle,
+    state: tauri::State<'_, library::LibraryState>,
     url: String,
     format_spec: String,
     merge_container: Option<String>,
@@ -342,6 +346,7 @@ async fn yt_download(
     in_sec: Option<f64>,
     out_sec: Option<f64>,
     job_id: Option<String>,
+    project_id: Option<String>,
 ) -> Result<DownloadResult, String> {
     // `format_spec` is an opaque yt-dlp -f argument — could be a single
     // format id ("18", "313") or a composed spec ("313+bestaudio/best").
@@ -357,13 +362,22 @@ async fn yt_download(
         return Err("format_spec is empty".into());
     }
 
-    // Resolve destination dir. Hardcoded for MVD — the real picker comes
-    // with the active-project / library work in 0.6.
+    // Resolve destination dir from the active scope:
+    //   project_id = None     → Library/raw/
+    //   project_id = Some(id) → Projects/<slug>/raw/   (slug from DB)
+    //
+    // Looking up the slug here (rather than passing it from the
+    // renderer) keeps the projects table as the single source of
+    // truth. If a project was renamed since the renderer cached its
+    // info, we still write to the original slug — folders on disk
+    // stay stable across project renames.
     let home = app
         .path()
         .home_dir()
         .map_err(|e| format!("resolve home dir: {e}"))?;
-    let dest = home.join("Media Hub").join("Downloads").join("_test");
+    let dest = library::resolve_download_dir(&state, &home, project_id.as_deref())
+        .await
+        .map_err(|e| format!("resolve dest dir: {e}"))?;
     std::fs::create_dir_all(&dest).map_err(|e| format!("create dest dir: {e}"))?;
     let dest_str = dest.to_string_lossy().to_string();
     // Force yt-dlp's temp files (during merges and section trims) into
