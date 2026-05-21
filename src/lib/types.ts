@@ -142,6 +142,15 @@ export type Project = {
   asset_count: number;
 };
 
+export type DuplicateMatch = {
+  id: string;
+  title: string;
+  file_path: string;
+  project_id: string | null;
+  downloaded_at: number;
+  scope_label: string;
+};
+
 /** Active scope drives both the library filter and (in Phase B) where
  *  new downloads land. */
 export type ActiveScope =

@@ -106,6 +106,78 @@ export default function ProjectsPage() {
     }
   }
 
+  /**
+   * Finish a project — the lifecycle endgame.
+   *
+   * Two-step confirm:
+   *   1. "Are you done with this project?" — sets context. Lets the
+   *      user choose whether to promote assets to Library or trash
+   *      them with the folder.
+   *   2. Implicit second step is the OS confirm dialog (window.confirm
+   *      runs twice).
+   *
+   * On commit, calls project_finish which: optionally promotes assets
+   * (moves files to Library/raw/), then OS-trashes the project folder,
+   * then deletes the project row. Recoverable from Recycle Bin / Trash
+   * if the user finished too early.
+   */
+  async function finish(p: Project) {
+    const hasAssets = p.asset_count > 0;
+    const intro = hasAssets
+      ? `Finish project "${p.name}"?\n\n` +
+        `This project has ${p.asset_count} ${p.asset_count === 1 ? "clip" : "clips"}. ` +
+        `What should happen to them?\n\n` +
+        `[OK] = Promote all to Library (keep clips, lose project structure)\n` +
+        `[Cancel] = Choose more carefully…`
+      : `Finish project "${p.name}"?\n\nThe project folder will be moved to Recycle Bin.`;
+
+    if (!hasAssets) {
+      if (!confirm(intro)) return;
+      try {
+        await invoke("project_finish", { id: p.id, promote: false });
+        if (scope.kind === "project" && scope.id === p.id) {
+          setScope({ kind: "library" });
+        }
+      } catch (e) {
+        setErr(String(e));
+      }
+      return;
+    }
+
+    // Three-way choice: promote / trash-with-folder / cancel. Native
+    // confirm can only do yes/no, so we do two stages.
+    const promote = confirm(intro);
+    if (!promote) {
+      // User picked Cancel from the promote prompt — offer the
+      // destructive path explicitly.
+      const trashAll = confirm(
+        `Trash everything in "${p.name}"?\n\n` +
+          `${p.asset_count} ${p.asset_count === 1 ? "clip" : "clips"} AND the project folder will be moved to Recycle Bin.\n\n` +
+          `Recoverable from the OS Recycle Bin, but not from inside Media Hub. ` +
+          `Choose "Cancel" to back out entirely.`,
+      );
+      if (!trashAll) return;
+      try {
+        await invoke("project_finish", { id: p.id, promote: false });
+        if (scope.kind === "project" && scope.id === p.id) {
+          setScope({ kind: "library" });
+        }
+      } catch (e) {
+        setErr(String(e));
+      }
+      return;
+    }
+
+    try {
+      await invoke("project_finish", { id: p.id, promote: true });
+      if (scope.kind === "project" && scope.id === p.id) {
+        setScope({ kind: "library" });
+      }
+    } catch (e) {
+      setErr(String(e));
+    }
+  }
+
   return (
     <div className="content">
       <div className="content-header">
@@ -219,6 +291,15 @@ export default function ProjectsPage() {
                             }}
                           >
                             Rename
+                          </button>
+                        )}
+                        {!isRenaming && (
+                          <button
+                            className="btn btn-secondary"
+                            onClick={() => void finish(p)}
+                            title="Wrap up: promote to Library and move folder to Recycle Bin"
+                          >
+                            Finish
                           </button>
                         )}
                         <button className="btn btn-danger" onClick={() => void del(p)}>

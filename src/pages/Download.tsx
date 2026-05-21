@@ -20,6 +20,7 @@ import {
 import { useActiveProject } from "../lib/activeProject";
 import type {
   DownloadResult,
+  DuplicateMatch,
   FormatOption,
   ProgressEvent,
   TranscodePreset,
@@ -62,33 +63,30 @@ export default function DownloadPage() {
 // Metadata + single-URL download
 // =====================================================================
 /**
- * Ctrl+Space "send to Library" override hook.
+ * Ctrl-held "send to Library" override hook.
  *
- * Returns `overrideToLibrary` (true while Ctrl+Space is being held)
- * and an `effectiveProjectId` resolver. While the modifier is held,
- * the next download goes to Library regardless of active scope.
+ * While Ctrl is held, the next Download / Queue click routes to
+ * Library regardless of active scope. Releases the moment Ctrl is up
+ * (or the window loses focus, in case the user alt-tabs while
+ * holding it).
  *
- * We use Space (not B / L / etc.) because Space is rarely bound in
- * web UIs without a focus context, and Ctrl+Space won't fire any
- * built-in browser/Tauri action. Listen on window so the modifier
- * works whether the user is hovered over the button or anywhere.
+ * We use plain Ctrl (not Ctrl+Space — that's reserved for a future
+ * command palette / search). Ctrl-alone works here because:
+ *   - It only AFFECTS the next Download/Queue button click
+ *   - Other Ctrl shortcuts (copy/paste/etc.) don't trigger our
+ *     handler — we never preventDefault the keydown
+ *   - The button label changes while Ctrl is held, so the user sees
+ *     the override is live before they click
  */
 function useLibraryOverride(): boolean {
   const [held, setHeld] = useState(false);
   useEffect(() => {
     const onDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey && (e.code === "Space" || e.key === " ")) {
-        e.preventDefault();
-        setHeld(true);
-      }
+      if (e.key === "Control") setHeld(true);
     };
     const onUp = (e: KeyboardEvent) => {
-      if (e.code === "Space" || e.key === " " || e.key === "Control") {
-        setHeld(false);
-      }
+      if (e.key === "Control") setHeld(false);
     };
-    // Also drop on blur — modifier release while window is out of
-    // focus would otherwise leave the override stuck on.
     const onBlur = () => setHeld(false);
     window.addEventListener("keydown", onDown);
     window.addEventListener("keyup", onUp);
@@ -110,6 +108,10 @@ function MetadataCard() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showFormats, setShowFormats] = useState(false);
+  // If we already have this URL in the library, show a yellow chip
+  // so the user knows they're about to re-download. We don't BLOCK —
+  // sometimes you want a different quality / segment / transcode.
+  const [duplicate, setDuplicate] = useState<DuplicateMatch | null>(null);
 
   const [selectedFormat, setSelectedFormat] = useState<FormatOption | null>(null);
   const [downloading, setDownloading] = useState(false);
@@ -156,9 +158,19 @@ function MetadataCard() {
     setSelectedFormat(null);
     setDlResult(null);
     setDlErr(null);
+    setDuplicate(null);
     try {
-      const out = await invoke<VideoMetadata>("yt_fetch_metadata", { url });
+      // Run metadata fetch and dupe check in parallel — both are
+      // network/IO so doing them sequentially would slow the UI
+      // unnecessarily. Dupe check failure is non-fatal.
+      const [out, dupe] = await Promise.all([
+        invoke<VideoMetadata>("yt_fetch_metadata", { url }),
+        invoke<DuplicateMatch | null>("library_find_by_url", {
+          sourceUrl: url,
+        }).catch(() => null),
+      ]);
       setMeta(out);
+      setDuplicate(dupe);
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -367,6 +379,21 @@ function MetadataCard() {
             {showFormats ? "▾" : "▸"} {showFormats ? "Hide" : "Show"} format list ({meta.formats.length})
           </button>
 
+          {duplicate && (
+            <div className="msg-row dupe">
+              <span className="label">already saved</span>
+              <code style={{ flex: 1 }}>
+                "{duplicate.title}" — in <strong>{duplicate.scope_label}</strong>
+              </code>
+              <button
+                className="btn btn-secondary"
+                onClick={() => revealFile(duplicate.file_path)}
+              >
+                <Icon.folder width={11} height={11} /> Open existing
+              </button>
+            </div>
+          )}
+
           {showFormats && (
             <div className="meta-formats">
               <table>
@@ -476,8 +503,7 @@ function MetadataCard() {
                 <span className="faint">
                   Click a format row above, then download.{" "}
                   <span className="mono">
-                    Hold <span className="kbd">Ctrl</span>
-                    <span className="kbd">Space</span> to override → Library
+                    Hold <span className="kbd">Ctrl</span> to override → Library
                   </span>
                 </span>
               )}
@@ -486,7 +512,7 @@ function MetadataCard() {
               className={"btn" + (overrideLibrary ? " btn-override" : "")}
               onClick={download}
               disabled={!selectedFormat || downloading}
-              title={overrideLibrary ? "Send to Library (Ctrl+Space held)" : undefined}
+              title={overrideLibrary ? "Send to Library (Ctrl held)" : undefined}
             >
               <Icon.download width={13} height={13} />
               {downloading
@@ -971,7 +997,7 @@ function QueueCard() {
           className={"btn" + (overrideLibrary ? " btn-override" : "")}
           onClick={queueAll}
           disabled={!urlsInput.trim()}
-          title={overrideLibrary ? "Queue into Library (Ctrl+Space held)" : undefined}
+          title={overrideLibrary ? "Queue into Library (Ctrl held)" : undefined}
         >
           {overrideLibrary ? "Queue → Library" : "Queue all"}
         </button>

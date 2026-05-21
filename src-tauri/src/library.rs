@@ -646,6 +646,48 @@ pub async fn library_thumbnails_missing(
     .map_err(|e| format!("library_thumbnails_missing: {e}"))
 }
 
+/// Look up an existing asset by source URL. Returns the most recent
+/// match (by downloaded_at DESC) — same URL downloaded twice rarely
+/// happens by accident, but when it does, the most recent copy is
+/// the relevant one to reveal.
+///
+/// Used by the Download page to warn the user before re-downloading
+/// something already in their library, AND by the batch queue to
+/// flag dupes per-row.
+#[derive(Serialize, Debug, Clone, sqlx::FromRow)]
+pub struct DuplicateMatch {
+    pub id: String,
+    pub title: String,
+    pub file_path: String,
+    pub project_id: Option<String>,
+    pub downloaded_at: i64,
+    /// Display label for the scope ("Library" or "<project name>").
+    /// Computed in SQL via the JOIN so the renderer doesn't need a
+    /// second round-trip.
+    pub scope_label: String,
+}
+
+#[tauri::command]
+pub async fn library_find_by_url(
+    state: State<'_, LibraryState>,
+    source_url: String,
+) -> Result<Option<DuplicateMatch>, String> {
+    let row = sqlx::query_as::<_, DuplicateMatch>(
+        r#"SELECT a.id, a.title, a.file_path, a.project_id, a.downloaded_at,
+                  COALESCE(p.name, 'Library') AS scope_label
+           FROM assets a
+           LEFT JOIN projects p ON p.id = a.project_id
+           WHERE a.source_url = ?
+           ORDER BY a.downloaded_at DESC
+           LIMIT 1"#,
+    )
+    .bind(&source_url)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| format!("library_find_by_url: {e}"))?;
+    Ok(row)
+}
+
 /// Record a local thumbnail path against an asset. Used by the post-
 /// download thumbnail extraction flow (see `media_extract_thumbnail`
 /// in lib.rs). Non-fatal if the asset row is gone (user might forget
@@ -1022,6 +1064,130 @@ pub async fn asset_set_project(
         .execute(&state.pool)
         .await
         .map_err(|e| format!("asset_set_project update: {e}"))?;
+
+    let _ = app.emit("library:changed", ());
+    Ok(())
+}
+
+/// Finish a project — the big lifecycle action.
+///
+/// Workflow:
+///   1. Optionally promote all the project's assets back to Library
+///      (the user picked this when confirming). Files are physically
+///      moved into Library/raw/.
+///   2. Move the project folder (~/Media Hub/Projects/<slug>/) to OS
+///      trash via the `trash` crate. Recoverable — the user can pull
+///      it out of Trash/Recycle Bin if they finished too early.
+///   3. Delete the project row from the DB.
+///
+/// Two non-promote behaviors are reasonable:
+///   - `promote: true` (default in UI): assets survive in Library
+///   - `promote: false`: assets are DB-deleted too (CASCADE via
+///     ON DELETE SET NULL would only orphan them; we explicitly
+///     remove rows to keep the library clean). Files go to trash
+///     alongside the folder.
+///
+/// We always trash the folder — that's the whole point of the
+/// "Finish" gesture (clean shutdown of a finished piece of work).
+#[tauri::command]
+pub async fn project_finish(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    id: String,
+    promote: bool,
+) -> Result<(), String> {
+    // Resolve the slug first — needed for the folder path AND we
+    // want to bail clearly if the project doesn't exist.
+    let slug = project_slug_for(&state.pool, &id)
+        .await
+        .map_err(|e| format!("project_finish lookup: {e}"))?
+        .ok_or_else(|| format!("project {id} not found"))?;
+
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| format!("resolve home dir: {e}"))?;
+    let project_dir = home.join("Media Hub").join("Projects").join(&slug);
+
+    if promote {
+        // Move each project asset back to Library (file + DB) via
+        // the existing per-asset move logic. Sequential keeps things
+        // predictable; with N≈dozens this is fine. If projects ever
+        // grow to thousands of assets, batch this.
+        let asset_ids: Vec<(String,)> =
+            sqlx::query_as("SELECT id FROM assets WHERE project_id = ?")
+                .bind(&id)
+                .fetch_all(&state.pool)
+                .await
+                .map_err(|e| format!("project_finish list: {e}"))?;
+
+        let library_dir = home.join("Media Hub").join("Library").join("raw");
+        for (asset_id,) in asset_ids {
+            // Reuse the asset_set_project logic by calling it
+            // inline. We can't invoke the #[tauri::command] from
+            // another command directly, but we can replicate the
+            // body — or extract into a helper. Inline for now;
+            // refactor when this pattern repeats.
+            let row: Option<(String,)> =
+                sqlx::query_as("SELECT file_path FROM assets WHERE id = ?")
+                    .bind(&asset_id)
+                    .fetch_optional(&state.pool)
+                    .await
+                    .map_err(|e| format!("project_finish fetch asset: {e}"))?;
+            if let Some((current_path,)) = row {
+                let src = PathBuf::from(&current_path);
+                let new_path = if src.exists() {
+                    std::fs::create_dir_all(&library_dir).map_err(|e| {
+                        format!("create library dir: {e}")
+                    })?;
+                    let target = unique_target_path(&library_dir, &src);
+                    if std::fs::rename(&src, &target).is_err() {
+                        std::fs::copy(&src, &target).map_err(|e| {
+                            format!("project_finish copy fallback: {e}")
+                        })?;
+                        let _ = std::fs::remove_file(&src);
+                    }
+                    target.to_string_lossy().to_string()
+                } else {
+                    current_path
+                };
+                sqlx::query(
+                    "UPDATE assets SET project_id = NULL, file_path = ? WHERE id = ?",
+                )
+                .bind(&new_path)
+                .bind(&asset_id)
+                .execute(&state.pool)
+                .await
+                .map_err(|e| format!("project_finish update asset: {e}"))?;
+            }
+        }
+    } else {
+        // Drop the asset rows for this project — files go to trash
+        // alongside the project folder below.
+        sqlx::query("DELETE FROM assets WHERE project_id = ?")
+            .bind(&id)
+            .execute(&state.pool)
+            .await
+            .map_err(|e| format!("project_finish purge assets: {e}"))?;
+    }
+
+    // Trash the project folder. Missing-folder is fine (user finished
+    // an empty project, or files were already cleaned up out-of-band).
+    if project_dir.exists() {
+        if let Err(e) = trash::delete(&project_dir) {
+            return Err(format!(
+                "could not move {} to trash: {e}",
+                project_dir.display()
+            ));
+        }
+    }
+
+    // Finally remove the project row.
+    sqlx::query("DELETE FROM projects WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("project_finish delete project: {e}"))?;
 
     let _ = app.emit("library:changed", ());
     Ok(())

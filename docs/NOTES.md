@@ -22,6 +22,90 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-05-21 (parked) — Command palette (Ctrl+Space)
+
+**Owner note (2026-05-21):** wants to reserve Ctrl+Space for a future
+**fx-console / search palette**. The Ctrl-only override for "send to
+Library" is in place; Ctrl+Space stays free.
+
+**The idea:** Cmd-K style global palette, but invoked with Ctrl+Space.
+Fuzzy-search across:
+- Library / project assets (title, channel, tags)
+- Project list (jump-to-project)
+- Actions (download, settings, etc.)
+- Tags (filter library by tag in one keystroke)
+
+**Why Ctrl+Space (not Ctrl+K):** owner's pick. Ctrl+K is the web-app
+convention; Ctrl+Space is more native-feeling and conflicts less with
+browser muscle memory (Tauri webview inherits some browser
+shortcuts).
+
+**Where it fits:** somewhere between 0.7 (after platform abstraction)
+and 0.8 (packaging polish). Not on the blocking path for 1.0 unless
+the library gets big enough that finding things is painful.
+
+**Implementation sketch (don't build yet):**
+- Global keydown listener at the Shell level
+- Modal overlay component (centered on viewport, dim background)
+- Use a small fuzzy lib (`fuse.js` is ~12KB minified) or hand-roll a
+  scorer — corpus is small (low thousands at most)
+- Result rows have keyboard nav (↑↓ Enter Esc) + click
+- Categories: header rows ("ASSETS · 12 results", "PROJECTS · 2",
+  etc.) above grouped results
+
+---
+
+## 2026-05-21 (parked) — Eagle integration / inspiration
+
+**Owner note (2026-05-21):** "we can get some of the library controls
+from eagle app, and maybe even do a integration somehow, being able
+to export it to eagle or something."
+
+Eagle (eagle.cool) is a popular media-manager app with strong patterns
+worth borrowing or directly integrating with.
+
+**Inspiration to borrow (no Eagle needed):**
+- **Smart folders** — saved searches that materialize as folders.
+  We already have tag filters; saving a filter combo as a named
+  "smart project" would be the natural next step. Pairs with
+  command palette.
+- **Color labels** — a 5–6 color palette assignable per asset for
+  fast at-a-glance status (review / approved / b-roll / hero / etc.)
+- **Star rating** — 0–5 stars per asset, sortable
+- **Note field per asset** — free-form text alongside tags
+- **Visual similarity search** — find clips that look like the
+  selected one (CLIP embeddings; medium-effort)
+- **Multi-select grid + bulk operations** — already on the
+  no-brainer list for any decent library page
+
+**Eagle integration paths (decide if/when):**
+1. **Folder export** (easiest): "Export to Eagle" action in asset
+   drawer that copies the file + a sidecar `.json` with our tags
+   into a user-picked folder. Eagle has an "Import folder" feature
+   that picks this up. Bidirectional sync is NOT the goal — just
+   "send these to Eagle and let Eagle take it from there."
+2. **Eagle HTTP API** (Eagle ships with a local API on
+   `localhost:41595` — public, documented). Could push assets +
+   tags + thumbnails directly without filesystem dance.
+   - https://api.eagle.cool/
+   - Endpoints: `/api/item/addFromPath`, `/api/folder/create`,
+     `/api/item/info`, etc.
+   - Trade-off: requires Eagle running, tight coupling, but
+     genuinely seamless ("send to Eagle" → asset appears there
+     instantly)
+3. **Two-way watch** (don't): trying to sync Media Hub library ↔
+   Eagle library two-way is a rabbit hole. We're a sourcing tool;
+   Eagle is a manager. One-way push is the clean integration.
+
+**Recommended approach if owner pulls the trigger:**
+- Start with #1 (folder export with sidecar JSON) — no runtime
+  dependency, works offline, low risk
+- Upgrade to #2 (Eagle API push) once #1 proves the workflow is
+  used
+- Skip #3
+
+---
+
 ## 2026-05-21 (parked) — File management vision
 
 **Owner notes (2026-05-21):** "we also need a good way to manage our
@@ -121,6 +205,57 @@ blocking — most editorial B-roll isn't age-restricted.
 **Note:** the handoff design's Download screen mockup explicitly
 shows "Cookies: Loaded" in the top-right, so this was always part of
 the design intent.
+
+---
+
+## 2026-05-21 (later still) — 0.6 Phase C: duplicate detection + Finish Project
+
+**Shipped:**
+- `library_find_by_url(source_url)` — returns the most recent existing
+  asset matching a URL, with scope label ("Library" or project name)
+  joined in SQL so the renderer doesn't need a second round-trip
+- Download page runs the dupe check in parallel with metadata fetch
+  (both are I/O — no reason to sequence them). If a match exists, a
+  lime-tinted "already saved" chip appears between the metadata hero
+  and the segment bar, with an "Open existing" button. Doesn't BLOCK
+  the download — sometimes you want a different format, segment, or
+  transcode preset of the same source
+- `project_finish(id, promote)` — the lifecycle endgame. Optionally
+  promotes all project assets to Library (physically moves files
+  into `Library/raw/`), then OS-trashes the project folder via the
+  `trash` crate, then deletes the project row. Folder is recoverable
+  from Recycle Bin / Trash but not from inside the app
+- Projects page row gains a "Finish" button with three-way confirm:
+  promote-to-library / trash-everything / cancel. Active project
+  auto-falls-back to Library when finished
+
+**Three-way confirm UX:** native `confirm()` is yes/no only, so the
+finish flow does two prompts in sequence. First asks "promote
+assets?" — OK = promote, Cancel = (don't bail, continue). Second
+asks "trash everything?" — OK = nuke, Cancel = back out entirely.
+Not as polished as a custom modal but works without dragging in a
+dialog library. Replace with a real modal when we ship a settings
+panel (0.8) and have the modal scaffolding anyway.
+
+**`trash` crate:** cross-platform OS trash via Microsoft's
+SHFileOperation on Windows, NSFileManager on macOS, freedesktop.org
+spec on Linux. ~3MB of compile-time deps but the integration is
+trivial (`trash::delete(path)`) and the UX win is huge — "Finish
+Project" being recoverable is the whole reason it's a different
+action from "Delete project."
+
+**Polish in this commit:**
+- Picker alignment: "ACTIVE" label now has 14px left padding so its
+  first letter aligns with the project name's first letter. The dot
+  hangs out to the left of the name row only
+- Ctrl+Space → plain Ctrl: holding Ctrl alone is the override.
+  Ctrl+Space is parked for the future command palette (see note
+  above)
+
+**Deferred to Phase D (or its own session):**
+- In-app scrubber preview — the headline 0.6 visual feature
+- Export-to-folder (needs plugin-dialog install)
+- Custom modal component to replace native confirm() chains
 
 ---
 

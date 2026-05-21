@@ -95,8 +95,16 @@ What works end-to-end:
   (handles cross-volume + name collisions). `library_delete` gained
   an opt-in `delete_file` for DB-and-disk removal (with thumbnail
   cleanup). Asset drawer surfaces both "Forget" and "Delete file".
-  Ctrl+Space held during a Download / Queue click overrides to
-  Library regardless of active scope.
+  Holding **Ctrl** during a Download / Queue click overrides to
+  Library regardless of active scope (Ctrl+Space reserved for future
+  command palette).
+- ✅ **0.6 Phase C — duplicate detection + Finish Project.**
+  `library_find_by_url` runs in parallel with metadata fetch; a
+  lime "already saved" chip warns when re-downloading without
+  blocking. `project_finish` (via the `trash` crate) promotes
+  assets to Library and OS-trashes the project folder — recoverable
+  from Recycle Bin if finished too early. Projects page row gains a
+  "Finish" button with three-way confirm (promote / trash all / cancel).
 - ✅ **Local thumbnails** — ffmpeg extracts a mid-clip frame (480px wide
   JPG q=4, ~30–80 KB) into `~/Media Hub/_thumbnails/<asset_id>.jpg` on
   every successful download. UI prefers local thumbs over remote
@@ -152,9 +160,9 @@ dev0 ──┐
        │
        ▼
      0.6.A  ✅  project foundations (schema, CRUD, active scope)
-     0.6.B  ✅  filesystem routing + physical move + delete-from-disk + Ctrl+Space
-     0.6.C  🟡  project lifecycle (Finish Project, duplicate detection, export)
-     0.6.D  🟡  in-app scrubber preview
+     0.6.B  ✅  filesystem routing + physical move + delete-from-disk + Ctrl override
+     0.6.C  ✅  duplicate detection + Finish Project (OS trash)
+     0.6.D  🟡  in-app scrubber preview (+ export-to-folder)
        │
        ▼
      0.7.0  🟡  Twitter/X support + platform abstraction

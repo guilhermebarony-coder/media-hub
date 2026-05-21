@@ -1148,7 +1148,9 @@ pub fn run() {
             library::project_list,
             library::project_rename,
             library::project_delete,
+            library::project_finish,
             library::asset_set_project,
+            library::library_find_by_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

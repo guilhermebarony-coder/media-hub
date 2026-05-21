@@ -154,13 +154,19 @@ button { font-family: inherit; }
   letter-spacing: 0.06em;
   text-transform: uppercase;
   font-weight: 500;
+  /* Indent ACTIVE by (dot width + gap) so its first letter aligns
+     vertically with the name's first letter on the row below. Owner
+     feedback: dot-out-front feels right but only if the two text
+     lines start at the same x position. */
+  padding-left: 14px;
 }
-/* Dot lives inline with .name so it aligns with the name baseline
-   regardless of how tall the picker is or how many lines the col has.
-   Earlier version placed the dot as a sibling of .col and flex
-   center-aligned it against the picker height — which put the dot
-   between the "ACTIVE" label and the project name. Visually wrong;
-   the glow on the project variant made it especially obvious. */
+/* Dot lives inline with .name on the second row. The label above is
+   padded to match the same starting x, so the visual hierarchy reads
+   as:
+       [    ACTIVE         ]
+       [•   Death Stranding]
+   instead of having the dot float in random space.
+*/
 .proj-picker .name-row {
   display: flex;
   align-items: center;
@@ -693,6 +699,13 @@ textarea.field-input {
   background: color-mix(in oklab, var(--err), transparent 88%);
   border-color: color-mix(in oklab, var(--err), transparent 65%);
 }
+.msg-row.dupe {
+  background: var(--accent-dim);
+  border-color: var(--accent-line);
+  color: var(--text-0);
+}
+.msg-row.dupe code { color: var(--text-0); }
+.msg-row.dupe .label { color: var(--accent); }
 .msg-row .label {
   text-transform: uppercase;
   letter-spacing: 0.06em;
