@@ -171,28 +171,55 @@ experience. The delta should be substantial (~3-5x).
 leak signal across normal operations, library scales linearly at
 small N. Excellent starting point.
 
-**msedgewebview2.exe (the actual React renderer) — STILL NEEDED:**
+**WebView2 children (the actual React renderer) — captured 2026-05-22:**
 
-The Tauri architecture spawns a separate WebView2 process (often
-multiple child processes for sandboxing) where the React code
-actually runs. The numbers above are JUST the Rust host. The
-renderer is typically 5-30x larger and is where most leak risk
-lives.
+WebView2 is multi-process (sandboxed children for GPU, network,
+storage, audio, crashpad). All numbers below sum all children
+under "Utilitário (6/7)" in Task Manager.
 
-Capture next session (~5 min, no downloads needed):
+| Moment | Total WebView2 | Tauri+React proc | GPU proc | Notes |
+|--------|----------------|------------------|----------|-------|
+| Idle on Library | 121.2 MB | 43.4 MB | 34.8 MB | baseline |
+| After clicks across routes | 130.1 MB | 49.6 MB | 39.3 MB | +9 MB nav cost |
+| Library navigation, 11 assets | 132.6 MB | 52.3 MB | 38.1 MB | +2 MB delta |
+| During download (peak) | 192.6 MB | 55.5 MB | **91.0 MB** | +60 MB GPU spike |
+| After download settled | 145.6 MB | 51.2 MB | 48.7 MB | drops back |
 
-| Moment | msedgewebview2.exe total (all children summed) |
-|--------|-----------------------------------------------|
-| Just launched, idle on Library | |
-| After clicking through all 4 routes | |
-| After scrolling library + opening drawer 5 times | |
-| After 30 min idle (B.1 soak start) | |
+**Owner-reported max during normal use: ~155 MB total.**
 
-To find: Task Manager → Processes tab → expand "Media Hub" arrow.
-Or Details tab → sort by name → grab all `msedgewebview2.exe`
-rows (sum them).
+**Full app footprint** (WebView2 + Rust host):
+- Idle: ~127 MB total
+- Normal use (Library + Download): ~138 MB
+- During downloads (typical max): ~155 MB
+- Peak with scrubber active + decoding: ~199 MB
 
-Stretch: stopwatch startup time also still TBD (see next section).
+**Interpretation:**
+
+✅ **Genuinely lean for a Tauri+React+video app.** For context:
+   VS Code 300-500 MB · Spotify 250-400 MB · Discord 300-600 MB ·
+   Slack 400-800 MB. We're under half.
+
+✅ **Tauri + React process steady at 43-55 MB.** React state +
+   DOM + JS engine. Not bloated.
+
+✅ **Stable navigation cost.** +9 MB across all routes is the
+   route components being instantiated for the first time
+   (Library/Projects/Settings/Download). After that, navigation
+   is free.
+
+✅ **Library at 11 assets adds ~2 MB total.** Tracks with the
+   Rust-side per-asset finding of ~18 KB. Scales linearly.
+
+🟡 **GPU process spiked to 91 MB during download — investigate
+   in B.2.** Likely the scrubber's `<video>` element holding
+   decoded frame buffers. Dropped to 48 MB after. Confirm it
+   returns to ~35 MB baseline when the user leaves the Download
+   page entirely (no scrubber mounted).
+
+**Code-splitting expected impact (A.5):** the 43-55 MB
+"Tauri + React" process should drop ~5-10 MB once we lazy-load
+Library/Projects/Settings off the initial path. Pages instantiate
+only when navigated to instead of all-at-once on first load.
 
 ---
 
