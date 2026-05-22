@@ -1,0 +1,26 @@
+-- 005_indexes.sql — 0.9.A perf audit findings.
+--
+-- Adds explicit indexes for hot predicates that were relying on
+-- SQLite's auto-index heuristics (which kick in late and don't
+-- count on small tables until enough rows exist).
+--
+-- Why each one:
+--
+--   idx_assets_source_url
+--     Used by:
+--       - library_find_by_url(source_url)  → WHERE source_url = ?
+--       - library_siblings(asset_id)       → looks up source_url for
+--         the input asset, then queries WHERE source_url = ?
+--       - library_list's correlated subquery for sibling_count:
+--         (SELECT COUNT(*) FROM assets s WHERE s.source_url = a.source_url ...)
+--         This runs ONCE PER RESULT ROW. Without an index, each
+--         sub-evaluation is a full-table scan. With N segments
+--         per source video and L results, that's O(N×L).
+--     The win compounds with library size — at 1000 assets with
+--     30% being segment-siblings, this is the difference between
+--     a snappy library and one that drags.
+--
+-- CREATE INDEX IF NOT EXISTS is idempotent — the migration loop's
+-- "duplicate" swallow logic doesn't need to fire.
+
+CREATE INDEX IF NOT EXISTS idx_assets_source_url ON assets(source_url);
