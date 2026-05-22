@@ -17,6 +17,7 @@
 // dep surface clean.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -74,6 +75,15 @@ pub struct Settings {
     /// Whether the onboarding tutorial has been completed. False on
     /// first launch → onboarding modal renders. Lands 0.8.D.
     pub onboarding_complete: bool,
+
+    /// Per-platform sticky format memory (0.8.C). Key is platform name
+    /// ("youtube" today; "twitter", "tiktok" etc. when 1.x platforms
+    /// land). Value is the format_id the user last picked for that
+    /// platform. On metadata load, the frontend tries to pre-select
+    /// the sticky format from the format list if it's still present.
+    /// Empty by default — first download is a regular pick.
+    #[serde(default)]
+    pub last_formats: HashMap<String, String>,
 }
 
 impl Default for Settings {
@@ -86,8 +96,86 @@ impl Default for Settings {
             bandwidth_limit_kbps: None,
             default_transcode_preset: "none".into(),
             onboarding_complete: false,
+            last_formats: HashMap::new(),
         }
     }
+}
+
+// =====================================================================
+// Helpers used by other modules
+// =====================================================================
+
+/// Resolve the on-disk root for content (Library/, Projects/, _thumbnails/).
+///
+/// Returns the user's `library_root` override if set + non-empty + valid,
+/// otherwise the default `<home>/Media Hub`. The DB intentionally stays
+/// at the default path regardless — moving an open SQLite file mid-session
+/// is fiddly and the user-visible win is small.
+///
+/// Pass-through-safe: if the override path doesn't exist yet, we still
+/// return it; the caller (`std::fs::create_dir_all`) will create it.
+pub fn content_root(state: &SettingsState, home: &std::path::Path) -> PathBuf {
+    let guard = state.inner.lock();
+    let override_path = guard
+        .ok()
+        .and_then(|g| g.library_root.clone())
+        .filter(|s| !s.trim().is_empty());
+    match override_path {
+        Some(p) => PathBuf::from(p),
+        None => home.join("Media Hub"),
+    }
+}
+
+/// Build the yt-dlp `-o` template path from the user's rename template
+/// (0.8.C). Empty template → the original default. Tokens supported:
+///
+///   {title}   → %(title).180B  (truncated for filesystem-safe length)
+///   {channel} → %(channel)s
+///   {date}    → %(upload_date)s  (YYYYMMDD)
+///   {id}      → %(id)s
+///
+/// We always force `.%(ext)s` at the end if the user didn't include it
+/// — without it yt-dlp produces extension-less files that NLEs reject.
+/// `--restrict-filenames` (always on) handles unsafe character cleanup
+/// downstream, so no per-token escaping needed here.
+pub fn build_filename_template(user_template: &str) -> String {
+    let trimmed = user_template.trim();
+    if trimmed.is_empty() {
+        return "%(title).180B [%(id)s].%(ext)s".to_string();
+    }
+    let mut out = trimmed
+        .replace("{title}", "%(title).180B")
+        .replace("{channel}", "%(channel)s")
+        .replace("{date}", "%(upload_date)s")
+        .replace("{id}", "%(id)s");
+    if !out.contains("%(ext)s") {
+        out.push_str(".%(ext)s");
+    }
+    out
+}
+
+/// Return yt-dlp argv extras for the bandwidth throttle setting.
+/// None / 0 = unlimited (empty Vec). Otherwise emits `--limit-rate <N>K`.
+pub fn bandwidth_args(state: &SettingsState) -> Vec<String> {
+    let guard = match state.inner.lock() {
+        Ok(g) => g,
+        Err(_) => return Vec::new(),
+    };
+    match guard.bandwidth_limit_kbps {
+        Some(n) if n > 0 => vec!["--limit-rate".into(), format!("{n}K")],
+        _ => Vec::new(),
+    }
+}
+
+/// Return the user's rename template (0.8.C). Cloned so the caller
+/// owns the string without holding the settings lock during the
+/// (potentially long) yt-dlp invocation that follows.
+pub fn rename_template(state: &SettingsState) -> String {
+    state
+        .inner
+        .lock()
+        .map(|g| g.rename_template.clone())
+        .unwrap_or_default()
 }
 
 // =====================================================================

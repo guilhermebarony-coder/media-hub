@@ -1,8 +1,13 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Icon } from "../lib/icons";
 import { useSettings } from "../lib/settings";
-import { TRANSCODE_PRESETS, type CookiesSource, type SidecarVersion, type TranscodePreset } from "../lib/types";
+import {
+  RENAME_PRESETS,
+  TRANSCODE_PRESETS,
+  type CookiesSource,
+  type SidecarVersion,
+  type TranscodePreset,
+} from "../lib/types";
 
 /**
  * Settings page — 0.8 milestone.
@@ -145,21 +150,103 @@ function SourcesSection() {
 // =====================================================================
 
 function LibrarySection() {
+  const { settings, save } = useSettings();
+  const root = settings.library_root ?? "";
+  const template = settings.rename_template;
+
+  // The rename preset dropdown matches the current template value
+  // against the built-in patterns. If the user typed something custom
+  // we still match on string equality — same value, same preset.
+  // Anything else lands in the "custom" pseudo-option.
+  const matchedPreset =
+    RENAME_PRESETS.find((p) => p.value === template)?.value ?? "__custom__";
+
+  function setRoot(value: string) {
+    void save((s) => ({
+      ...s,
+      library_root: value.trim() === "" ? null : value,
+    }));
+  }
+
+  function setTemplate(value: string) {
+    void save((s) => ({ ...s, rename_template: value }));
+  }
+
+  function pickPreset(value: string) {
+    // The synthetic "__custom__" entry is only the display option
+    // when the current template doesn't match a built-in. Picking
+    // it from the dropdown is a no-op; the user has to edit the
+    // freeform input to make a real change.
+    if (value === "__custom__") return;
+    setTemplate(value);
+  }
+
   return (
     <section className="card-box">
       <h2>
-        Library <span className="chip">0.8.C</span>
+        Library <span className="chip">root + rename</span>
       </h2>
       <p className="hint">
-        Library root override (move <code>~/Media Hub</code> somewhere else).
-        Rename rule with <code>&#123;channel&#125;</code> /{" "}
-        <code>&#123;title&#125;</code> / <code>&#123;date&#125;</code> tokens
-        plus a few preset patterns to pick from.
+        Override where Media Hub stores downloads. Pick a rename
+        pattern (or write your own) for how files land on disk.
+        Existing files don't move — the override applies to new
+        downloads. <code>library.db</code> always lives at the default
+        path so it survives root changes.
       </p>
-      <div className="settings-placeholder">
-        <Icon.settings width={18} height={18} style={{ color: "var(--text-3)" }} />
-        <span className="faint mono" style={{ fontSize: 11 }}>
-          Fields land with 0.8.C.
+
+      <div className="settings-row">
+        <span className="settings-label">Library root</span>
+        <input
+          className="field-input"
+          type="text"
+          placeholder="(default) ~/Media Hub"
+          value={root}
+          onChange={(e) => setRoot(e.target.value)}
+          spellCheck={false}
+        />
+        <span className="hint-text faint">
+          Empty = default. Use an absolute path (e.g.{" "}
+          <code>D:\Footage\MediaHub</code>).
+        </span>
+      </div>
+
+      <div className="settings-row">
+        <span className="settings-label">Rename preset</span>
+        <select
+          className="field-select"
+          value={matchedPreset}
+          onChange={(e) => pickPreset(e.target.value)}
+        >
+          {RENAME_PRESETS.map((p) => (
+            <option key={p.value || "_default_"} value={p.value}>
+              {p.label}
+            </option>
+          ))}
+          {matchedPreset === "__custom__" && (
+            <option value="__custom__">Custom — see template below</option>
+          )}
+        </select>
+        <span className="hint-text faint">
+          {RENAME_PRESETS.find((p) => p.value === matchedPreset)?.hint ??
+            "custom pattern below"}
+        </span>
+      </div>
+
+      <div className="settings-row">
+        <span className="settings-label">Template</span>
+        <input
+          className="field-input"
+          type="text"
+          placeholder="{title} [{id}]"
+          value={template}
+          onChange={(e) => setTemplate(e.target.value)}
+          spellCheck={false}
+        />
+        <span className="hint-text faint">
+          Tokens: <code>&#123;title&#125;</code> ·{" "}
+          <code>&#123;channel&#125;</code> · <code>&#123;date&#125;</code> ·{" "}
+          <code>&#123;id&#125;</code>. Empty = legacy default. Extension
+          appended automatically.
         </span>
       </div>
     </section>
@@ -173,21 +260,66 @@ function LibrarySection() {
 function DownloadsSection() {
   const { settings, save } = useSettings();
   const concurrency = settings.download_concurrency;
+  const limit = settings.bandwidth_limit_kbps;
+  const limited = limit != null && limit > 0;
+  // Local input mirror so the user can type freely (including blanking
+  // the field) without persisting "0" on every keystroke. Pushed to
+  // settings on blur or when the checkbox toggles.
+  const [limitDraft, setLimitDraft] = useState<string>(limited ? String(limit) : "");
+
+  useEffect(() => {
+    setLimitDraft(limited ? String(limit) : "");
+  }, [limit, limited]);
 
   function setConcurrency(n: number) {
     const clamped = Math.max(1, Math.min(6, Math.round(n)));
     void save((s) => ({ ...s, download_concurrency: clamped }));
   }
 
+  function commitLimit(raw: string) {
+    const n = Math.max(0, Math.floor(Number(raw)));
+    void save((s) => ({
+      ...s,
+      bandwidth_limit_kbps: Number.isFinite(n) && n > 0 ? n : null,
+    }));
+  }
+
+  function toggleLimit(on: boolean) {
+    if (on) {
+      // Bring back the last-typed value (or default to 5000 KiB/s
+      // which is "fast home connection minus headroom").
+      const fallback = Number(limitDraft) > 0 ? Number(limitDraft) : 5000;
+      setLimitDraft(String(fallback));
+      void save((s) => ({ ...s, bandwidth_limit_kbps: fallback }));
+    } else {
+      void save((s) => ({ ...s, bandwidth_limit_kbps: null }));
+    }
+  }
+
+  // Per-platform format memory display (read-only — we clear them via
+  // a "Forget" link to keep this card decision-light). The Hash of
+  // remembered platforms is small (1-2 entries today).
+  const stickyEntries = Object.entries(settings.last_formats ?? {});
+
+  function clearSticky(platform?: string) {
+    void save((s) => {
+      const next = { ...(s.last_formats ?? {}) };
+      if (platform) delete next[platform];
+      else for (const k of Object.keys(next)) delete next[k];
+      return { ...s, last_formats: next };
+    });
+  }
+
   return (
     <section className="card-box">
       <h2>
-        Downloads <span className="chip">parallel workers</span>
+        Downloads <span className="chip">workers + throttle</span>
       </h2>
       <p className="hint">
-        How many yt-dlp downloads run in parallel. More = faster batch
-        jobs but more bandwidth contention; the sweet spot for most
-        connections is 3. Clamped 1–6.
+        How many yt-dlp downloads run in parallel, optional bandwidth
+        ceiling, and per-platform format memory. Concurrency × throttle
+        is the effective ceiling — yt-dlp's <code>--limit-rate</code> is
+        per-process.
       </p>
 
       <div className="settings-row">
@@ -215,14 +347,71 @@ function DownloadsSection() {
         </span>
       </div>
 
-      <div
-        className="settings-placeholder"
-        style={{ marginTop: 4 }}
-      >
-        <Icon.settings width={16} height={16} style={{ color: "var(--text-3)" }} />
-        <span className="faint mono" style={{ fontSize: 11 }}>
-          Bandwidth throttle + sticky last-format per platform → 0.8.C.
+      <div className="settings-row">
+        <span className="settings-label">Bandwidth</span>
+        <label className="settings-radio" style={{ flex: "0 0 auto" }}>
+          <input
+            type="checkbox"
+            checked={limited}
+            onChange={(e) => toggleLimit(e.target.checked)}
+          />
+          <span>Throttle</span>
+        </label>
+        <input
+          type="number"
+          className="field-input"
+          style={{ width: 110, flex: "0 0 110px" }}
+          min={0}
+          step={100}
+          placeholder="KiB/s"
+          value={limitDraft}
+          disabled={!limited}
+          onChange={(e) => setLimitDraft(e.target.value)}
+          onBlur={(e) => commitLimit(e.target.value)}
+        />
+        <span className="hint-text faint">
+          KiB/s per worker. Off = unlimited. e.g. <code>5000</code> ≈ 5
+          MB/s per parallel download.
         </span>
+      </div>
+
+      <div className="settings-row">
+        <span className="settings-label">Sticky formats</span>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+          {stickyEntries.length === 0 ? (
+            <span className="faint mono" style={{ fontSize: 11 }}>
+              none yet — first downloaded format per platform is
+              remembered automatically
+            </span>
+          ) : (
+            stickyEntries.map(([platform, fmt]) => (
+              <div
+                key={platform}
+                style={{ display: "flex", alignItems: "center", gap: 8 }}
+              >
+                <code style={{ flex: 1 }}>
+                  {platform} → format <strong>{fmt}</strong>
+                </code>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => clearSticky(platform)}
+                  style={{ fontSize: 10, padding: "2px 8px" }}
+                >
+                  Forget
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+        {stickyEntries.length > 1 && (
+          <button
+            className="btn btn-secondary"
+            onClick={() => clearSticky()}
+            style={{ flex: "0 0 auto" }}
+          >
+            Forget all
+          </button>
+        )}
       </div>
     </section>
   );

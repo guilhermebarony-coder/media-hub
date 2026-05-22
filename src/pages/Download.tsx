@@ -81,6 +81,22 @@ export default function DownloadPage() {
  *   - The button label changes while Ctrl is held, so the user sees
  *     the override is live before they click
  */
+/**
+ * Detect the source platform from a paste-able URL. Today we only
+ * support YouTube — but the 0.8.C sticky-format feature stores last
+ * picks per platform so the shape is forward-compatible with the 1.x
+ * platform abstraction. Returns "youtube" as a sensible default for
+ * any unrecognized URL (the worst case is a sticky pick that won't
+ * resolve, which we simply ignore).
+ */
+function detectPlatform(url: string): string {
+  const u = url.toLowerCase();
+  if (u.includes("youtube.com") || u.includes("youtu.be")) return "youtube";
+  if (u.includes("twitter.com") || u.includes("x.com")) return "twitter";
+  if (u.includes("tiktok.com")) return "tiktok";
+  return "youtube";
+}
+
 function useLibraryOverride(): boolean {
   const [held, setHeld] = useState(false);
   useEffect(() => {
@@ -105,7 +121,7 @@ function useLibraryOverride(): boolean {
 
 function MetadataCard() {
   const { scope } = useActiveProject();
-  const { settings } = useSettings();
+  const { settings, save: saveSettings } = useSettings();
   const overrideLibrary = useLibraryOverride();
   const [url, setUrl] = useState("");
   const [meta, setMeta] = useState<VideoMetadata | null>(null);
@@ -204,6 +220,16 @@ function MetadataCard() {
       ]);
       setMeta(out);
       setDuplicate(dupe);
+      // 0.8.C sticky format: if the user has previously downloaded
+      // this platform, try to re-pick the same format_id. Silent
+      // no-op when the sticky id no longer exists in the format
+      // list (yt-dlp's ladder rotates over time).
+      const platform = detectPlatform(url);
+      const stickyId = settings.last_formats?.[platform];
+      if (stickyId) {
+        const match = out.formats.find((f) => f.id === stickyId);
+        if (match) setSelectedFormat(match);
+      }
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -266,6 +292,17 @@ function MetadataCard() {
     // Capture into a local so subsequent state changes don't leak in.
     const targetProjectId =
       !overrideLibrary && scope.kind === "project" ? scope.id : null;
+
+    // 0.8.C: remember this format pick for the platform. Fire-and-
+    // forget — failure to persist isn't worth blocking the download.
+    {
+      const platform = detectPlatform(url);
+      const fmtId = selectedFormat.id;
+      void saveSettings((s) => ({
+        ...s,
+        last_formats: { ...(s.last_formats ?? {}), [platform]: fmtId },
+      })).catch(() => {});
+    }
 
     setDownloading(true);
     setDlErr(null);

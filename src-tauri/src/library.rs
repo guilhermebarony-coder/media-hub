@@ -515,6 +515,7 @@ pub async fn library_count(
 pub async fn library_delete(
     app: AppHandle,
     state: State<'_, LibraryState>,
+    settings_state: State<'_, crate::settings::SettingsState>,
     id: String,
     delete_file: Option<bool>,
 ) -> Result<(), String> {
@@ -550,10 +551,11 @@ pub async fn library_delete(
             // primary user-visible action. Just warn in logs.
             eprintln!("library_delete: removing {file_path}: {e}");
         }
-        // Best-effort thumbnail cleanup too.
+        // Best-effort thumbnail cleanup too. Respects library_root
+        // override (0.8.C) so thumbnails for content stored under a
+        // custom root are still removed.
         if let Ok(home) = app.path().home_dir() {
-            let thumb = home
-                .join("Media Hub")
+            let thumb = crate::settings::content_root(&settings_state, &home)
                 .join("_thumbnails")
                 .join(format!("{id}.jpg"));
             let _ = std::fs::remove_file(thumb);
@@ -772,8 +774,14 @@ async fn project_slug_for(pool: &SqlitePool, id: &str) -> Result<Option<String>,
 
 /// Compute the on-disk download directory for a given scope.
 ///
-///   None         → <home>/Media Hub/Library/raw/
-///   Some(id)     → <home>/Media Hub/Projects/<slug>/raw/
+///   None         → <content_root>/Library/raw/
+///   Some(id)     → <content_root>/Projects/<slug>/raw/
+///
+/// `content_root` is `<home>/Media Hub` by default, or the user's
+/// `settings.library_root` override (0.8.C). Callers resolve it via
+/// `settings::content_root(state, home)`. We accept it as a parameter
+/// here (rather than reaching into settings state) so library.rs has
+/// no settings dependency.
 ///
 /// The `raw/` subfolder gives us room for future siblings without
 /// reorganizing — e.g. `proxies/` for 0.6 scrubber low-res files,
@@ -784,10 +792,10 @@ async fn project_slug_for(pool: &SqlitePool, id: &str) -> Result<Option<String>,
 /// back to Library. Defensive — better than failing the download.
 pub async fn resolve_download_dir(
     state: &LibraryState,
-    home: &Path,
+    content_root: &Path,
     project_id: Option<&str>,
 ) -> Result<PathBuf, String> {
-    let root = home.join("Media Hub");
+    let root = content_root.to_path_buf();
     match project_id {
         None => Ok(root.join("Library").join("raw")),
         Some(id) => {
@@ -1057,6 +1065,7 @@ pub async fn project_rename(
 pub async fn asset_set_project(
     app: AppHandle,
     state: State<'_, LibraryState>,
+    settings_state: State<'_, crate::settings::SettingsState>,
     asset_id: String,
     project_id: Option<String>,
 ) -> Result<(), String> {
@@ -1094,7 +1103,8 @@ pub async fn asset_set_project(
         .path()
         .home_dir()
         .map_err(|e| format!("resolve home dir: {e}"))?;
-    let target_dir = resolve_download_dir(&state, &home, project_id.as_deref()).await?;
+    let content_root = crate::settings::content_root(&settings_state, &home);
+    let target_dir = resolve_download_dir(&state, &content_root, project_id.as_deref()).await?;
 
     let src = PathBuf::from(&current_path);
     let new_path = if src.exists() {
@@ -1157,6 +1167,7 @@ pub async fn asset_set_project(
 pub async fn project_finish(
     app: AppHandle,
     state: State<'_, LibraryState>,
+    settings_state: State<'_, crate::settings::SettingsState>,
     id: String,
     promote: bool,
 ) -> Result<(), String> {
@@ -1171,7 +1182,8 @@ pub async fn project_finish(
         .path()
         .home_dir()
         .map_err(|e| format!("resolve home dir: {e}"))?;
-    let project_dir = home.join("Media Hub").join("Projects").join(&slug);
+    let content_root = crate::settings::content_root(&settings_state, &home);
+    let project_dir = content_root.join("Projects").join(&slug);
 
     if promote {
         // Move each project asset back to Library (file + DB) via
@@ -1185,7 +1197,7 @@ pub async fn project_finish(
                 .await
                 .map_err(|e| format!("project_finish list: {e}"))?;
 
-        let library_dir = home.join("Media Hub").join("Library").join("raw");
+        let library_dir = content_root.join("Library").join("raw");
         for (asset_id,) in asset_ids {
             // Reuse the asset_set_project logic by calling it
             // inline. We can't invoke the #[tauri::command] from

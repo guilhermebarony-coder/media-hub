@@ -168,6 +168,11 @@ export type Settings = {
   bandwidth_limit_kbps: number | null;
   default_transcode_preset: string;
   onboarding_complete: boolean;
+  /** Per-platform sticky last-format memory (0.8.C). Key = platform
+   * id ("youtube"); value = the format_id last picked for that
+   * platform. Restored on metadata load if still present in the
+   * fetched format list. */
+  last_formats: Record<string, string>;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -178,7 +183,44 @@ export const DEFAULT_SETTINGS: Settings = {
   bandwidth_limit_kbps: null,
   default_transcode_preset: "none",
   onboarding_complete: false,
+  last_formats: {},
 };
+
+// =====================================================================
+// Rename-template presets (0.8.C)
+// =====================================================================
+
+/** Built-in patterns surfaced in Settings → Library. Users can also
+ *  type a freeform pattern using the same tokens. The empty string
+ *  means "use the legacy yt-dlp default" (title + id). */
+export type RenamePreset = {
+  value: string;
+  label: string;
+  hint: string;
+};
+
+export const RENAME_PRESETS: RenamePreset[] = [
+  {
+    value: "",
+    label: "Default — title + id",
+    hint: "%(title).180B [%(id)s].%(ext)s",
+  },
+  {
+    value: "{channel} - {title}",
+    label: "{channel} - {title}",
+    hint: "Big Buck Bunny Channel - Trailer.mp4",
+  },
+  {
+    value: "{date} - {title}",
+    label: "{date} - {title}",
+    hint: "20240315 - Trailer.mp4 (yt-dlp date format)",
+  },
+  {
+    value: "{channel} - {date} - {title}",
+    label: "{channel} - {date} - {title}",
+    hint: "Channel - 20240315 - Trailer.mp4",
+  },
+];
 
 // =====================================================================
 // Projects (0.6 Phase A)

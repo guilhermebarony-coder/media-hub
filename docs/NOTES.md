@@ -22,6 +22,74 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-05-21 (shipped) — 0.8.C: rename rules, bandwidth, sticky format, library root
+
+**Shipped:**
+
+- **Library root override** (`settings.library_root`). New downloads
+  + thumbnails route under the override path. `library.db` stays at
+  the default `~/Media Hub/library.db` — moving an open SQLite file
+  mid-session is fiddly and the user win is small. Existing files
+  don't move; the override applies forward only.
+  - New helper `settings::content_root(state, home)` is the single
+    source of truth for "where does new content land." Callers:
+    `yt_download`, `media_extract_thumbnail`, `asset_set_project`,
+    `project_finish`, `library_delete` (thumb cleanup).
+  - `library::resolve_download_dir` signature change: was
+    `(state, home, project_id)`, now `(state, content_root,
+    project_id)`. Keeps library.rs free of any settings dep.
+
+- **Rename template** (`settings.rename_template`). Tokens
+  `{title}` / `{channel}` / `{date}` / `{id}` map to yt-dlp's
+  `%(...)s` placeholders. Empty = legacy default
+  (`%(title).180B [%(id)s].%(ext)s`). Extension is auto-appended if
+  the user forgets `{ext}`. `settings::build_filename_template` is
+  the converter; tested by inspection.
+  - Settings UI: preset dropdown with 4 patterns + a freeform
+    template input. The dropdown shows "Custom" when the freeform
+    value doesn't match a built-in — selecting Custom is a no-op,
+    just a display affordance.
+
+- **Bandwidth throttle** (`settings.bandwidth_limit_kbps`). Off by
+  default (None / unlimited). When set, injects yt-dlp's
+  `--limit-rate <N>K` per process. Note the per-process semantics:
+  with N parallel workers the effective ceiling is N × limit. UI
+  has a toggle + number input pair; off disables the field and
+  preserves the last-typed value.
+
+- **Sticky last-format per platform** (`settings.last_formats:
+  HashMap<String, String>`). On metadata load, if a sticky format_id
+  exists for the detected platform AND is still in the fetched
+  format list, pre-select it. On download click, save the picked
+  format_id under the platform key. Platform detection by URL
+  substring (`youtube.com` / `youtu.be` → "youtube", same for
+  twitter/tiktok placeholders — only YouTube is functional today
+  but the shape is 1.x-ready).
+  - Settings UI lists remembered platforms with per-row "Forget"
+    buttons. Auto-populates on first download per platform, no
+    user setup.
+
+**Decisions worth keeping:**
+
+- Library root scope: content only, not DB. The Settings hint
+  explains this upfront so the asymmetry isn't surprising.
+- Rename template doesn't sanitize unsafe chars at this layer —
+  yt-dlp's always-on `--restrict-filenames` handles that
+  downstream. Keeps the template logic readable.
+- Sticky format storage in `settings.json` (not localStorage) so
+  it's covered by the same atomic-write + survival semantics as
+  every other preference. Will also auto-sync if we ever ship
+  multi-window or settings export.
+
+**What's left for 0.8:**
+- **0.8.D** — first-run onboarding (3-screen tutorial: welcome,
+  pick library root + transcode default, segment-download walkthrough
+  + NLE watch-folder tip).
+- **0.8.E** — packaging (.msi/.dmg installers, sidecar bundling,
+  README polish, LICENSE, app icon).
+
+---
+
 ## 2026-05-21 (parked, target 1.2) — Command palette (Ctrl+Space)
 
 **Owner note (2026-05-21):** wants to reserve Ctrl+Space for a future

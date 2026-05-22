@@ -398,7 +398,10 @@ async fn yt_download(
         .path()
         .home_dir()
         .map_err(|e| format!("resolve home dir: {e}"))?;
-    let dest = library::resolve_download_dir(&state, &home, project_id.as_deref())
+    // 0.8.C: respect library_root override. The content root is either
+    // `<home>/Media Hub` (default) or the user's configured override path.
+    let content_root = settings::content_root(&settings, &home);
+    let dest = library::resolve_download_dir(&state, &content_root, project_id.as_deref())
         .await
         .map_err(|e| format!("resolve dest dir: {e}"))?;
     std::fs::create_dir_all(&dest).map_err(|e| format!("create dest dir: {e}"))?;
@@ -431,7 +434,14 @@ async fn yt_download(
     // wash — we used to embed the in/out in the yt-dlp template, but
     // since we ffmpeg-trim after the download either way, the template
     // doesn't need it.
-    let template_path = dest.join("%(title).180B [%(id)s].%(ext)s");
+    //
+    // 0.8.C: rename template comes from settings. Empty = legacy
+    // default. `build_filename_template` converts user-facing tokens
+    // ({channel}, {title}, {date}, {id}) into yt-dlp's %(...)s syntax
+    // and guarantees a trailing .%(ext)s so we never produce
+    // extension-less files.
+    let user_template = settings::rename_template(&settings);
+    let template_path = dest.join(settings::build_filename_template(&user_template));
     let template_str = template_path.to_string_lossy().to_string();
 
     // When yt-dlp needs to mux (e.g. `313+bestaudio/best`), it shells out
@@ -505,6 +515,15 @@ async fn yt_download(
     let cookies = settings::cookies_args(&settings);
     for c in &cookies {
         args.push(c.as_str());
+    }
+    // Bandwidth throttle (0.8.C). Empty when unlimited (default);
+    // otherwise emits --limit-rate <N>K. yt-dlp's rate limiter is
+    // per-process, so with N parallel workers the effective ceiling
+    // is N × limit. That's a feature — users tune the per-job limit
+    // up if they want headroom.
+    let bandwidth = settings::bandwidth_args(&settings);
+    for b in &bandwidth {
+        args.push(b.as_str());
     }
     // Allowed container values — defensive guard against arbitrary
     // strings from the renderer slipping into a yt-dlp arg.
@@ -1078,6 +1097,7 @@ pub struct ThumbnailResult {
 #[tauri::command]
 async fn media_extract_thumbnail(
     app: AppHandle,
+    settings: tauri::State<'_, settings::SettingsState>,
     src_path: String,
     asset_id: String,
     duration_sec: Option<f64>,
@@ -1097,7 +1117,9 @@ async fn media_extract_thumbnail(
         .path()
         .home_dir()
         .map_err(|e| format!("resolve home dir: {e}"))?;
-    let thumb_dir = home.join("Media Hub").join("_thumbnails");
+    // 0.8.C: respect library_root override so thumbnails sit alongside
+    // the content tree they belong to.
+    let thumb_dir = settings::content_root(&settings, &home).join("_thumbnails");
     std::fs::create_dir_all(&thumb_dir).map_err(|e| format!("create thumbnails dir: {e}"))?;
     let out_path = thumb_dir.join(format!("{asset_id}.jpg"));
     let out_path_str = out_path
