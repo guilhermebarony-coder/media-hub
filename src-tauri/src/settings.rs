@@ -202,12 +202,27 @@ pub fn rename_template(state: &SettingsState) -> String {
 pub fn translate_ytdlp_error(raw: &str) -> String {
     let lower = raw.to_ascii_lowercase();
 
-    // Chromium-family cookie DB lock — the big one.
+    // Chromium-family cookie DB lock — the original 0.8 friction.
     if lower.contains("could not copy") && lower.contains("cookie") {
         return format!(
             "Couldn't read browser cookies — the browser is open and locking its cookie database. \
              Close Chrome / Brave / Edge / Vivaldi / Opera and retry, or switch to Firefox \
              (works while open) in Settings → Sources. Raw: {raw}"
+        );
+    }
+
+    // Chrome 127+ "App-Bound Encryption" DPAPI failure — yt-dlp can't
+    // decrypt cookies from any Chromium browser since this Chrome
+    // release. Tracked at yt-dlp/yt-dlp#10927. There's no workaround
+    // we can implement; the user has to switch.
+    if lower.contains("failed to decrypt with dpapi") || lower.contains("dpapi") {
+        return format!(
+            "Chrome / Chromium-family cookie decryption is broken in recent Chrome \
+             versions (yt-dlp issue #10927 — Chrome 127+ moved to App-Bound \
+             Encryption). This affects Chrome, Brave, Edge, Vivaldi, Opera. \
+             • Switch to Firefox in Settings → Sources (Firefox cookies still work). \
+             • Or export a cookies.txt via the \"Get cookies.txt LOCALLY\" extension \
+             and use File mode. Raw: {raw}"
         );
     }
 
@@ -228,11 +243,23 @@ pub fn translate_ytdlp_error(raw: &str) -> String {
         );
     }
 
-    // Age-gate without cookies.
+    // Age-gate. The translation here is intentionally honest about
+    // what works and what doesn't — "configure cookies" alone isn't
+    // helpful when the user has ALREADY configured them and is still
+    // hitting the wall, which is common because YouTube's age
+    // verification often needs more than just session cookies.
     if lower.contains("sign in to confirm your age") || lower.contains("age-restricted") {
         return format!(
-            "Age-restricted video — needs YouTube login. Configure cookies in Settings → Sources \
-             (browser or cookies.txt file). Raw: {raw}"
+            "Age-restricted video. yt-dlp tried with your configured cookies but \
+             YouTube still required age confirmation. Common causes: \
+             • Your Google account isn't fully age-verified (some regions require \
+             ID verification — check google.com/account). \
+             • cookies.txt is missing auth tokens — re-export with \"Get cookies.txt \
+             LOCALLY\" while signed in AND on the video page itself. \
+             • If using browser cookies on Chrome/Brave/Edge: the DPAPI bug is \
+             silently breaking cookie reads — switch to Firefox. \
+             • Try a non-age-restricted video first to confirm cookies work AT ALL \
+             — if that works, the issue is account-level age verification. Raw: {raw}"
         );
     }
 

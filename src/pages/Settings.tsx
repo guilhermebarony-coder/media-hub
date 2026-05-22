@@ -107,24 +107,44 @@ function SourcesSection() {
       </div>
 
       {src.kind === "browser" && (
-        <div className="settings-row">
-          <span className="settings-label">Browser</span>
-          <select
-            className="field-select"
-            value={src.browser}
-            onChange={(e) => setBrowser(e.target.value)}
-          >
-            {BROWSERS.map((b) => (
-              <option key={b} value={b}>
-                {b[0].toUpperCase() + b.slice(1)}
-              </option>
-            ))}
-          </select>
-          <span className="hint-text faint">
-            On Windows, Chrome/Edge may require the browser to be closed
-            (cookie SQLite is file-locked while open).
-          </span>
-        </div>
+        <>
+          <div className="settings-row">
+            <span className="settings-label">Browser</span>
+            <select
+              className="field-select"
+              value={src.browser}
+              onChange={(e) => setBrowser(e.target.value)}
+            >
+              {BROWSERS.map((b) => (
+                <option key={b} value={b}>
+                  {b[0].toUpperCase() + b.slice(1)}
+                </option>
+              ))}
+            </select>
+            <span className="hint-text faint">
+              Closed-browser rule applies on Windows — Chromium locks
+              the cookie SQLite while running.
+            </span>
+          </div>
+          {src.browser !== "firefox" && src.browser !== "safari" && (
+            <div className="settings-warn">
+              <strong>⚠ Chromium browsers are currently broken</strong>
+              <div>
+                As of Chrome 127+ (Aug 2024), yt-dlp can't decrypt
+                cookies from Chrome / Brave / Edge / Vivaldi / Opera
+                due to Google's "App-Bound Encryption" change
+                (yt-dlp issue #10927). You'll get a{" "}
+                <code>Failed to decrypt with DPAPI</code> error even
+                with the browser closed.
+              </div>
+              <div>
+                <strong>Working alternatives:</strong> switch to{" "}
+                <strong>Firefox</strong> above, or use the{" "}
+                <strong>cookies.txt file mode</strong> instead.
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {src.kind === "file" && (

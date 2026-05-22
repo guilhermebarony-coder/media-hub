@@ -1469,6 +1469,26 @@ textarea.field-input {
   border: 1px dashed var(--line-hi);
   border-radius: 5px;
 }
+.settings-warn {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, #e0a93a 12%, var(--bg-2));
+  border: 1px solid color-mix(in srgb, #e0a93a 50%, transparent);
+  border-radius: 5px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-1);
+  margin-top: 4px;
+}
+.settings-warn strong { color: #e0a93a; }
+.settings-warn code {
+  background: var(--bg-3);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+}
 .settings-row {
   display: flex;
   align-items: center;
