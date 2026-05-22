@@ -1654,6 +1654,33 @@ and we'll triage next pass.
 
 Promoted from "? open" — items worth touching during the 0.9 sweep:
 
+- **Library-root change footgun (HIGH PRIORITY)** — 2026-05-22.
+  Today the `library_root` override applies forward only. Existing
+  `assets.file_path` rows still point at the OLD location, and
+  `library.db` itself ALWAYS stays at `~/Media Hub/library.db`
+  regardless of the override. If a user sets a new root and then
+  deletes the old `~/Media Hub/` folder:
+    - they wipe `library.db` → entire library history gone
+    - they wipe existing files → every old asset's Reveal/Open breaks
+  This is a real footgun shipped in 0.8.C. Three escalating fixes:
+    1. **Cheap (0.9.C, ~30 min):** add a red warning in Settings →
+       Library when `library_root` is changed: "Old downloads stay
+       where they are; don't delete `~/Media Hub/` (your library
+       database lives there). Use the Migrate button to move them
+       safely once we ship it."
+    2. **Medium (0.9.C, ~2 hrs):** add a `library_migrate_root`
+       command that physically moves all `Library/` + `Projects/` +
+       `_thumbnails/` content to the new root AND rewrites every
+       `assets.file_path` row to point at the new location. DB
+       stays put. Reveal/Open keeps working.
+    3. **Big (1.2 multi-root):** the Steam-style multi-root model
+       supersedes this entirely — each asset knows its root id, you
+       can have N roots, "Move" between them is a first-class action.
+- **Scrubber sensitivity setting** — 2026-05-22. Add a Settings →
+  Downloads (or new Scrubber section) field for jog/scrub sensitivity
+  so users can tune how fast the scrub bar reacts to drag. Probably
+  a multiplier (0.5× / 1× / 2×). Frame-step keyboard shortcuts stay
+  the same — this is for mouse drag feel. ~20 min, 0.9.D UX polish.
 - **"Test cookies" button** in Settings → Sources — runs a
   `yt-dlp --simulate` no-op against a known-public URL to confirm
   the configured cookies actually work. Slots into 0.9.C bug
