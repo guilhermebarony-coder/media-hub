@@ -399,6 +399,7 @@ function DownloadsSection() {
               download_concurrency: 3,
               bandwidth_limit_kbps: null,
               last_formats: {},
+              jog_sensitivity: 1.0,
             }))
           }
         />
@@ -500,6 +501,42 @@ function DownloadsSection() {
             Forget all
           </button>
         )}
+      </div>
+
+      <div className="settings-row">
+        <span className="settings-label">Scrubber jog</span>
+        <div className="settings-radio-group">
+          {(
+            [
+              { value: 0.5, label: "Coarse · 0.5×" },
+              { value: 1.0, label: "Default · 1×" },
+              { value: 2.0, label: "Fine · 2×" },
+            ] as const
+          ).map((opt) => {
+            const active = Math.abs(settings.jog_sensitivity - opt.value) < 0.01;
+            return (
+              <label
+                key={opt.value}
+                className={"settings-radio" + (active ? " active" : "")}
+              >
+                <input
+                  type="radio"
+                  name="jog-sensitivity"
+                  checked={active}
+                  onChange={() =>
+                    void save((s) => ({ ...s, jog_sensitivity: opt.value }))
+                  }
+                />
+                <span>{opt.label}</span>
+              </label>
+            );
+          })}
+        </div>
+        <span className="hint-text faint">
+          Mouse-drag sensitivity on the scrubber's fine-jog disc.
+          Higher = less drag needed per second of timeline.
+          Frame-step keys (←/→) ignore this.
+        </span>
       </div>
     </section>
   );

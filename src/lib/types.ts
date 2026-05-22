@@ -173,6 +173,9 @@ export type Settings = {
    * platform. Restored on metadata load if still present in the
    * fetched format list. */
   last_formats: Record<string, string>;
+  /** Scrubber jog sensitivity multiplier (0.9.D). 1.0 = default
+   * 80 px-per-second of drag. 0.5 = coarser, 2.0 = finer. */
+  jog_sensitivity: number;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -184,6 +187,7 @@ export const DEFAULT_SETTINGS: Settings = {
   default_transcode_preset: "none",
   onboarding_complete: false,
   last_formats: {},
+  jog_sensitivity: 1.0,
 };
 
 // =====================================================================

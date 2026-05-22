@@ -29,6 +29,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { fmtDuration } from "../lib/format";
+import { useSettings } from "../lib/settings";
 import type { Segment } from "../lib/types";
 
 type StreamUrl = { url: string; has_audio: boolean };
@@ -174,7 +175,14 @@ export function Scrubber(props: ScrubberProps) {
    * Pauses while jogging (same as main bar drag) so we don't fight
    * the playhead. Resumes on release if it was playing.
    */
-  const SECONDS_PER_PIXEL = 1 / 80; // 80px drag = 1 second
+  // Sensitivity comes from settings (0.9.D). Multiplier of 1.0 = 80px
+  // drag per second (the original tuned value). 0.5 = coarser, 2.0 =
+  // finer. Reactive — changing it in Settings updates live without a
+  // scrubber remount.
+  const { settings } = useSettings();
+  const jogSensitivity =
+    settings.jog_sensitivity > 0 ? settings.jog_sensitivity : 1.0;
+  const SECONDS_PER_PIXEL = (1 / 80) * jogSensitivity;
   const jogDiscRef = useRef<HTMLDivElement>(null);
   const [jogActive, setJogActive] = useState(false);
 

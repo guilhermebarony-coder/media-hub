@@ -84,6 +84,19 @@ pub struct Settings {
     /// Empty by default — first download is a regular pick.
     #[serde(default)]
     pub last_formats: HashMap<String, String>,
+
+    /// Scrubber jog/fine-scrub sensitivity multiplier (0.9.D UX
+    /// polish). Default is 1.0 = 80 pixels per second of drag (the
+    /// original tuned value). 0.5 = half-as-sensitive (160 px/sec,
+    /// requires more drag), 2.0 = twice-as-sensitive (40 px/sec,
+    /// reacts faster). Frame-step keyboard shortcuts ignore this —
+    /// they're always exactly 1 frame.
+    #[serde(default = "default_jog_sensitivity")]
+    pub jog_sensitivity: f32,
+}
+
+fn default_jog_sensitivity() -> f32 {
+    1.0
 }
 
 impl Default for Settings {
@@ -97,6 +110,7 @@ impl Default for Settings {
             default_transcode_preset: "none".into(),
             onboarding_complete: false,
             last_formats: HashMap::new(),
+            jog_sensitivity: 1.0,
         }
     }
 }

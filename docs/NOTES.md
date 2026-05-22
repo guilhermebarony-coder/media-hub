@@ -22,6 +22,42 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-05-22 (parked, target 0.9.D follow-up or 1.x) — Better library filters
+
+**Owner note (2026-05-22 PM):** "We need better filters on library
+later, order by most recent, name etc... but thats for later just
+note it."
+
+**Current state:**
+- Sort: hardcoded `ORDER BY downloaded_at DESC` in library_list.
+  No user control.
+- Sidebar facets: Source / Tags / Added (now / today / week / month
+  / older) / can filter but can't change sort.
+- Search: title + channel LIKE only.
+
+**What "better filters" probably wants:**
+- **Sort dropdown** at the top of the library: "Newest first"
+  (default), "Oldest first", "Title A→Z", "Title Z→A",
+  "Largest first", "Channel A→Z", "Duration: longest first".
+- **Composable filter chips** showing in the toolbar so the user
+  can see what's active without scanning the sidebar.
+- **"Save this filter" → smart folder** — Eagle-style. Pairs with
+  the 1.2 Eagle overhaul.
+
+**Implementation sketch:**
+- Add `sort: SortField + direction` to LibraryFilters
+- Backend builds the ORDER BY from the enum
+- Frontend adds a dropdown next to the search box
+- Persist last sort to settings.json (sticky like format)
+
+**Effort:** ~1 hr for sort dropdown. Multi-column sort + smart
+folders is bigger (1.2 territory).
+
+**Target:** Pull into a 0.9.D follow-up if time allows, otherwise
+1.1 alongside the URL-protocol handler and drag-to-NLE polish.
+
+---
+
 ## 2026-05-22 (parked, owner to test) — Cookies story: where we landed after morning testing
 
 Real-user testing this morning confirmed:
