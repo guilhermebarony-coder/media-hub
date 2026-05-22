@@ -13,6 +13,7 @@ import { useActiveProject } from "../lib/activeProject";
  * the command palette lands (parked for 1.2).
  */
 export function Shell() {
+  useNavShortcuts();
   return (
     <div className="mh">
       <TopBar />
@@ -22,6 +23,58 @@ export function Shell() {
       </div>
     </div>
   );
+}
+
+/**
+ * Wire the keyboard shortcuts that Nav already displays as chips on
+ * each NavItem (1 / 2 / 3 / ,). Before this hook these were
+ * advertised-but-not-wired — typing "1" did nothing despite the chip.
+ *
+ * Rules:
+ *   - Bare key, no modifier. Pressing 1 navigates, Ctrl+1 doesn't
+ *     (so we don't fight browser/window shortcuts).
+ *   - Skipped when the user is in a text field — typing "1" into the
+ *     URL input or a tag editor must NOT navigate.
+ *   - Ignored on key repeat to avoid double-nav from a held key.
+ */
+function useNavShortcuts() {
+  const navigate = useNavigate();
+  useEffect(() => {
+    const isTypingTarget = (el: EventTarget | null): boolean => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+      if (el.isContentEditable) return true;
+      return false;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (isTypingTarget(e.target)) return;
+      // Match the chips shown on Nav exactly.
+      switch (e.key) {
+        case "1":
+          navigate("/download");
+          break;
+        case "2":
+          navigate("/library");
+          break;
+        case "3":
+          navigate("/projects");
+          break;
+        case ",":
+          navigate("/settings");
+          break;
+        default:
+          return;
+      }
+      // Only prevent default for keys we actually handled — keeps
+      // arrow keys, etc. as normal.
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navigate]);
 }
 
 function TopBar() {

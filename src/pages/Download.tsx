@@ -82,6 +82,42 @@ export default function DownloadPage() {
  *     the override is live before they click
  */
 /**
+ * Pick the "best" format from a metadata response for auto-selection.
+ *
+ * Heuristic, in priority order:
+ *   1. Highest-resolution format that has video. Video-only formats
+ *      are fine because composeFormatSpec() auto-promotes them to
+ *      `<id>+bestaudio` so yt-dlp muxes audio in. The user effectively
+ *      gets "best video + best audio" with a single Download click.
+ *   2. If multiple formats tie on resolution, prefer `mp4` ext
+ *      (broadest NLE compatibility), then higher filesize_bytes
+ *      (better bitrate at the same resolution).
+ *   3. Fall back to the largest audio-only format (when the URL is
+ *      audio-only, e.g. a Twitter audio clip).
+ *
+ * Returns null only when the format list is empty.
+ */
+function pickBestFormat(formats: FormatOption[]): FormatOption | null {
+  if (formats.length === 0) return null;
+  const score = (f: FormatOption): number => {
+    // Strongly prefer formats with video. Audio-only fallbacks rank
+    // way below any video format.
+    if (!f.has_video) return (f.filesize_bytes ?? 0) / 1_000_000_000; // tiny tiebreaker
+    const res = (f.width ?? 0) * (f.height ?? 0);
+    // mp4 nudges ahead of webm at the same resolution.
+    const containerBonus = f.ext === "mp4" ? 1 : 0;
+    // Filesize is a useful tiebreaker for "same res but different bitrate"
+    // — bigger usually means better bitrate.
+    const sizeNudge = (f.filesize_bytes ?? 0) / 1_000_000_000;
+    return res * 10 + containerBonus + sizeNudge;
+  };
+  return formats.reduce<FormatOption | null>((best, f) => {
+    if (best == null) return f;
+    return score(f) > score(best) ? f : best;
+  }, null);
+}
+
+/**
  * Detect the source platform from a paste-able URL. Today we only
  * support YouTube — but the 0.8.C sticky-format feature stores last
  * picks per platform so the shape is forward-compatible with the 1.x
@@ -123,7 +159,18 @@ function MetadataCard() {
   const { scope } = useActiveProject();
   const { settings, save: saveSettings } = useSettings();
   const overrideLibrary = useLibraryOverride();
+  const urlInputRef = useRef<HTMLInputElement>(null);
   const [url, setUrl] = useState("");
+
+  // Auto-focus the URL input when the Download page mounts (0.9 UX
+  // win #3). The most common reason to navigate here is "I want to
+  // paste a URL" — landing with focus already in the input means the
+  // user can paste immediately (Ctrl+V → URL → Fetch) without
+  // needing a click. No-op on subsequent re-renders.
+  useEffect(() => {
+    urlInputRef.current?.focus();
+  }, []);
+
   const [meta, setMeta] = useState<VideoMetadata | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -220,16 +267,22 @@ function MetadataCard() {
       ]);
       setMeta(out);
       setDuplicate(dupe);
-      // 0.8.C sticky format: if the user has previously downloaded
-      // this platform, try to re-pick the same format_id. Silent
-      // no-op when the sticky id no longer exists in the format
-      // list (yt-dlp's ladder rotates over time).
+      // Format auto-selection priority (0.9 UX win):
+      //   1. Sticky format for this platform (0.8.C — user's last pick)
+      //   2. Best-available pick from the new metadata (fallback)
+      //
+      // The fallback means a returning-user-on-a-new-platform OR a
+      // first-time download both get a sensible pre-selection, so the
+      // most common path (paste URL → click Download) skips the
+      // "but wait, which format?" step entirely. User can still click
+      // the format table to override.
       const platform = detectPlatform(url);
       const stickyId = settings.last_formats?.[platform];
-      if (stickyId) {
-        const match = out.formats.find((f) => f.id === stickyId);
-        if (match) setSelectedFormat(match);
-      }
+      const sticky = stickyId
+        ? out.formats.find((f) => f.id === stickyId) ?? null
+        : null;
+      const auto = sticky ?? pickBestFormat(out.formats);
+      if (auto) setSelectedFormat(auto);
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -427,6 +480,7 @@ function MetadataCard() {
 
       <form className="field" onSubmit={fetchMetadata}>
         <input
+          ref={urlInputRef}
           className="field-input"
           type="text"
           placeholder="https://www.youtube.com/watch?v=…"
