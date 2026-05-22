@@ -79,6 +79,11 @@ function SourcesSection() {
     <section className="card-box">
       <h2>
         Sources <span className="chip">YouTube cookies</span>
+        <ResetButton
+          onClick={() =>
+            void save((s) => ({ ...s, cookies_source: { kind: "none" } }))
+          }
+        />
       </h2>
       <p className="hint">
         Some YouTube videos require sign-in (age-restricted, private,
@@ -232,6 +237,15 @@ function LibrarySection() {
     <section className="card-box">
       <h2>
         Library <span className="chip">root + rename</span>
+        <ResetButton
+          onClick={() =>
+            void save((s) => ({
+              ...s,
+              library_root: null,
+              rename_template: "",
+            }))
+          }
+        />
       </h2>
       <p className="hint">
         Override where Media Hub stores downloads. Pick a rename
@@ -378,6 +392,16 @@ function DownloadsSection() {
     <section className="card-box">
       <h2>
         Downloads <span className="chip">workers + throttle</span>
+        <ResetButton
+          onClick={() =>
+            void save((s) => ({
+              ...s,
+              download_concurrency: 3,
+              bandwidth_limit_kbps: null,
+              last_formats: {},
+            }))
+          }
+        />
       </h2>
       <p className="hint">
         How many yt-dlp downloads run in parallel, optional bandwidth
@@ -497,6 +521,11 @@ function TranscodeSection() {
     <section className="card-box">
       <h2>
         Transcode <span className="chip">default preset</span>
+        <ResetButton
+          onClick={() =>
+            void save((s) => ({ ...s, default_transcode_preset: "none" }))
+          }
+        />
       </h2>
       <p className="hint">
         New downloads default to this preset. You can still pick a
@@ -657,5 +686,39 @@ function AboutSection() {
         </div>
       </dl>
     </section>
+  );
+}
+
+// =====================================================================
+// Reset button — small per-section "back to defaults" affordance (0.9 UX win #10)
+// =====================================================================
+
+/**
+ * Sits in the section header next to the chip. Click → confirm →
+ * reset that section's fields via the save callback the parent
+ * provides. Intentionally minimal styling so it doesn't distract;
+ * the user has to be looking for it.
+ *
+ * Why per-section instead of "reset all":
+ *   - Per-section is safer (user only loses one slice of state at a
+ *     time)
+ *   - Per-section is more discoverable (sits inline with what it
+ *     resets, no separate dialog)
+ *   - A user can still effectively "reset all" by clicking each
+ *     section's button — same number of confirms, no nuke option
+ *     that wipes settings.json
+ */
+function ResetButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="settings-reset"
+      onClick={() => {
+        if (confirm("Reset this section to defaults?")) onClick();
+      }}
+      title="Reset this section to defaults"
+    >
+      Reset
+    </button>
   );
 }

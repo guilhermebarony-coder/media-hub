@@ -1544,6 +1544,26 @@ textarea.field-input {
   margin-top: 4px;
 }
 .settings-warn strong { color: #e0a93a; }
+
+/* Per-section reset button (0.9 UX win #10). Sits in the h2 next to
+   the chip. Muted by default so it doesn't pull attention from the
+   actual fields. */
+.settings-reset {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text-3);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-family: var(--mono);
+  cursor: pointer;
+  transition: all 100ms ease;
+}
+.settings-reset:hover {
+  border-color: var(--line-hi);
+  color: var(--text-1);
+}
 .settings-warn code {
   background: var(--bg-3);
   padding: 1px 5px;

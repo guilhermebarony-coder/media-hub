@@ -194,7 +194,11 @@ function MetadataCard() {
   const [meta, setMeta] = useState<VideoMetadata | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [showFormats, setShowFormats] = useState(false);
+  // Show the format table by default (0.9 UX win #8). Combined with
+  // the auto-best-pick (#2), users land on Download with a sensible
+  // default selected AND visible — overriding is one row click away
+  // instead of one toggle + one row click.
+  const [showFormats, setShowFormats] = useState(true);
   // If we already have this URL in the library, show a yellow chip
   // so the user knows they're about to re-download. We don't BLOCK —
   // sometimes you want a different quality / segment / transcode.
@@ -294,7 +298,7 @@ function MetadataCard() {
     setLoading(true);
     setErr(null);
     setMeta(null);
-    setShowFormats(false);
+    setShowFormats(true);
     setSelectedFormat(null);
     setDlResult(null);
     setDlErr(null);
@@ -545,7 +549,20 @@ function MetadataCard() {
       {err && (
         <div className="msg-row err">
           <span className="label">error</span>
-          <code>{err}</code>
+          <code style={{ flex: 1 }}>{err}</code>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              // Bypass the auto-fetch dedup so a retry on the same URL
+              // actually re-fires (otherwise lastFetchedUrl would match).
+              autoFetchedUrlRef.current = "";
+              void fetchMetadata();
+            }}
+            disabled={loading}
+          >
+            <Icon.retry width={11} height={11} /> Retry
+          </button>
         </div>
       )}
 
@@ -792,7 +809,15 @@ function MetadataCard() {
           {dlErr && (
             <div className="msg-row err">
               <span className="label">download error</span>
-              <code>{dlErr}</code>
+              <code style={{ flex: 1 }}>{dlErr}</code>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => void download()}
+                disabled={downloading || !selectedFormat}
+              >
+                <Icon.retry width={11} height={11} /> Retry
+              </button>
             </div>
           )}
 
