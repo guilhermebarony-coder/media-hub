@@ -1,0 +1,24 @@
+A.3 stopwatch — 3 launches, time to window-visible. ~5 min.
+
+Median Usually less than a second, can barely start the clock, in cmd is stated  VITE v7.3.3  ready in 207 ms but usually takes a moment to open after that, but too short to count honestly, i don't have reaction time enough hahaha
+
+Seems to be different time when first launch tho, whenever you do changes, takes a bit more time to compile, but can't test this now
+
+B.5 settings slider spam 
+
+No issues here. Landed fine
+
+B.4 queue stress
+
+No issues either, worked fine
+
+B.3 drawer stress 
+
+Total memory spiked on 240mb during tests, tried opening diferente ones during tests, seemed to be raising when i opened diferente ones, whenever i sttoped, went back to 175mb, but i couldn't make it go past 240mb
+The children that seemed to be raising was Tauri + React + Typescript
+
+-----------------------------------------------------------
+
+- We need a confirmation popup when clicking delete file ahahha
+- When i clicked to change jogger's sensitivity, the whole page glitched and i had to reset the app, only settings page was left on the sidebar and there was a weird black box underneath the page, still happening, you can ask for a printscreen if you want
+- We need a audio only download, download only the mp3 option and need to think how to show this on the library as well

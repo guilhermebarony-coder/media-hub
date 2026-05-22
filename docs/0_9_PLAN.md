@@ -41,7 +41,30 @@ later phases can prove regressions don't happen.
 - 18 KB per library asset (linear)
 - One follow-up flagged in B.2: verify GPU process returns to baseline after leaving Download page
 
-### A.3 — Owner stopwatch startup 🟡 still needs owner
+### A.3 — Owner stopwatch startup ✅ done (2026-05-22 lunch)
+- **Median: < 1 second (couldn't reliably stopwatch — too fast).**
+- Vite dev server: ready in 207ms per CLI output.
+- Cold start barely measurable. Excellent.
+- First-launch-after-changes takes a moment longer (compile),
+  but that's the dev compile cost not the app startup.
+
+### B.5 — Settings save spam ✅ done (2026-05-22 lunch)
+- Slider spammed 30s — no flicker, no issues. Race fix from 0.8.D holds.
+
+### B.4 — Queue stress ✅ done (2026-05-22 lunch)
+- 20 short downloads × 3 cycles — RAM steady, no issues.
+
+### B.3 — Drawer stress 🟡 partial signal (2026-05-22 lunch)
+- Total memory spiked to **240 MB** during repeated open/close
+  cycles. Settled back to **175 MB** when activity stopped.
+- The growing child was **"WebView2: Tauri + React + Typescript"**
+  (not the GPU process this time — the React renderer itself).
+- Maximum observed: 240 MB. Memory DID release when activity stopped.
+- **Verdict:** classic React allocation churn from rapid drawer
+  mount/unmount cycles. Garbage collected on idle. Not a leak.
+  But worth checking that the AssetDrawer's heavy children (Tags
+  editor, siblings list, drawer state) properly tear down. Park
+  for B.2 deeper-audit follow-up.
 **What you do (~10 min):**
 1. Close all media-hub processes (Task Manager → end any leftover)
 2. Launch via `npm run tauri dev`, time click→window-visible

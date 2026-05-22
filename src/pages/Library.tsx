@@ -483,14 +483,24 @@ function CardContextMenu({
     }
   }
 
+  /**
+   * Destructive actions (Forget, Delete file) run their confirm()
+   * BEFORE closing the menu. The original withClose() pattern closed
+   * the menu first, then ran the action — but owner reported the
+   * delete confirms felt skipped (2026-05-22 PM). The most likely
+   * cause: removing the menu from DOM shifts focus, and Tauri's
+   * webview may briefly suppress the native confirm dialog.
+   *
+   * Running confirm() while the menu is still in the DOM is the
+   * safe path. The menu closes naturally after the user dismisses
+   * the confirm (whether they accept or cancel).
+   */
   async function forget() {
-    if (
-      !confirm(
-        `Forget "${asset.title}" from the library?\n\nThe file on disk is NOT deleted (you'll find it at:\n${asset.file_path}).`,
-      )
-    ) {
-      return;
-    }
+    const ok = confirm(
+      `Forget "${asset.title}" from the library?\n\nThe file on disk is NOT deleted (you'll find it at:\n${asset.file_path}).`,
+    );
+    onClose();
+    if (!ok) return;
     try {
       await invoke("library_delete", { id: asset.id, deleteFile: false });
     } catch (e) {
@@ -499,14 +509,18 @@ function CardContextMenu({
   }
 
   async function deleteFromDisk() {
-    if (
-      !confirm(
-        `Delete "${asset.title}" from disk?\n\nThis removes the FILE at:\n${asset.file_path}\n\nThe row will be removed from the library too. Files moved to OS trash are unrecoverable from inside the app.`,
-      )
-    ) {
+    const first = confirm(
+      `⚠ Delete "${asset.title}" PERMANENTLY?\n\nFile to delete:\n${asset.file_path}\n\nThis removes:\n  • the file from disk\n  • the row from the library\n  • the thumbnail\n\nClick OK to continue, Cancel to back out.`,
+    );
+    if (!first) {
+      onClose();
       return;
     }
-    if (!confirm("This cannot be undone from inside Media Hub. Proceed?")) return;
+    const second = confirm(
+      "Last chance — this cannot be undone from inside Media Hub.\n\nReally delete the file?",
+    );
+    onClose();
+    if (!second) return;
     try {
       await invoke("library_delete", { id: asset.id, deleteFile: true });
     } catch (e) {
@@ -514,13 +528,11 @@ function CardContextMenu({
     }
   }
 
-  // Action wrapper: run the action then close the menu. Async actions
-  // close the menu BEFORE the work runs so the UI feels responsive
-  // (the confirm dialogs etc. happen with the menu already gone).
+  // Non-destructive actions: close the menu first, then run. Safe
+  // because there's no destructive prompt that could get suppressed.
   function withClose(action: () => void | Promise<void>) {
     return () => {
       onClose();
-      // Fire-and-forget — errors handled inside each action.
       void Promise.resolve(action());
     };
   }
@@ -552,10 +564,12 @@ function CardContextMenu({
         Edit tags & details…
       </button>
       <div className="ctx-sep" />
-      <button className="ctx-item ctx-warn" onClick={withClose(forget)}>
+      {/* Destructive actions skip withClose so the confirm fires
+       *  while the menu is still in the DOM (see note on forget()). */}
+      <button className="ctx-item ctx-warn" onClick={() => void forget()}>
         Forget (keep file)
       </button>
-      <button className="ctx-item ctx-danger" onClick={withClose(deleteFromDisk)}>
+      <button className="ctx-item ctx-danger" onClick={() => void deleteFromDisk()}>
         Delete file
       </button>
     </div>

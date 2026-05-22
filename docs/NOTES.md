@@ -22,6 +22,118 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-05-22 PM (BUG, target next session) — Settings page layout glitch on jog-sensitivity click
+
+**Owner repro (2026-05-22 PM):** "When i clicked to change jogger's
+sensitivity, the whole page glitched and i had to reset the app, only
+settings page was left on the sidebar and there was a weird black box
+underneath the page, still happening."
+
+**Screenshot evidence:** TopBar entirely missing. Nav reduced to just
+the "System / Settings" item — Workspace section (Download / Library
+/ Projects) gone. Settings content renders OK (Coarse · 0.5× is the
+active selection, so the save worked).
+
+**Reproducibility:** persistent ("still happening"). Owner restarted
+the app and it returns.
+
+**Hypotheses (untested):**
+1. CSS / layout collapse triggered by the new settings-row I added.
+   The row has label + radio-group + hint, similar to existing rows
+   that work. **Lowest probability.**
+2. Settings provider context broadcast triggering a Suspense
+   re-mount of a lazy chunk (the App.tsx OnboardingGate is lazy,
+   pages are lazy via App.tsx). If a chunk fails to load on the
+   re-render, the Suspense fallback renders and could explain a
+   "black box." Investigate.
+3. The `settings:changed` event firing from save → triggering
+   listener → triggering re-fetch → triggering re-render of every
+   useSettings consumer → some component fails to re-render
+   correctly with the new value. Untested.
+4. The save itself produces a Settings value that breaks
+   deserialization on round-trip (e.g. f32 sensitivity gets sent
+   as integer 0 vs 0.5). Less likely — JSON should preserve.
+
+**Next session actions:**
+- Ask owner to re-share screenshot + DevTools Console output (any
+  errors? React warnings?) when the glitch is active
+- Inspect DOM at the glitch moment (right-click → Inspect)
+- Check if reverting just the Scrubber jog Settings UI restores
+  the layout (process of elimination)
+- If a fix isn't fast: REVERT just the radio onChange handler to
+  not call save directly, and re-think the Settings UI shape
+
+**Priority:** HIGH — first thing next session.
+
+---
+
+## 2026-05-22 PM (UX, target 0.9.D) — Delete file confirmation feels weak
+
+**Owner note:** "We need a confirmation popup when clicking delete
+file ahahha"
+
+**Current state:** `deleteFromDisk` on both the AssetDrawer and the
+new context menu has TWO sequential `confirm()` calls:
+  1. "Delete '<title>' from disk? This removes the file at..."
+  2. "This cannot be undone from inside Media Hub. Proceed?"
+
+**Two interpretations of the owner's note:**
+
+**A. The confirms aren't firing.** Possible cause: the context menu's
+`withClose()` wrapper closes the menu BEFORE the action runs. If
+something about the unmount timing is suppressing the confirm
+dialogs, the file would just get deleted with no prompt. Should
+investigate — easy fix is to invert the order (run action first,
+THEN close).
+
+**B. The confirms are firing but feel weak.** Native browser
+confirm() dialogs look generic and aren't very "scary." A custom
+in-app modal with a clearer destructive treatment would feel more
+deliberate. Eagle-like apps use a "type DELETE to confirm" pattern
+for irreversible actions.
+
+Next session: ask owner which interpretation matches their
+experience. Most likely it's (A) — the menu closes too fast and the
+confirm is skipped. Worth a quick fix either way.
+
+---
+
+## 2026-05-22 PM (FEATURE, target 1.x) — Audio-only download (MP3/M4A)
+
+**Owner note:** "We need a audio only download, download only the
+mp3 option and need to think how to show this on the library as
+well."
+
+**Mechanics:** yt-dlp already supports this via `-x` /
+`--extract-audio` flag. Plus `--audio-format mp3` for MP3 specifically
+(requires ffmpeg, which we ship). Common options: mp3, m4a, wav,
+flac, opus.
+
+**UI design needed:**
+- Single-URL Download page: a "Type" toggle near the format picker:
+  Video / Audio only. When Audio is selected:
+    - Format list filters to audio-only rows
+    - Transcode preset dropdown becomes "MP3 / M4A / FLAC / no
+      conversion"
+- Batch queue: same toggle at the queue level
+
+**Library implications:**
+- Asset cards for audio files need a different visual treatment —
+  no thumbnail to extract from, no width/height to display
+- Could show a waveform image (ffmpeg can generate static
+  waveforms) for visual identity
+- Card "duration" stays meaningful; resolution should hide
+- Filter facet for "Audio only" / "Video only" in the sidebar
+- Search results should mix both unless filtered
+
+**Effort:** ~2 sessions for the feature + UI.
+
+**Target:** 1.x (post-1.0). It's a real feature, not polish.
+Architecturally clean — extends the existing format picker without
+disrupting the video path. Worth a real session.
+
+---
+
 ## 2026-05-22 (parked, target 0.9.D follow-up or 1.x) — Better library filters
 
 **Owner note (2026-05-22 PM):** "We need better filters on library

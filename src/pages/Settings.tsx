@@ -505,7 +505,12 @@ function DownloadsSection() {
 
       <div className="settings-row">
         <span className="settings-label">Scrubber jog</span>
-        <div className="settings-radio-group">
+        {/* Plain buttons instead of label+input radios. The original
+         *  radio variant triggered a layout glitch on click (TopBar
+         *  and Nav Workspace section disappeared — see NOTES.md
+         *  2026-05-22 PM). Buttons sidestep whatever browser-quirk
+         *  the label+input triggered. UX is identical. */}
+        <div className="settings-radio-group" role="radiogroup">
           {(
             [
               { value: 0.5, label: "Coarse · 0.5×" },
@@ -515,20 +520,26 @@ function DownloadsSection() {
           ).map((opt) => {
             const active = Math.abs(settings.jog_sensitivity - opt.value) < 0.01;
             return (
-              <label
+              <button
                 key={opt.value}
+                type="button"
+                role="radio"
+                aria-checked={active}
                 className={"settings-radio" + (active ? " active" : "")}
+                onClick={(e) => {
+                  e.preventDefault();
+                  // Debug log — if a future layout glitch returns
+                  // we can confirm the click actually fired and
+                  // the save promise resolved cleanly.
+                  console.debug("[settings] jog_sensitivity →", opt.value);
+                  save((s) => ({ ...s, jog_sensitivity: opt.value }))
+                    .catch((err) =>
+                      console.warn("[settings] jog save failed:", err),
+                    );
+                }}
               >
-                <input
-                  type="radio"
-                  name="jog-sensitivity"
-                  checked={active}
-                  onChange={() =>
-                    void save((s) => ({ ...s, jog_sensitivity: opt.value }))
-                  }
-                />
-                <span>{opt.label}</span>
-              </label>
+                {opt.label}
+              </button>
             );
           })}
         </div>
