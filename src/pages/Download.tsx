@@ -247,19 +247,29 @@ function MetadataCard() {
   const [transcodeProgress, setTranscodeProgress] = useState<TranscodeProgress | null>(null);
   const [phase, setPhase] = useState<"idle" | "downloading" | "transcoding">("idle");
 
-  // Untagged events (no job_id) are routed to the single-URL flow.
-  // Batch events with job_id are handled by QueueCard's own listener.
+  // Single-URL flow listens for its own job_id (SINGLE_URL_JOB_ID) and
+  // anything untagged (back-compat with media_transcode which is still
+  // called with jobId: null from this panel). Batch events use their
+  // own job_id and route to QueueCard's listener — QueueCard matches
+  // by exact id, so there's no cross-flow leakage.
+  //
+  // 1.0.1 regression note: this used to be `if (e.payload.job_id) return;`,
+  // which broke the single-URL progress bar the moment we started
+  // tagging single-URL events with "single-url" so the Cancel button
+  // could find the right child process. Be careful editing this filter.
   useEffect(() => {
     let unlistenDl: UnlistenFn | null = null;
     let unlistenTx: UnlistenFn | null = null;
     listen<ProgressEvent>("download:progress", (e) => {
-      if (e.payload.job_id) return;
+      const jid = e.payload.job_id;
+      if (jid && jid !== SINGLE_URL_JOB_ID) return;
       setProgress(e.payload);
     }).then((fn) => {
       unlistenDl = fn;
     });
     listen<TranscodeProgress>("transcode:progress", (e) => {
-      if (e.payload.job_id) return;
+      const jid = e.payload.job_id;
+      if (jid && jid !== SINGLE_URL_JOB_ID) return;
       setTranscodeProgress(e.payload);
     }).then((fn) => {
       unlistenTx = fn;
