@@ -156,27 +156,43 @@ experience. The delta should be substantial (~3-5x).
 
 ---
 
-## RAM baseline (owner snapshot)
+## RAM baseline (owner snapshot — partial, 2026-05-22)
 
-**Methodology** (owner to capture):
+**media-hub.exe (Rust host) — captured:**
 
-Open Task Manager → Details tab. Find these two processes:
-- `media-hub.exe` (the Tauri parent — Rust + WebView2 host)
-- `msedgewebview2.exe` (the actual renderer)
+| Moment | Private | Working Set | Notes |
+|--------|---------|-------------|-------|
+| Just launched, idle | 6.2 MB | ~38.8 MB | (PID 44040) |
+| After download + transcode | 6.4 MB | ~39.6 MB | +0.2 MB delta |
+| Library with 11 assets | ~7.2 MB | n/a | +18 KB per asset |
+| 0% CPU at idle throughout | | | |
 
-Capture working-set RAM at three moments:
+**Read:** Rust side is rock solid. Private memory under 10 MB, no
+leak signal across normal operations, library scales linearly at
+small N. Excellent starting point.
 
-| Moment | media-hub.exe | msedgewebview2.exe | Total |
-|--------|--------------|-------------------|-------|
-| Just launched, idle on Library | | | |
-| After clicking through all 4 routes | | | |
-| After 1 download + 1 transcode | | | |
-| After 5 min idle | | | |
-| After 30 min idle | | | |
+**msedgewebview2.exe (the actual React renderer) — STILL NEEDED:**
 
-The "5 min idle" + "30 min idle" rows are 0.9.B (leak hunting)
-data. If RAM at 30 min ≈ RAM at 5 min, we're clean. If it grew
-significantly with no user actions, we have a leak.
+The Tauri architecture spawns a separate WebView2 process (often
+multiple child processes for sandboxing) where the React code
+actually runs. The numbers above are JUST the Rust host. The
+renderer is typically 5-30x larger and is where most leak risk
+lives.
+
+Capture next session (~5 min, no downloads needed):
+
+| Moment | msedgewebview2.exe total (all children summed) |
+|--------|-----------------------------------------------|
+| Just launched, idle on Library | |
+| After clicking through all 4 routes | |
+| After scrolling library + opening drawer 5 times | |
+| After 30 min idle (B.1 soak start) | |
+
+To find: Task Manager → Processes tab → expand "Media Hub" arrow.
+Or Details tab → sort by name → grab all `msedgewebview2.exe`
+rows (sum them).
+
+Stretch: stopwatch startup time also still TBD (see next section).
 
 ---
 
