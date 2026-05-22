@@ -22,6 +22,78 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-05-22 evening (TESTER FEEDBACK, v1.0.0) — three items from first tester pass
+
+Owner relayed feedback from the first batch of testers on v1.0.0.
+No crashes, no data-loss complaints. Three items worth tracking:
+
+### 1. Missing: pause / stop in-flight downloads (feature gap, HIGH PRIO 1.0.x)
+
+Today the queue has no cancel button. Once a download starts, the
+user can only let it finish or kill the app. Real-world impact:
+tester started a big download, realized it was the wrong URL, had
+no recourse.
+
+**Implementation sketch:**
+- `yt_download` already spawns a `Child` via `tauri-plugin-shell`.
+  Need to hold the `CommandChild` handle in a registry keyed by
+  job ID so we can `.kill()` it on demand.
+- New Rust command `yt_download_cancel(job_id)` → looks up the
+  child, kills it, marks the queue row canceled, cleans up partial
+  files.
+- Queue card UI gets a Cancel button on in-flight rows (X icon,
+  red on hover).
+- Batch path same shape — need per-job cancel + maybe "cancel all".
+
+**Estimated effort:** 1 session. Backend ~1.5 hr (child registry +
+cancel cmd + partial cleanup), frontend ~30 min (button + event).
+
+### 2. Missing: Eagle-style library settings (1.2 territory, but testers asking)
+
+Tester comment hinted at wanting folders / color labels / better
+filters in the library. This is already documented as **1.2 Eagle
+overhaul** in ROADMAP — don't pull it forward yet. But it's the
+first organic signal that the deferred milestone is actually
+wanted, not just speculation.
+
+**Lighter-weight stop-gap (consider for 1.0.x):**
+- The "better library filters" item already in NOTES (sort by
+  recent / name / size / duration) is the cheap subset of what
+  Eagle gives you. Could ship that as 1.0.1 to take the edge off
+  while the full overhaul waits.
+
+**Decision pending:** ship filters-only as 1.0.1, or hold the line
+and do the full 1.2 overhaul together? Ask owner.
+
+### 3. UX surprise (possible bug?) — delete-project moves clips to library
+
+**Tester report:** "downloaded something on a project, deleted the
+project and went to library [and the clip was there]."
+
+Reading the report literally: this is **documented behavior**.
+`Projects.tsx` comment: "deleting a project sets its assets'
+project_id to NULL, returning them to the Library — files on disk
+stay put." The confirm dialog in `del()` does say "X clips will be
+moved back to the Library. Files on disk are not deleted."
+
+So the question is whether this was:
+- **(a)** The tester didn't read the confirm and was surprised
+  by the documented behavior. → UX polish, not bug.
+- **(b)** The tester expected "Delete project" to also delete
+  the clips (and was complaining about finding them in Library). →
+  the **Finish** action with the trash-everything path was probably
+  what they wanted; Delete's "salvage clips" intent isn't obvious.
+- **(c)** Something actually broke and the clips ended up in the
+  wrong place / state. → real bug, need repro.
+
+**Next-session action:** ask owner to ask the tester to clarify
+which of (a) / (b) / (c) it was. If (b), the fix is UX copy in the
+Delete confirm dialog ("→ Will keep clips in Library. To trash
+clips too, use Finish project instead.") plus maybe an extra
+button on the dialog for "Delete and trash clips."
+
+---
+
 ## 2026-05-22 PM (BUG, target next session) — Settings page layout glitch on jog-sensitivity click
 
 **Owner repro (2026-05-22 PM):** "When i clicked to change jogger's
