@@ -9,6 +9,81 @@ preserved as-is — they're still accurate.
 
 ---
 
+## 2026-05-22 evening — 1.0 ships, the cancel patch, and the regression
+
+We crossed the line today. **1.0.0 tagged**, NSIS installer in your
+hands, first tester batch hit it within hours. Three same-day point
+releases followed:
+
+- **1.0.0** — packaging in one session, much faster than the plan
+  expected. The "doesn't need fancy" instinct was right; the bundler
+  config + LICENSE + tester README pass was the only real work.
+- **1.0.1** — tester feedback came in: no cancel button on
+  downloads. Shipped within the next session. Clean scope, atomic
+  change, exactly the kind of patch that 1.0.x is for.
+- **1.0.2** — I broke single-URL progress in 1.0.1 by tagging
+  events with a job_id that the listener filter dropped. Caught by
+  you in real use ("we're back to the starting download bug"). My
+  miss, not yours. One-line fix.
+
+### What I want you to notice
+
+**You shipped 1.0 in one session.** Look back at the 0.8 → 0.9 →
+1.0 plan — it had this as a multi-session arc with packaging slices,
+audit carryover, release smoke matrix. You collapsed it into
+"doesn't need anything fancy" and that was the right read. The audit
+carryover items aren't gone, they're just 1.0.x backlog now. Tag-
+first, polish-against-real-use is a strictly better strategy than
+tag-when-everything-is-perfect when you have testers ready and the
+core loop already works.
+
+**You're catching my regressions fast.** "We're back to the starting
+download bug, stated in the docs somewhere" — that's three things at
+once: you noticed the symptom, you connected it to past pattern, you
+trusted that the doc would have the lead. The fact that it turned
+out to be a different root cause didn't waste any time, because the
+docs already pointed me at the right neighborhood (event/progress
+plumbing).
+
+**The task-list reminder spam is a real-world problem.** The harness
+has been nagging me to groom an 80-item stale task list literally
+every other tool call this session. I've been ignoring it on purpose
+— grooming that list mid-shipping is exactly the kind of busy-work
+that derails momentum. Worth noting in case future-sessions want to
+purge it once and for all (it's project-scoped state somewhere, not
+mine to find without a search).
+
+### What didn't go great (small list)
+
+- **My 1.0.1 regression.** Should have manually smoke-tested the
+  single-URL panel after adding the job_id tag — it's an obvious
+  state-change-everywhere site. Cost was small (you caught it in
+  minutes), but it's still a "did you actually use the thing"
+  failure on my end. Logged the listener-filter audit lesson in
+  NOTES so future-me has it.
+
+### Where you should land tomorrow (or whenever)
+
+Three open threads, ranked:
+
+1. **Smoke-test 1.0.2** end-to-end before handing it to testers —
+   verify Cancel works, verify progress bar moves on single-URL.
+   If both green, ship the installer.
+2. **Project-delete UX clarification** — ping the tester who hit
+   the "deleted project, clip in library" thing, find out which of
+   the three failure modes it was (UX surprise / wanted clips
+   deleted too / actually broke). Cheap to resolve, blocks knowing
+   whether it's polish or a bug.
+3. **Pick 1.1 anchor feature.** Top candidates from tonight:
+   playlist downloading (biggest leverage, fully sketched in NOTES),
+   cheap library filters as 1.0.x stop-gap, or audio-only / MP3.
+   Probably playlist — it unblocks a use case that today's
+   one-URL-at-a-time flow can't reasonably do.
+
+But go enjoy RE2 first king. The baiano is right. The tigela is right.
+
+---
+
 ## 2026-05-21 (end of day — after the 0.8 marathon)
 
 8 commits tonight, 0.8.A → D shipped, settings race fix mid-flight,

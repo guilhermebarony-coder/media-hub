@@ -22,6 +22,90 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-05-22 late (SHIPPED, 1.0.1 + 1.0.2) — cancel + the regression
+
+**1.0.1 — cancel in-flight downloads.** Backed by a JobRegistry
+holding CommandChild handles by job_id, plus a canceled-ids set so
+the event loop can tell user-cancel apart from yt-dlp failure (both
+exit non-zero). `yt_download_cancel(job_id)` looks up + kills.
+Cancel button appears in queue rows during the `downloading` phase
+and in the single-URL panel next to the progress bar.
+
+Out of scope (deliberately): cancel during ffmpeg trim phase, cancel
+during transcode, auto-cleanup of yt-dlp's leftover `.part` file.
+
+**1.0.2 — fix the single-URL progress regression.** 1.0.1 started
+tagging single-URL events with `jobId: "single-url"` so Cancel could
+find them, but the single-URL progress listener had a long-standing
+`if (e.payload.job_id) return;` filter (written to ignore queue
+events). Listener filtered out its own events. Bar froze at "starting
+download…" — exactly the failure mode from the *Windows progress
+investigation* note further down this doc, but a totally different
+root cause this time.
+
+Fix: filter for "events that don't belong to this flow" instead of
+"events that are tagged at all." Inline `1.0.1 regression note:` left
+at the filter site to prevent future re-breaks.
+
+**Lesson:** when adding any new tagged event source, audit every
+listener's filter predicate. There's only one filter site for
+progress today, but if a third flow ever joins, the predicate has to
+become a positive allow-list (`jid === MY_FLOW_ID || !jid`) not a
+negative reject-list.
+
+---
+
+## 2026-05-22 evening (TESTER FEEDBACK, MISSING FEATURE) — playlist downloading
+
+**Tester ask:** support for YouTube playlist URLs. Right now if you
+paste a playlist URL, yt-dlp will happily start downloading the
+*entire* playlist as one giant job — single asset slot, no per-video
+progress, no way to cherry-pick. That's worse than nothing.
+
+**What we want:** paste playlist URL → fetch metadata for each
+video → present as a multi-select list with thumbnails → user
+checkboxes the ones they want → those flow into the queue as
+individual jobs. Each job is a normal single-video download from
+that point on (uses the per-video URL, not the playlist URL).
+
+**Implementation sketch:**
+- New Rust command `yt_fetch_playlist(url)` → runs
+  `yt-dlp --flat-playlist -J <url>` (fast: doesn't pull formats,
+  just enumerates). Returns Vec<PlaylistEntry { id, title,
+  channel, duration_sec, thumbnail }>.
+- Detect playlist URL in the single-URL field (`?list=` param,
+  `/playlist?` path, or `&list=` after a watch URL). When detected,
+  switch the panel from "single download" mode to "playlist
+  selection" mode.
+- New playlist-picker UI: thumbnail grid or list with checkboxes,
+  Select all / Select none / Invert, optional "first N" quick-pick.
+  Confirm button enqueues selected videos as individual queue jobs
+  (each with its own real video URL).
+- Fall-through: if yt-dlp can't enumerate (some channel-list edge
+  cases), fall back to "treat as single URL" with a warning.
+
+**Estimated effort:** 1-1.5 sessions. Backend ~45 min (single
+command + serde struct), frontend ~1 hr (URL detect + picker UI +
+queue-enqueue plumbing).
+
+**Open questions to decide before building:**
+- Should playlist enumeration also fetch full formats per video?
+  (No — too slow. Enumerate flat, then each job fetches its own
+  formats when it starts. Matches today's queue behavior.)
+- What if the user pastes a playlist URL into the *queue* textarea
+  (the one-URL-per-line batch input)? Auto-expand to individual
+  jobs? Or treat as one job and let it fail loud? **Probably
+  auto-expand** — feels less surprising. Confirm before building.
+- Channel URLs (`/@channel/videos`) are basically infinite
+  playlists. Cap at N (50? 100?) with "show more" or just disallow
+  channel-wide bulk fetch entirely. **Lean disallow for 1.x** — the
+  user's primary need is named playlists, not channel scraping.
+
+**Target version:** 1.1 (the next *feature* milestone, after the
+1.0.x patches settle).
+
+---
+
 ## 2026-05-22 evening (TESTER FEEDBACK, v1.0.0) — three items from first tester pass
 
 Owner relayed feedback from the first batch of testers on v1.0.0.

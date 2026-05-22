@@ -748,6 +748,29 @@ Anything more speculative than this belongs in `docs/NOTES.md` under
 
 Newest first. Every entry: what we decided, when, and *why*.
 
+### 2026-05-22 evening — 1.0.0 → 1.0.1 → 1.0.2 shipped same day
+
+- **1.0.0** tagged + installer built (66 MB NSIS, bundled sidecars,
+  MIT LICENSE with bundled-binary notes, tester README pass).
+  Handed to first tester batch.
+- **1.0.1** — top tester feedback: no way to cancel in-flight
+  downloads. Shipped JobRegistry (CommandChild per job_id) +
+  `yt_download_cancel` command + Cancel buttons on queue rows and
+  single-URL panel.
+- **1.0.2** — same-session regression fix: 1.0.1's `"single-url"`
+  job_id tag tripped over the long-standing single-URL progress
+  listener filter (`if (e.payload.job_id) return;`). Listener
+  filtered out its own events; bar froze at "starting download…"
+  exactly mimicking the historical Windows NTFS progress bug. Fix
+  was a 1-line predicate change. Logged the "audit every listener
+  filter when adding a tagged event source" lesson to NOTES.
+
+**Open feedback parked for 1.x:**
+- Playlist URL support (1.1 candidate — full sketch in NOTES).
+- Eagle-style library settings (still 1.2, lighter sort-by filters
+  could land as 1.0.x stop-gap).
+- Project-delete UX clarification still pending tester reply.
+
 ### 2026-05-22 — 0.9.0 tagged, 1.0 plan opened
 
 - Decision: cut **0.9.0 tag** with everything that shipped in the
