@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useTauriEvent } from "../lib/useTauriEvent";
 import { Icon } from "../lib/icons";
 import { fmtBytes, fmtDuration } from "../lib/format";
 import { attachLocalThumbnail, revealFile, thumbnailSrc } from "../lib/library";
@@ -73,18 +74,9 @@ export default function LibraryPage() {
 
   // Event-driven refresh — Rust emits library:changed after every
   // insert/delete/tag mutation. No polling.
-  useEffect(() => {
-    let unlisten: UnlistenFn | null = null;
-    listen("library:changed", () => {
-      void refresh();
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => {
-      unlisten?.();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useTauriEvent("library:changed", () => {
+    void refresh();
+  });
 
   // Backfill thumbnails for assets that landed before this feature
   // existed (or any other reason thumbnail_path is null). Runs once
@@ -628,9 +620,14 @@ function AssetDrawer({
     }
     void refresh();
     let unlisten: UnlistenFn | null = null;
-    listen("library:changed", () => void refresh()).then((fn) => {
-      unlisten = fn;
-    });
+    listen("library:changed", () => void refresh())
+      .then((fn) => {
+        // Race-safe: if unmount already ran (e.g. user clicked
+        // another sibling before listen() resolved), immediately
+        // drop the subscription instead of orphaning it.
+        if (cancelled) void fn();
+        else unlisten = fn;
+      });
     return () => {
       cancelled = true;
       unlisten?.();

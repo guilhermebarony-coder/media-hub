@@ -26,7 +26,7 @@ import {
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useTauriEvent } from "./useTauriEvent";
 import type { ActiveScope, Project } from "./types";
 
 const STORAGE_KEY = "mh.activeScope.v1";
@@ -75,20 +75,17 @@ export function ActiveProjectProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Initial load + subscribe to library:changed so picker updates
-  // when projects are created / renamed / deleted from any screen.
+  // Initial load. Refresh on library:changed handled below.
   useEffect(() => {
     void refreshProjects();
-    let unlisten: UnlistenFn | null = null;
-    listen("library:changed", () => {
-      void refreshProjects();
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => {
-      unlisten?.();
-    };
   }, [refreshProjects]);
+
+  // Subscribe to library:changed so picker updates when projects are
+  // created / renamed / deleted from any screen. Race-safe via the
+  // useTauriEvent hook.
+  useTauriEvent("library:changed", () => {
+    void refreshProjects();
+  });
 
   // Persist on every change.
   useEffect(() => {

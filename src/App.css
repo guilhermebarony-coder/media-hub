@@ -2246,6 +2246,11 @@ textarea.field-input {
   border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
   color: var(--accent);
 }
+.onb-tag-err {
+  background: color-mix(in srgb, var(--err) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--err) 50%, transparent);
+  color: var(--err);
+}
 
 .onb-cookie-tip {
   margin-top: 12px;

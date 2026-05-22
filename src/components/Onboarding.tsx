@@ -42,7 +42,12 @@ const STEP_TITLES: string[] = [
   "How segment downloads work",
 ];
 
-const BROWSERS = ["chrome", "brave", "edge", "firefox", "vivaldi", "opera"] as const;
+// Firefox first since it's the only browser whose cookies yt-dlp can
+// actually still read (Chrome 127+ DPAPI breakage — see yt-dlp/yt-dlp#10927).
+// Chromium-family options are kept for completeness but flagged in the
+// UI as currently-broken.
+const BROWSERS = ["firefox", "chrome", "brave", "edge", "vivaldi", "opera"] as const;
+const CHROMIUM_BROWSERS = new Set(["chrome", "brave", "edge", "vivaldi", "opera"]);
 
 /**
  * Public entry point. Renders the modal when settings are loaded
@@ -329,26 +334,31 @@ function ScreenCookies(props: {
         </h3>
 
         <div className="onb-cookie-grid">
-          <span className="onb-tag onb-tag-warn">Must be closed</span>
+          <span className="onb-tag onb-tag-ok">Recommended</span>
           <div className="onb-cookie-body">
-            <div>Chrome · Brave · Edge · Vivaldi · Opera · Chromium</div>
+            <div><strong>Firefox</strong> · Safari (macOS only)</div>
             <div className="onb-cookie-why">
-              Chromium locks its cookie database while running.
+              Work while the browser is open. Firefox is the easiest
+              path for daily use.
             </div>
           </div>
 
-          <span className="onb-tag onb-tag-ok">Works while open</span>
+          <span className="onb-tag onb-tag-err">Currently broken</span>
           <div className="onb-cookie-body">
-            <div>Firefox · Safari (macOS)</div>
+            <div>Chrome · Brave · Edge · Vivaldi · Opera · Chromium</div>
+            <div className="onb-cookie-why">
+              Chrome 127+ added "App-Bound Encryption" — yt-dlp can't
+              decrypt cookies from any Chromium browser right now
+              (yt-dlp issue #10927).
+            </div>
           </div>
         </div>
 
         <div className="onb-cookie-tip">
-          <strong>Tip —</strong> if your main browser is on the
-          "must be closed" list, sign in to YouTube in a second
-          browser (e.g. Firefox) and point Media Hub at that one.
-          You won't have to close your primary browser every time
-          you download.
+          <strong>Tip —</strong> if your main browser is Chrome, sign
+          in to YouTube in Firefox once and point Media Hub at Firefox.
+          Or use a <code>cookies.txt</code> export from any browser
+          (file mode below — works while everything is open).
         </div>
       </div>
 
@@ -383,9 +393,17 @@ function ScreenCookies(props: {
             {BROWSERS.map((b) => (
               <option key={b} value={b}>
                 {b[0].toUpperCase() + b.slice(1)}
+                {CHROMIUM_BROWSERS.has(b) ? " (broken — DPAPI)" : ""}
               </option>
             ))}
           </select>
+          {CHROMIUM_BROWSERS.has(browser) && (
+            <p className="onb-hint" style={{ color: "#e0a93a" }}>
+              ⚠ Chromium browsers can't decrypt cookies right now.
+              Pick Firefox above, or switch to <strong>cookies.txt
+              file mode</strong> below.
+            </p>
+          )}
         </div>
       )}
 

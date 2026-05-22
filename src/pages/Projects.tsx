@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useTauriEvent } from "../lib/useTauriEvent";
 import { Icon } from "../lib/icons";
 import { useActiveProject } from "../lib/activeProject";
 import type { Project } from "../lib/types";
@@ -38,16 +38,11 @@ export default function ProjectsPage() {
 
   useEffect(() => {
     void refresh();
-    let unlisten: UnlistenFn | null = null;
-    listen("library:changed", () => {
-      void refresh();
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => {
-      unlisten?.();
-    };
   }, []);
+
+  useTauriEvent("library:changed", () => {
+    void refresh();
+  });
 
   async function create(e?: FormEvent) {
     e?.preventDefault();
