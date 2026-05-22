@@ -66,7 +66,8 @@ Four days in. **0.1 → 0.6 complete end-to-end.** ~30 commits on `main`.
 |-------|-----------|----------|
 | **1** | 0.6.1 multi-segment | Bandwidth-saving workflow we keep wanting. Small. ~1 session. |
 | **2** | 0.8 packaging + settings | Cookies fix for age-restricted YT. Installer crosses "give to a friend" line. ~2-3 sessions. |
-| **3** | 1.0 release | QA pass, README, tag. ~1-2 sessions. |
+| **3** | 0.9 health checkup | Perf audit, leak hunting, bug census, UX polish, a11y. No new features. ~3-5 sessions. |
+| **4** | 1.0 release | QA pass, README, tag. ~1-2 sessions. |
 | post-1.0 | 0.7 / 1.x platforms | Twitter / TikTok / etc. Owner: "nice but not priority." Better to design the trait against 2+ known platforms. |
 
 See decision log entry **2026-05-21 — Replan: 0.6.1 → 0.8 → 1.0, 0.7 post-1.0**.
@@ -185,6 +186,9 @@ dev0 ──┐
        │
        ▼
      0.8.0  🟡  packaging, polish, public-ready (cookies, installer, onboarding)
+       │
+       ▼
+     0.9.0  🟡  health checkup (perf, leaks, bugs, UX polish, a11y)
        │
        ▼
      1.0.0  🟡  release
@@ -728,6 +732,23 @@ Anything more speculative than this belongs in `docs/NOTES.md` under
 ## Decision log
 
 Newest first. Every entry: what we decided, when, and *why*.
+
+### 2026-05-21 — 0.9 = health checkup milestone (no new features)
+
+- Decision: insert **0.9 health checkup** between 0.8 packaging and
+  1.0 release. Five phases (A perf · B leaks · C bug census · D UX
+  polish · E a11y). No new features. See NOTES.md
+  "App health checkup milestone" for the full phase breakdown.
+- Why: 1.0 is a quality gate, not a date gate. Owner: "want to make
+  sure everything is tight together." Better to spend 3-5 sessions
+  hardening what exists than to ship a feature-rich 1.0 with the
+  rough edges the daily-use phase will surface anyway.
+- Discipline rule: any feature idea that surfaces during 0.9 goes
+  to NOTES for 1.x. Keeps 0.9 from becoming creep.
+- Multi-root library + per-project external root candidates to
+  pull INTO 0.9 (vs deferring to 1.2) — storage management is
+  meaningfully "feels like a real app" work. Owner pinged for
+  decision at 0.8.E pickup.
 
 ### 2026-05-21 — Eagle-style overhaul lands post-1.0, not as 0.9
 

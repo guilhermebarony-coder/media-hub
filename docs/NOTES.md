@@ -22,6 +22,227 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-05-21 (parked, target 0.9 / 1.2) — Multi-root library (Steam-style)
+
+**Owner note (2026-05-21):** "Want some of the footage to be on C:/
+and others on D:/ maybe, so might want to set places to set up our
+library and either set more than one completely or at least being
+able to manage between them inside the library page, maybe some
+kind of tag system, or like steam where you can set up games
+library and change where the game is saved, help me decide."
+
+**The asks (two flavors):**
+
+1. **Multi-root library** — register multiple folders as "library
+   roots" (e.g. `C:\Media Hub` + `D:\Footage`). Every asset belongs
+   to one root. On download, user picks which root (default = last
+   used).
+2. **Per-asset relocate** — Steam's "Move install location" pattern:
+   pick an asset (or batch), choose target root, files physically
+   move; DB updates `file_path`.
+
+**Recommendation when picked up:** ship them as one feature — Steam's
+mental model is the right reference. Adopt the same vocabulary
+("library locations" or "storage locations") so users coming from
+Steam feel at home.
+
+**Why this fits well architecturally:**
+- DB already stores full `file_path` per asset — multi-location is
+  "free" at the data layer.
+- The 0.8.C `settings.library_root` single-override is a special
+  case of N-roots-with-one-default. Generalizing is a clean upgrade
+  path, not a rewrite.
+- `asset_set_project` already has the physical-move + cross-volume
+  + collision logic. The "move to another root" command reuses 90%
+  of it.
+
+**What's actually new:**
+- Settings schema: `library_roots: Vec<{ id, name, path }>` instead
+  of single `library_root: Option<String>`. Migrate by promoting the
+  current single value into a one-element list.
+- New Rust command `asset_relocate(asset_id, target_root_id)`.
+- Library page: per-root filter (sidebar facet alongside Source /
+  Tags / Added), per-asset "Move to →" in the drawer, batch action
+  once multi-select lands.
+- Free-disk-space chip per root in the picker — Steam shows this
+  and it matters when picking where 50 GB lands.
+
+**Decisions to make at pickup time:**
+- Can an asset live in MULTIPLE roots (linked copies) or strictly
+  one? Vote: strictly one — simpler mental model, matches Steam.
+- Root removal: what happens to its assets? Probably "merge into
+  another root" (move files first) or "forget without deleting
+  files." Steam refuses to remove a root with games in it; we can
+  do the same.
+- Default root: explicit (user-picked) vs sticky-last-used. Probably
+  sticky.
+
+**Target milestone:** this is meaningful work, paired well with the
+**0.9 health checkup** (storage management is part of "feels like
+a real app") OR slipped to **1.2 Eagle overhaul** (since folders +
+multi-root + multi-select + bulk-ops belong together). Owner: "let's
+sit on it" — pinged for revisit after 0.8.E.
+
+---
+
+## 2026-05-21 (parked, target 0.9) — Per-project external root
+
+**Owner note (2026-05-21):** "Projects might want the projects
+library to be inside my project folder, so a way to do that either."
+
+**The idea:** when creating (or editing) a project, point it at an
+arbitrary folder OUTSIDE `~/Media Hub/Projects/`. Example: user has
+a `D:\Work\ClientX\` folder; setting that as the project's root
+means downloaded clips land under `D:\Work\ClientX\raw\` instead of
+`~/Media Hub/Projects/ClientX/raw\`.
+
+**Why this matters:** professional editors organize on a per-job
+basis. The whole job lives in `D:\Work\ClientX\` — premiere project,
+exports, AAFs, the works. Forcing them to keep B-roll in
+`~/Media Hub/Projects/ClientX/` and reach across paths is friction.
+
+**Implementation sketch:**
+- `projects.root_override: Option<String>` column.
+- `resolve_download_dir` consults `root_override` before falling
+  back to `<content_root>/Projects/<slug>/raw/`.
+- Project create / edit gains a folder-picker (needs the
+  `plugin-dialog` install we keep deferring — natural to land it
+  here).
+- "Finish Project" trashes the override folder same as today.
+  Caveat: if the user pointed at a shared work folder, finishing
+  trashes the whole folder. We need a CLEAR warning at finish
+  time if `root_override` is set.
+
+**Pairs with multi-root** — both are forms of "asset doesn't have
+to live under the default tree." Implementing them together is
+half the work of implementing them separately. Suggest bundling
+into the **0.9 storage milestone** if we pull it forward, or 1.2
+otherwise.
+
+---
+
+## 2026-05-21 (parked, target 0.8.E / 0.8.D onboarding) — Cookies UX: closed-browser pain + extraction tutorial
+
+**Owner note (2026-05-21):** "Is there a way we can extract the
+cookies easily for our users? Does Brave gotta be closed as well to
+work? This is kinda of a dealbreaker."
+
+**Reality check on the closed-browser requirement:**
+
+| Browser | Windows | macOS |
+|---------|---------|-------|
+| Chrome / Brave / Edge / Vivaldi / Opera | **Must be closed** — Cookies SQLite file-locked. yt-dlp errors immediately. | Closed strongly recommended; sometimes works open. |
+| Firefox | Usually works while open (different locking model). | Same. |
+| Safari | macOS only; works while open. | — |
+
+So yes — Brave specifically has the same constraint as Chrome
+because both are Chromium derivatives sharing the same cookies-store
+implementation. **Dealbreaker is fair.**
+
+**What we can do without browser changes:**
+
+1. **Auto-detect the file lock and surface a CLEAR error.** Today
+   the yt-dlp error is buried in stderr ("Could not copy Chrome
+   cookie database"). We can recognize the pattern and pop a row
+   saying "Brave must be closed for cookie access — close it and
+   retry, or switch to a cookies.txt export."
+2. **Cookies.txt export tutorial** — short 4-step inline note in
+   Settings → Sources when "From file" is selected, with link to
+   the canonical "Get cookies.txt LOCALLY" Chrome/Firefox
+   extension (open-source, no network). Pattern: paste the
+   download link, follow the extension's "export current site",
+   point Media Hub at the result.
+3. **Auto-test the cookies on save** — when user picks a browser
+   or path, immediately run a no-op `yt-dlp --cookies-from-browser
+   X --simulate <known-public-url>` and report success/failure
+   inline. Catches the locked-file case before the user wastes a
+   real download attempt.
+
+**What we CAN'T do well:**
+- Read the SQLite cookies file directly from our Rust process —
+  same lock applies, just moves the error message.
+- "Headless export" via a CDP debugger session — only works if
+  the user launches their browser with `--remote-debugging-port`
+  which is way more friction than just closing the browser.
+- Bundle a separate cookies-reader binary — Chromium changes the
+  encryption scheme between versions; we'd be playing constant
+  catch-up.
+
+**Recommended action plan:**
+- **0.8.D onboarding:** include a "Cookies (optional)" screen
+  with the closed-browser warning visible upfront. Set the
+  expectation BEFORE the user hits the wall.
+- **0.8.D Settings → Sources:** add inline help when "From browser"
+  is selected showing the closed-browser table above (or the
+  short version of it). Add a "Test cookies" button.
+- **0.8.E:** ship the auto-detect-and-translate-error patch so the
+  failure mode is friendly when it happens anyway.
+- **Cookies.txt tutorial:** inline expandable in Settings →
+  Sources → "From file" mode. Links to the recommended extension.
+
+**Long-term (post-1.0):** investigate Firefox-by-default in our
+suggestion text since it's the only browser that doesn't have the
+lock issue. Most editors won't switch browsers for our tool, but
+"Firefox if you can, otherwise close your browser" is honest UX.
+
+---
+
+## 2026-05-21 (parked, target 0.9) — App health checkup milestone
+
+**Owner note (2026-05-21):** "Before our 1.0, since we don't have
+a 0.9 anymore i want to make 0.9 a full health checkup on the app,
+splitting into phases to check stability, how reactive it is, UX
+stutters, UI issues, check to make sure the app is as light as it
+can, bugs, a full checkup, just to make sure everything is tight
+together."
+
+**Total agreement.** This is the move. Renaming the milestone tree:
+
+```
+... 0.8.E (packaging)
+     │
+     ▼
+   0.9.0  health checkup  ← NEW
+     │
+     ▼
+   1.0.0  release
+```
+
+**Suggested phase breakdown for 0.9:**
+
+- **0.9.A — Performance audit.** Library page render time with N=100,
+  500, 1000+ assets. SQL query plans (EXPLAIN). Settings reads. Are
+  we re-rendering whole grids on every event? Memo the asset cards.
+  Bundle size (`npm run build` size report). Startup time from
+  click-to-window-visible.
+- **0.9.B — Memory + leak hunting.** Run the app for 4+ hours,
+  watch RAM in Task Manager / Activity Monitor. Open/close 50
+  asset drawers, queue/clear 100 jobs, verify no unbounded growth.
+  Tauri process + WebView2 process both. Check for retained event
+  listeners (the listen/unlisten dance).
+- **0.9.C — Bug census.** Walk every feature methodically with the
+  "what could break this" hat on. Race conditions in queue,
+  filesystem edge cases (long paths, non-ASCII, hidden files),
+  yt-dlp error variations, ffmpeg failures, settings race like the
+  one we just fixed. Aim for 0 known bugs at release.
+- **0.9.D — UX polish.** Animation easing, focus states, keyboard
+  navigation gaps, empty states for every list, loading states
+  for every async action, error messages reviewed for clarity.
+  "Does every dead-end feel like a dead-end?"
+- **0.9.E — Accessibility + small details.** Tab order. Screen
+  reader labels on icon-only buttons. Color contrast (lime on
+  dark — verify WCAG AA). Keyboard shortcuts surfaced in tooltips.
+
+Each phase = its own session, its own commit, its own fixes batch.
+Same A→B→C cadence that worked for 0.6 and 0.8.
+
+**What this DOESN'T include:** new features. 0.9 is exclusively
+"make existing stuff better." Any new-feature ideas that come up
+during 0.9 go into NOTES for 1.x. Discipline that keeps 0.9 from
+becoming "and one more thing" creep.
+
+---
+
 ## 2026-05-21 (shipped) — 0.8.C: rename rules, bandwidth, sticky format, library root
 
 **Shipped:**
