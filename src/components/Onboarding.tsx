@@ -323,24 +323,28 @@ function ScreenCookies(props: {
         can flip this on later when you hit the wall.
       </p>
 
-      <div className="onb-callout">
-        <strong>Heads up — browser cookie compatibility:</strong>
-        <ul className="onb-cookie-list">
-          <li>
-            <span className="onb-tag onb-tag-warn">Must be closed</span>
-            Chrome · Brave · Edge · Vivaldi · Opera · Chromium
-            <span className="onb-cookie-why">
-              (the Chromium cookie database is file-locked while the
-              browser runs)
-            </span>
-          </li>
-          <li>
-            <span className="onb-tag onb-tag-ok">Works while open</span>
-            Firefox · Safari (macOS)
-          </li>
-        </ul>
+      <div className="onb-callout onb-callout-cookies">
+        <h3 className="onb-callout-title">
+          Heads up — browser cookie compatibility
+        </h3>
+
+        <div className="onb-cookie-grid">
+          <span className="onb-tag onb-tag-warn">Must be closed</span>
+          <div className="onb-cookie-body">
+            <div>Chrome · Brave · Edge · Vivaldi · Opera · Chromium</div>
+            <div className="onb-cookie-why">
+              Chromium locks its cookie database while running.
+            </div>
+          </div>
+
+          <span className="onb-tag onb-tag-ok">Works while open</span>
+          <div className="onb-cookie-body">
+            <div>Firefox · Safari (macOS)</div>
+          </div>
+        </div>
+
         <div className="onb-cookie-tip">
-          <strong>Tip:</strong> if your main browser is on the
+          <strong>Tip —</strong> if your main browser is on the
           "must be closed" list, sign in to YouTube in a second
           browser (e.g. Firefox) and point Media Hub at that one.
           You won't have to close your primary browser every time

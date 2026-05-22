@@ -2163,45 +2163,58 @@ textarea.field-input {
 .onb-callout-pro > svg { flex: 0 0 auto; margin-top: 2px; color: var(--accent); }
 .onb-callout-pro code { font-size: 11px; }
 
-/* Cookie-compat list inside the cookies-screen callout. Restructured
-   as a tag + label per row so the closed/open distinction reads at
-   a glance instead of being a paragraph blob. */
-.onb-cookie-list {
-  list-style: none;
-  padding: 0;
-  margin: 8px 0 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
-  line-height: 1.5;
+/* Cookie-compat callout. The parent .onb-callout uses display:flex
+   (for icon + body alignment in the pro tip variant). This variant
+   needs vertical stacking with a clear title → table → tip hierarchy,
+   so we override. */
+.onb-callout-cookies {
+  display: block;
+  padding: 14px 16px;
 }
-.onb-cookie-list li {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
+.onb-callout-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-0);
+  margin: 0 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+}
+
+/* 2-col grid: tag chip | description. Two rows. Each tag aligns
+   vertically with the first line of its body, like a definition
+   list. */
+.onb-cookie-grid {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  column-gap: 14px;
+  row-gap: 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--text-1);
 }
+.onb-cookie-body { display: flex; flex-direction: column; gap: 4px; }
 .onb-cookie-why {
   font-size: 11px;
   color: var(--text-3);
-  width: 100%;
-  margin-left: 80px;
+  font-style: italic;
 }
+
 .onb-tag {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
+  justify-content: center;
+  padding: 3px 8px;
   border-radius: 4px;
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-family: var(--mono);
-  flex: 0 0 auto;
-  width: 110px;
-  justify-content: center;
+  height: 22px;
+  width: 100%;
+  text-align: center;
 }
 .onb-tag-warn {
   background: color-mix(in srgb, #e0a93a 18%, transparent);
@@ -2213,14 +2226,16 @@ textarea.field-input {
   border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
   color: var(--accent);
 }
+
 .onb-cookie-tip {
-  padding-top: 10px;
-  margin-top: 6px;
+  margin-top: 12px;
+  padding-top: 12px;
   border-top: 1px dashed var(--line);
   font-size: 12px;
   line-height: 1.55;
   color: var(--text-1);
 }
+.onb-cookie-tip strong { color: var(--accent); }
 
 .onb-radio-group {
   display: flex;
