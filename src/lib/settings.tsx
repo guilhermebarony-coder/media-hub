@@ -24,6 +24,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -43,6 +44,25 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [ready, setReady] = useState(false);
 
+  // Source-of-truth mirror for save().
+  //
+  // We can't rely on `settings` from the closure to compute the next
+  // value: React's functional setState updater runs LATER (during the
+  // next render), so reading state via the closure or via the updater's
+  // `current` arg gives us either stale data or data that doesn't exist
+  // yet when we need to serialize for the Rust IPC call.
+  //
+  // The ref tracks the latest state synchronously — including the
+  // optimistic write we're about to apply — so rapid successive saves
+  // (slider drag, typing into the rename template) compose correctly
+  // instead of all clobbering each other with stale snapshots.
+  const settingsRef = useRef<Settings>(DEFAULT_SETTINGS);
+  // Track which saves are "pending in flight" so the listener can
+  // skip its refetch-and-overwrite when our own save fires the event.
+  // Without this, a rapid sequence of saves can have a late-arriving
+  // settings_get response stomp the freshest state.
+  const inFlightSavesRef = useRef(0);
+
   // Initial load + subscribe to changes. The subscription matters when
   // multiple windows ever open, or when something on the Rust side
   // (e.g. the onboarding flow) writes settings directly — UI reflects
@@ -52,6 +72,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     (async () => {
       try {
         const s = await invoke<Settings>("settings_get");
+        settingsRef.current = s;
         setSettings(s);
       } catch (e) {
         console.warn("settings_get failed, using defaults:", e);
@@ -60,8 +81,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       }
       try {
         unlisten = await listen<Settings>("settings:changed", async () => {
+          // Skip refetch if we have our own writes in flight — our
+          // optimistic state is already the truth.
+          if (inFlightSavesRef.current > 0) return;
           try {
             const s = await invoke<Settings>("settings_get");
+            settingsRef.current = s;
             setSettings(s);
           } catch (e) {
             console.warn("settings refresh failed:", e);
@@ -78,11 +103,14 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   const save = useCallback(
     async (updater: (current: Settings) => Settings) => {
-      let next: Settings = settings;
-      setSettings((current) => {
-        next = updater(current);
-        return next;
-      });
+      // Read fresh from the ref (not the closure), compute the next
+      // shape, and commit BOTH the ref and React state synchronously
+      // before kicking off the IPC call. This guarantees the value
+      // we send to Rust matches what the UI is showing optimistically.
+      const next = updater(settingsRef.current);
+      settingsRef.current = next;
+      setSettings(next);
+      inFlightSavesRef.current++;
       try {
         await invoke("settings_set", { settings: next });
       } catch (e) {
@@ -90,14 +118,17 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         console.warn("settings_set failed, reverting:", e);
         try {
           const refetched = await invoke<Settings>("settings_get");
+          settingsRef.current = refetched;
           setSettings(refetched);
         } catch {
           // Last resort: leave the optimistic state. User can retry.
         }
         throw e;
+      } finally {
+        inFlightSavesRef.current = Math.max(0, inFlightSavesRef.current - 1);
       }
     },
-    [settings],
+    [],
   );
 
   return (
