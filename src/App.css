@@ -1121,6 +1121,67 @@ textarea.field-input {
 }
 .lib-card:hover { border-color: var(--line-hi); background: var(--bg-2); }
 .lib-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+
+/* "Just downloaded" highlight (0.9 UX win #7) — subtle lime left
+   border + glow on cards whose downloaded_at is within the last
+   5 minutes. Fades away as cards age out of the window on next
+   library:changed event. */
+.lib-card.just-now {
+  border-left: 2px solid var(--accent);
+  box-shadow: -2px 0 12px -4px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.lib-card.just-now.selected {
+  /* "selected" wins on the right + glow combo; left accent stays. */
+  border-left-color: var(--accent);
+}
+
+/* =====================================================================
+   Right-click context menu (0.9 UX win #6) — used by Library cards
+   ===================================================================== */
+.ctx-menu {
+  position: fixed;
+  z-index: 900;
+  min-width: 200px;
+  padding: 4px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-hi);
+  border-radius: 6px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  animation: ctx-pop 100ms ease-out;
+}
+@keyframes ctx-pop {
+  from { transform: translateY(-3px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  color: var(--text-1);
+  font-size: 12px;
+  font-family: inherit;
+  text-align: left;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 80ms ease;
+}
+.ctx-item:hover { background: var(--bg-3); color: var(--text-0); }
+.ctx-item:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.ctx-sep {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 6px;
+}
+.ctx-warn { color: #e0a93a; }
+.ctx-warn:hover { background: color-mix(in srgb, #e0a93a 12%, var(--bg-3)); color: #e0a93a; }
+.ctx-danger { color: var(--err); }
+.ctx-danger:hover { background: color-mix(in srgb, var(--err) 14%, var(--bg-3)); color: var(--err); }
 .lib-card .thumb {
   aspect-ratio: 16/9;
   background: repeating-linear-gradient(135deg, #1a1a1e 0 10px, #16161a 10px 20px);

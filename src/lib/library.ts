@@ -113,3 +113,16 @@ export async function revealFile(filePath: string): Promise<void> {
     }
   }
 }
+
+/**
+ * Open the file in the OS's default application (e.g. Premiere will
+ * import it if registered for .mp4, otherwise system default media
+ * player). Used by the library context menu (0.9 UX win #6).
+ */
+export async function openFileInDefaultApp(filePath: string): Promise<void> {
+  try {
+    await openPath(filePath);
+  } catch (e) {
+    console.warn("openFileInDefaultApp failed:", e);
+  }
+}

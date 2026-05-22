@@ -1,14 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTauriEvent } from "../lib/useTauriEvent";
 import { Icon } from "../lib/icons";
 import { fmtBytes, fmtDuration } from "../lib/format";
-import { attachLocalThumbnail, revealFile, thumbnailSrc } from "../lib/library";
+import { attachLocalThumbnail, openFileInDefaultApp, revealFile, thumbnailSrc } from "../lib/library";
 import { scopeToFilter, useActiveProject } from "../lib/activeProject";
 import type { Asset, LibraryFilters, SiblingSummary, TagCount } from "../lib/types";
 
-type Bucket = "today" | "week" | "month" | "older";
+// "now" is the "I just downloaded this" bucket — last 5 min. Surfaces
+// the answer to "where's the clip I JUST made?" without scrolling.
+// (0.9 UX win #7.)
+type Bucket = "now" | "today" | "week" | "month" | "older";
 
 /**
  * Library page — real grid (formerly the dev-card LibraryDevCard).
@@ -43,6 +46,15 @@ export default function LibraryPage() {
 
   // Selection: which asset is open in the drawer.
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Right-click context menu state (0.9 UX win #6). When non-null,
+  // <CardContextMenu> renders at (x,y) for the targeted asset.
+  // Dismissed by click-outside, Esc, scroll, or any of its actions.
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    asset: Asset;
+  } | null>(null);
 
   async function refresh() {
     try {
@@ -126,7 +138,7 @@ export default function LibraryPage() {
   }, [assets]);
 
   const bucketCounts = useMemo(() => {
-    const m: Record<Bucket, number> = { today: 0, week: 0, month: 0, older: 0 };
+    const m: Record<Bucket, number> = { now: 0, today: 0, week: 0, month: 0, older: 0 };
     for (const a of assets) m[bucketFor(a.downloaded_at)]++;
     return m;
   }, [assets]);
@@ -247,7 +259,7 @@ export default function LibraryPage() {
           </FacetGroup>
 
           <FacetGroup title="Added">
-            {(["today", "week", "month", "older"] as Bucket[]).map((b) => (
+            {(["now", "today", "week", "month", "older"] as Bucket[]).map((b) => (
               <Facet
                 key={b}
                 active={activeBuckets.has(b)}
@@ -344,6 +356,10 @@ export default function LibraryPage() {
                     asset={a}
                     selected={selectedId === a.id}
                     onClick={() => setSelectedId(a.id)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setContextMenu({ x: e.clientX, y: e.clientY, asset: a });
+                    }}
                   />
                 ))}
               </div>
@@ -380,6 +396,168 @@ export default function LibraryPage() {
           onSelectAsset={(id) => setSelectedId(id)}
         />
       )}
+
+      {contextMenu && (
+        <CardContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          asset={contextMenu.asset}
+          onClose={() => setContextMenu(null)}
+          onOpenDrawer={() => {
+            setSelectedId(contextMenu.asset.id);
+            setContextMenu(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// =====================================================================
+// Right-click context menu for library cards (0.9 UX win #6)
+// =====================================================================
+
+/**
+ * Floating menu rendered at (x, y) with the common per-asset actions
+ * that previously required opening the drawer. Dismissed by:
+ *   - Clicking outside the menu
+ *   - Pressing Escape
+ *   - Scrolling (menus that drift off their anchor feel broken)
+ *   - Window resize (ditto)
+ *   - Activating any of its own actions
+ *
+ * Positions are clamped to the viewport so the menu never renders off-
+ * screen. Falls back to opening above the cursor when there isn't
+ * enough room below.
+ */
+function CardContextMenu({
+  x,
+  y,
+  asset,
+  onClose,
+  onOpenDrawer,
+}: {
+  x: number;
+  y: number;
+  asset: Asset;
+  onClose: () => void;
+  onOpenDrawer: () => void;
+}) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  // Adjust position to fit in viewport. ResizeObserver / layout effect
+  // would be over-engineered for a transient menu — pick a sensible
+  // estimated height and clamp on initial render.
+  const ESTIMATED_HEIGHT = 280;
+  const ESTIMATED_WIDTH = 220;
+  const vh = typeof window !== "undefined" ? window.innerHeight : 1000;
+  const vw = typeof window !== "undefined" ? window.innerWidth : 1600;
+  const adjX = Math.min(x, vw - ESTIMATED_WIDTH - 8);
+  const adjY = y + ESTIMATED_HEIGHT > vh ? Math.max(8, y - ESTIMATED_HEIGHT) : y;
+
+  // Dismiss handlers
+  useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    const onScroll = () => onClose();
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [onClose]);
+
+  async function copyToClipboard(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      console.warn("clipboard write failed:", e);
+    }
+  }
+
+  async function forget() {
+    if (
+      !confirm(
+        `Forget "${asset.title}" from the library?\n\nThe file on disk is NOT deleted (you'll find it at:\n${asset.file_path}).`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await invoke("library_delete", { id: asset.id, deleteFile: false });
+    } catch (e) {
+      alert(`Forget failed: ${String(e)}`);
+    }
+  }
+
+  async function deleteFromDisk() {
+    if (
+      !confirm(
+        `Delete "${asset.title}" from disk?\n\nThis removes the FILE at:\n${asset.file_path}\n\nThe row will be removed from the library too. Files moved to OS trash are unrecoverable from inside the app.`,
+      )
+    ) {
+      return;
+    }
+    if (!confirm("This cannot be undone from inside Media Hub. Proceed?")) return;
+    try {
+      await invoke("library_delete", { id: asset.id, deleteFile: true });
+    } catch (e) {
+      alert(`Delete failed: ${String(e)}`);
+    }
+  }
+
+  // Action wrapper: run the action then close the menu. Async actions
+  // close the menu BEFORE the work runs so the UI feels responsive
+  // (the confirm dialogs etc. happen with the menu already gone).
+  function withClose(action: () => void | Promise<void>) {
+    return () => {
+      onClose();
+      // Fire-and-forget — errors handled inside each action.
+      void Promise.resolve(action());
+    };
+  }
+
+  return (
+    <div
+      ref={menuRef}
+      className="ctx-menu"
+      style={{ top: adjY, left: adjX }}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <button className="ctx-item" onClick={withClose(() => openFileInDefaultApp(asset.file_path))}>
+        <Icon.folder width={11} height={11} />
+        Open
+      </button>
+      <button className="ctx-item" onClick={withClose(() => revealFile(asset.file_path))}>
+        <Icon.folder width={11} height={11} />
+        Reveal in Explorer
+      </button>
+      <div className="ctx-sep" />
+      <button className="ctx-item" onClick={withClose(() => copyToClipboard(asset.source_url))}>
+        Copy source URL
+      </button>
+      <button className="ctx-item" onClick={withClose(() => copyToClipboard(asset.file_path))}>
+        Copy file path
+      </button>
+      <div className="ctx-sep" />
+      <button className="ctx-item" onClick={onOpenDrawer}>
+        Edit tags & details…
+      </button>
+      <div className="ctx-sep" />
+      <button className="ctx-item ctx-warn" onClick={withClose(forget)}>
+        Forget (keep file)
+      </button>
+      <button className="ctx-item ctx-danger" onClick={withClose(deleteFromDisk)}>
+        Delete file
+      </button>
     </div>
   );
 }
@@ -415,6 +593,8 @@ function platformLabel(p: string): string {
 
 function bucketLabel(b: Bucket): string {
   switch (b) {
+    case "now":
+      return "Just now";
     case "today":
       return "Today";
     case "week":
@@ -427,13 +607,29 @@ function bucketLabel(b: Bucket): string {
 }
 
 const DAY = 86_400;
+// "Just now" = downloaded within the last 5 minutes. Tuned for the
+// "did my download finish? where is it?" workflow — short enough to
+// be useful as a session highlight, long enough that a slow
+// download + transcode pair still falls inside the window.
+const NOW_WINDOW_SEC = 5 * 60;
 function bucketFor(downloaded_at: number): Bucket {
   const now = Math.floor(Date.now() / 1000);
-  const ageDays = (now - downloaded_at) / DAY;
+  const ageSec = now - downloaded_at;
+  if (ageSec < NOW_WINDOW_SEC) return "now";
+  const ageDays = ageSec / DAY;
   if (ageDays < 1) return "today";
   if (ageDays < 7) return "week";
   if (ageDays < 30) return "month";
   return "older";
+}
+
+/**
+ * Same window logic but as a quick boolean check the card renderer
+ * uses to decide whether to apply the "just downloaded" visual
+ * treatment. Kept in sync with bucketFor's "now" bucket.
+ */
+function isJustNow(downloaded_at: number): boolean {
+  return Math.floor(Date.now() / 1000) - downloaded_at < NOW_WINDOW_SEC;
 }
 
 // =====================================================================
@@ -480,14 +676,29 @@ function LibCard({
   asset,
   selected,
   onClick,
+  onContextMenu,
 }: {
   asset: Asset;
   selected: boolean;
   onClick: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
 }) {
   const thumb = thumbnailSrc(asset.thumbnail_path, asset.thumbnail_url);
+  // "Just now" visual treatment (0.9 UX win #7) — lime accent border
+  // for assets downloaded in the last 5 min. Computed at render time;
+  // the cards naturally lose the highlight as their age crosses the
+  // window. (Doesn't auto-update without a re-render, which is fine
+  // — library:changed events trigger a refresh on every download.)
+  const justNow = isJustNow(asset.downloaded_at);
+  const className = [
+    "lib-card",
+    selected ? "selected" : "",
+    justNow ? "just-now" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
-    <button className={"lib-card" + (selected ? " selected" : "")} onClick={onClick}>
+    <button className={className} onClick={onClick} onContextMenu={onContextMenu}>
       <div className="thumb">
         <span className="badge">
           {asset.platform === "youtube" ? (
