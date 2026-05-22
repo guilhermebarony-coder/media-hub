@@ -263,6 +263,27 @@ pub fn translate_ytdlp_error(raw: &str) -> String {
         );
     }
 
+    // "Requested format is not available" — yt-dlp's way of saying
+    // it extracted ZERO formats. On age-restricted/private videos
+    // this is almost always the user's cookies not actually applying
+    // (browser was open, cookies.txt path unreadable, expired, etc).
+    // Without cookies, YouTube returns no formats and any selection
+    // — even the default "best" — fails with this misleading message.
+    if lower.contains("requested format is not available")
+        || lower.contains("no video formats found")
+    {
+        return format!(
+            "yt-dlp got zero formats for this video. Most common cause: cookies \
+             aren't actually being applied. \
+             • If using browser cookies: close the browser completely (especially \
+             Chrome / Brave / Edge — they lock the cookie DB). \
+             • If using cookies.txt: try moving the file to a simple ASCII path \
+             like C:\\cookies.txt — non-ASCII path characters can fail silently. \
+             • If on a public video this happens: the format simply isn't \
+             offered by YouTube for this content. Raw: {raw}"
+        );
+    }
+
     // cookies.txt file missing or malformed (when user picked file mode).
     if lower.contains("cookies file") && (lower.contains("not found") || lower.contains("invalid"))
     {
@@ -372,7 +393,7 @@ pub fn cookies_args(state: &SettingsState) -> Vec<String> {
         Ok(g) => g,
         Err(_) => return Vec::new(),
     };
-    match &guard.cookies_source {
+    let args = match &guard.cookies_source {
         CookiesSource::None => Vec::new(),
         CookiesSource::Browser { browser } => {
             const ALLOWED: &[&str] = &[
@@ -383,17 +404,29 @@ pub fn cookies_args(state: &SettingsState) -> Vec<String> {
             if ALLOWED.contains(&b.as_str()) {
                 vec!["--cookies-from-browser".to_string(), b]
             } else {
-                eprintln!("cookies_args: unknown browser {browser:?}, skipping");
+                eprintln!("[cookies] unknown browser {browser:?}, skipping");
                 Vec::new()
             }
         }
         CookiesSource::File { path } => {
-            // Path is a string the user typed/picked. yt-dlp will
-            // error cleanly if the file doesn't exist or is malformed
-            // — we don't need to pre-validate.
+            // File-path sanity check — yt-dlp would also fail, but we
+            // log here so the dev console shows the actual issue
+            // (file missing? non-ASCII path the shell mangled?).
+            if !std::path::Path::new(path).exists() {
+                eprintln!("[cookies] WARN file mode but path doesn't exist: {path:?}");
+            }
             vec!["--cookies".to_string(), path.clone()]
         }
+    };
+    // Diagnostic line — shows what we're actually passing to yt-dlp.
+    // Visible in the `npm run tauri dev` terminal so the user can
+    // verify their settings are taking effect.
+    if args.is_empty() {
+        eprintln!("[cookies] none configured — yt-dlp will run without cookies");
+    } else {
+        eprintln!("[cookies] passing to yt-dlp: {args:?}");
     }
+    args
 }
 
 #[tauri::command]

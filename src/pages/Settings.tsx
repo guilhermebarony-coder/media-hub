@@ -138,8 +138,33 @@ function SourcesSection() {
             onChange={(e) => setPath(e.target.value)}
             spellCheck={false}
           />
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={async () => {
+              try {
+                const picked = await openDialog({
+                  directory: false,
+                  multiple: false,
+                  title: "Choose your cookies.txt file",
+                  filters: [
+                    { name: "cookies.txt", extensions: ["txt"] },
+                    { name: "All files", extensions: ["*"] },
+                  ],
+                });
+                if (typeof picked === "string") setPath(picked);
+              } catch (e) {
+                console.warn("file picker failed:", e);
+              }
+            }}
+          >
+            <Icon.folder width={12} height={12} /> Browse…
+          </button>
           <span className="hint-text faint">
-            Netscape-format cookies.txt (export via a browser extension).
+            Netscape-format cookies.txt. Tip: avoid paths with
+            non-ASCII characters (e.g. "Área de Trabalho") — they
+            can break yt-dlp file access. Try{" "}
+            <code>C:\cookies.txt</code> as a test.
           </span>
         </div>
       )}
