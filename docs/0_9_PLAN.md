@@ -1,8 +1,15 @@
 # Media Hub — 0.9 Health Checkup Plan
 
-Written 2026-05-22 after 0.9.A.1+2 shipped. The full A→E breakdown
+Written 2026-05-22, updated as slices land. The full A→E breakdown
 of what 0.9 covers, what needs owner involvement vs what can be
 done solo, expected effort per slice, and success criteria.
+
+**Status at a glance (2026-05-22 PM):**
+- ✅ A.1 baseline · ✅ A.2 SQL indexes · 🟡 A.3 partial · ✅ A.5 code-split
+- ✅ B.2 listener leak hook
+- ✅ C.7 stale-string sweep
+- ✅ D.5 dead indexes dropped · ✅ D.7 Firefox-default onboarding
+- All remaining solo + owner-active slices below.
 
 **Discipline rule for 0.9:** no new features. Any new idea that
 surfaces during the audit lands in NOTES.md for 1.x. We're
@@ -28,7 +35,13 @@ later phases can prove regressions don't happen.
 - Migration 005 added the index
 - Flagged 2 dead indexes for 0.9.D drop
 
-### A.3 — Owner stopwatch session 🟡 needs owner
+### A.3 — Owner RAM snapshot 🟢 done (2026-05-22)
+- Rust host (media-hub.exe): 6.2 MB private idle, +0.2 MB after actions
+- WebView2 children total: 121 MB idle, 155 MB during downloads, 192 MB peak (scrubber+GPU)
+- 18 KB per library asset (linear)
+- One follow-up flagged in B.2: verify GPU process returns to baseline after leaving Download page
+
+### A.3 — Owner stopwatch startup 🟡 still needs owner
 **What you do (~10 min):**
 1. Close all media-hub processes (Task Manager → end any leftover)
 2. Launch via `npm run tauri dev`, time click→window-visible
@@ -55,7 +68,11 @@ later phases can prove regressions don't happen.
 4. Re-test by your screenshots
 5. Commit with measurements
 
-### A.5 — Code-splitting (owner-free)
+### A.5 — Code-splitting 🟢 done (2026-05-22)
+- Initial JS chunk: 98.58 kB gz → 78.30 kB gz (-20.6%)
+- 4 page routes + Onboarding modal now in separate chunks
+- Loads on navigation, fallback "loading…" rarely flashes
+- Skipped block (replaced by status above):
 **What I do (~30 min):**
 1. `React.lazy()` each page route in `App.tsx`
 2. `React.lazy()` the Onboarding modal
@@ -98,7 +115,13 @@ event listeners get cleaned up, no resource handles leak.
 **Success criteria:** RAM at 6 hours ≈ RAM at 30 min (±10%). If it grew >50%,
 we have a leak and need to hunt.
 
-### B.2 — Listener leak audit (owner-free)
+### B.2 — Listener leak audit 🟢 done (2026-05-22)
+- Found real race in every listen() useEffect: if unmount before .then() resolved, listener orphaned
+- Worst-case site: Library asset drawer (remounts per asset click)
+- Fixed via new src/lib/useTauriEvent.ts hook + inline race-safe pattern where the hook didn't fit
+- Applied to Library page, Projects page, ActiveProjectProvider, Library drawer
+
+### B.2 — _(original block, kept for reference)_
 **What I do (~45 min):**
 1. Grep every `listen(` call. Each MUST have a matching `unlisten?.()` in cleanup.
 2. Check all useEffect hooks return cleanup functions when they listen
@@ -309,16 +332,136 @@ If you want to maximize impact per evening, prioritize:
 2. **The big payoff slices** if you want visible wins: A.5 code-splitting (startup feel), A.6 scale test (data-driven confidence), C.6 library-root migration (kills the footgun), D.1 empty states (the "feels real" pass).
 
 Owner-free slices I can do whenever you say "go" without further input:
-- A.5 code-splitting
+- ~~A.5 code-splitting~~ ✅ shipped
 - A.6 synthesized scale test
-- B.2 listener leak audit
+- ~~B.2 listener leak audit~~ ✅ shipped
 - C.1 race conditions
 - C.2 filesystem edge cases
-- C.7 stale-string sweep
+- ~~C.7 stale-string sweep~~ ✅ shipped
 - D.3 error message review
 - D.4 focus rings + easing
-- D.5 drop dead indexes
-- D.7 Firefox-by-default copy
-- E.2 aria-labels
+- ~~D.5 drop dead indexes~~ ✅ shipped
+- ~~D.7 Firefox-by-default copy~~ ✅ shipped
+- E.2 aria-labels (mostly done, ~~quick verification pass~~)
 - E.4 keyboard discovery
-- E.5 tooltips
+- ~~E.5 tooltips~~ ✅ shipped (mostly already in place)
+
+---
+
+## "Where you should check" — owner-active checklist
+
+Bookmark this section. Whenever you've got 10-15 min and want to
+knock something out, pick from here. Each item is self-contained
+and updates a specific file.
+
+### A.3 — Startup time stopwatch
+**Where:** `docs/PERF_BASELINE.md` → "Startup time" section
+**What to do:**
+1. Close all media-hub processes via Task Manager
+2. Time click → window-visible 3 times, take median
+3. Note dev build (`npm run tauri dev`) vs release build separately
+4. Drop the numbers in the empty table
+
+### A.4 — React DevTools render audit
+**Where:** screenshot session, share findings here
+**What to do:**
+1. Install React DevTools browser extension if you don't have it
+2. Open dev app (F12 → Components tab)
+3. Enable "Highlight updates when components render"
+4. Click around Library: toggle tag filters, search, open drawer 5×
+5. Screenshot anything that highlights when it shouldn't (e.g. unrelated cards re-rendering on tag toggle)
+
+### B.1 — Soak test (overnight)
+**Where:** new `docs/SOAK_TEST_LOG.md` (create it)
+**What to do:**
+1. Launch app, snapshot RAM of all Media Hub processes
+2. Leave the app open overnight on the Library page
+3. Next morning, snapshot again
+4. If RAM is within ±10% of starting → clean. If grew >50% → leak hunt time.
+
+### B.2 follow-up — GPU process baseline check (5 min, important)
+**Where:** in the running app
+**What to do:**
+1. Open Download page, paste a URL, let the scrubber load (the GPU process should be ~91 MB during this per A.3 data)
+2. Navigate to Library page (scrubber unmounts entirely)
+3. Wait 5 seconds
+4. Check GPU process memory in Task Manager — should drop to ~35 MB
+5. If it STAYS inflated → real listener leak, share screenshot
+
+### B.3 — Drawer stress test (~3 min)
+**Where:** mental note + tell me what happened
+**What to do:**
+1. Open Library, snapshot RAM
+2. Click any card → drawer opens
+3. Press Escape → drawer closes
+4. Repeat 50× rapid-fire (or use a number-spam tool)
+5. Snapshot RAM
+6. Tell me if it grew significantly or held steady
+
+### B.4 — Queue stress test (~15 min)
+**Where:** mental note
+**What to do:**
+1. Queue 20 short YouTube videos
+2. Let them all complete
+3. "Clear completed"
+4. Snapshot RAM
+5. Repeat the cycle 3 times
+6. Compare RAM before cycle 1 vs after cycle 3
+
+### B.5 — Settings save spam (~30 sec)
+**Where:** mental note
+**What to do:**
+1. Open Settings → Downloads → Parallel workers slider
+2. Drag rapidly back and forth for 30 seconds
+3. Confirm: slider lands on final value, no flicker, no console errors
+4. Watch dev terminal for `[cookies]` log spam (shouldn't fire on slider drags)
+
+### C.3 — Edge case URLs
+**Where:** share weird errors here when you find them
+**What to do:** when testing in real use, share any of these that produce a weird error:
+- A private video
+- A deleted video
+- A geo-blocked video
+- A YouTube livestream (live, not VOD)
+- A YouTube Shorts URL
+- A playlist URL
+- A YouTube Music URL
+
+### C.5 — Test cookies button verify
+**Where:** when I ship the button, you test
+**What to do:** TBD — slice not yet shipped. Will gate on this when ready.
+
+### C.6 — Library-root migration verify (HIGH PRIORITY)
+**Where:** when I ship the migration command, you test
+**What to do:** TBD — slice not yet shipped. Use a copy of your library.db first.
+
+### D.1 — Empty-state screenshots
+**Where:** save screenshots of bare empty states
+**What to do:**
+1. Visit Library when filtered by a tag that matches nothing
+2. Visit Projects with no projects (delete them all first OR start fresh)
+3. Visit a sibling list with no siblings
+4. Use Search with no results
+5. Screenshot anything that looks like a blank screen instead of an intentional "nothing here yet" state
+
+### D.2 — Loading-state screenshots
+**Where:** screenshots of "wait, did this even start?" moments
+**What to do:**
+1. Walk through every async action
+2. Note any where you weren't sure if the app was working
+3. Screenshot those moments
+
+### D.6 — Scrubber sensitivity verify
+**Where:** when I ship the multiplier setting, you test feel at 0.5×/1×/2×
+**What to do:** TBD — slice not yet shipped.
+
+### E.1 — Tab order
+**Where:** mental note + screenshot
+**What to do:**
+1. On each page, press Tab repeatedly from the top
+2. Note any place focus jumps to a weird spot or skips a button
+3. Screenshot any cycles
+
+### E.3 — Contrast spot check
+**Where:** mental note
+**What to do:** spot any text that looked too dim to read comfortably on dark mode. Faint helper text is intentional; actual content shouldn't strain.
