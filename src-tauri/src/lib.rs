@@ -1063,6 +1063,24 @@ async fn media_transcode(
     }
 
     let bytes = std::fs::metadata(&out_path_str).ok().map(|m| m.len());
+
+    // Delete the source on successful transcode (2026-05-22). The
+    // transcoded output is what we record in the library and what the
+    // user actually opens in their NLE — keeping the pre-transcode
+    // source around just doubles disk usage for no editing-workflow
+    // benefit. Best-effort: log on failure but don't break the call
+    // (user still got their transcode; orphan file is just clutter).
+    //
+    // Only fires when paths differ — defensive against a hypothetical
+    // future preset whose output path collides with input.
+    if src_path != out_path_str {
+        if let Err(e) = std::fs::remove_file(&src_path) {
+            eprintln!(
+                "media_transcode: couldn't delete source {src_path}: {e}"
+            );
+        }
+    }
+
     Ok(TranscodeResult {
         path: out_path_str,
         bytes,
