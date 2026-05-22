@@ -33,6 +33,12 @@ import type {
 } from "../lib/types";
 import { TRANSCODE_PRESETS } from "../lib/types";
 
+// 1.0.1: sentinel job_id used by the single-URL panel. There's only
+// ever one active single-URL download at a time, so a fixed string is
+// fine — it's also distinguishable from queue job ids ("job-…")
+// which keeps the registry self-explanatory in any log output.
+const SINGLE_URL_JOB_ID = "single-url";
+
 // =====================================================================
 // Page wrapper
 // =====================================================================
@@ -428,6 +434,11 @@ function MetadataCard() {
         totalBytesHint: bytesHint,
         videoId: meta?.id ?? "",
         segments: rustSegments.length > 0 ? rustSegments : null,
+        // 1.0.1: synthetic job id so the Cancel button in this panel
+        // can route a yt_download_cancel to the right child process.
+        // The single-URL flow is always one-at-a-time, so a fixed
+        // sentinel is sufficient.
+        jobId: SINGLE_URL_JOB_ID,
         projectId: targetProjectId,
       });
 
@@ -506,12 +517,26 @@ function MetadataCard() {
         setDownloadedPaths(finalPaths);
       }
     } catch (e) {
-      setDlErr(String(e));
+      // 1.0.1: hide the canceled sentinel from the user — a friendly
+      // "canceled" message replaces it. Real errors fall through.
+      const msg = String(e);
+      setDlErr(msg.includes("__canceled__") ? "Canceled" : msg);
     } finally {
       setDownloading(false);
       setProgress(null);
       setTranscodeProgress(null);
       setPhase("idle");
+    }
+  }
+
+  // 1.0.1: cancel the active single-URL download. Marks UI as canceling
+  // optimistically; the awaiting invoke() above will reject with the
+  // sentinel which we map to the "Canceled" message.
+  async function cancelSingleUrlDownload() {
+    try {
+      await invoke<boolean>("yt_download_cancel", { jobId: SINGLE_URL_JOB_ID });
+    } catch (e) {
+      console.warn("[cancel] yt_download_cancel failed:", e);
     }
   }
 
@@ -772,18 +797,30 @@ function MetadataCard() {
           </div>
 
           {downloading && phase === "downloading" && (
-            <ProgressBar
-              percent={progress?.percent ?? null}
-              kind="download"
-              label={progress?.percent != null ? `${progress.percent.toFixed(1)}% · downloading` : "starting download…"}
-              extra={[
-                `${fmtBytes(progress?.downloaded_bytes ?? 0)}${
-                  progress?.total_bytes != null ? ` / ${fmtBytes(progress.total_bytes)}` : ""
-                }`,
-                progress?.speed_bps != null ? `${fmtBytes(progress.speed_bps)}/s` : "",
-                progress?.eta_sec != null ? `ETA ${fmtEta(progress.eta_sec)}` : "",
-              ].filter(Boolean)}
-            />
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                <ProgressBar
+                  percent={progress?.percent ?? null}
+                  kind="download"
+                  label={progress?.percent != null ? `${progress.percent.toFixed(1)}% · downloading` : "starting download…"}
+                  extra={[
+                    `${fmtBytes(progress?.downloaded_bytes ?? 0)}${
+                      progress?.total_bytes != null ? ` / ${fmtBytes(progress.total_bytes)}` : ""
+                    }`,
+                    progress?.speed_bps != null ? `${fmtBytes(progress.speed_bps)}/s` : "",
+                    progress?.eta_sec != null ? `ETA ${fmtEta(progress.eta_sec)}` : "",
+                  ].filter(Boolean)}
+                />
+              </div>
+              <button
+                className="btn btn-secondary"
+                onClick={() => void cancelSingleUrlDownload()}
+                title="Stop this download — partial file (if any) stays on disk"
+                style={{ marginTop: 2 }}
+              >
+                Cancel
+              </button>
+            </div>
           )}
 
           {downloading && phase === "transcoding" && (
@@ -891,7 +928,7 @@ function ProgressBar({
 // Batch queue
 // =====================================================================
 
-type QueueStatus = "queued" | "fetching" | "downloading" | "transcoding" | "done" | "failed";
+type QueueStatus = "queued" | "fetching" | "downloading" | "transcoding" | "done" | "failed" | "canceled";
 
 type QueueJob = {
   id: string;
@@ -1116,7 +1153,15 @@ function QueueCard() {
       });
       dlRes = results[0];
     } catch (e) {
-      updateJob(job.id, { status: "failed", error: String(e) });
+      // 1.0.1: if the user just hit Cancel, the invoke rejects with
+      // "__canceled__" and the row was already flipped to "canceled"
+      // by cancelJob(). Don't clobber that state with "failed".
+      const msg = String(e);
+      if (msg.includes("__canceled__") || jobsRef.current.find((j) => j.id === job.id)?.status === "canceled") {
+        updateJob(job.id, { status: "canceled", error: undefined });
+        return;
+      }
+      updateJob(job.id, { status: "failed", error: msg });
       return;
     }
 
@@ -1208,10 +1253,29 @@ function QueueCard() {
 
   function clearCompleted() {
     setJobs((prev) => {
-      const removed = prev.filter((j) => j.status === "done" || j.status === "failed");
+      const terminal = (s: QueueStatus) =>
+        s === "done" || s === "failed" || s === "canceled";
+      const removed = prev.filter((j) => terminal(j.status));
       for (const j of removed) claimedRef.current.delete(j.id);
-      return prev.filter((j) => j.status !== "done" && j.status !== "failed");
+      return prev.filter((j) => !terminal(j.status));
     });
+  }
+
+  // 1.0.1: cancel an in-flight download. Calls the Rust kill, then
+  // marks the row "canceled" so the worker loop's awaited invoke() —
+  // which will reject with the "__canceled__" sentinel — doesn't
+  // overwrite this state with "failed". processOne() checks the row's
+  // current status before patching to status:"failed" on catch.
+  async function cancelJob(id: string) {
+    updateJob(id, { status: "canceled" });
+    try {
+      await invoke<boolean>("yt_download_cancel", { jobId: id });
+    } catch (e) {
+      console.warn("[cancel] yt_download_cancel failed:", e);
+      // Even if the Rust side errored, the UI state stays "canceled"
+      // — the user's intent is clear. Worst case the download keeps
+      // going in the background and finishes; we'll just ignore it.
+    }
   }
 
   function retryFailed() {
@@ -1241,6 +1305,7 @@ function QueueCard() {
       transcoding: 0,
       done: 0,
       failed: 0,
+      canceled: 0,
     };
     for (const j of jobs) counts[j.status]++;
     const active = counts.downloading + counts.transcoding + counts.fetching;
@@ -1249,6 +1314,7 @@ function QueueCard() {
     if (counts.queued) parts.push(`${counts.queued} queued`);
     if (counts.done) parts.push(`${counts.done} done`);
     if (counts.failed) parts.push(`${counts.failed} failed`);
+    if (counts.canceled) parts.push(`${counts.canceled} canceled`);
     return parts.join(" · ");
   })();
 
@@ -1315,7 +1381,7 @@ function QueueCard() {
       {jobs.length > 0 && (
         <ul className="queue-list">
           {jobs.map((job) => (
-            <QueueRow key={job.id} job={job} />
+            <QueueRow key={job.id} job={job} onCancel={cancelJob} />
           ))}
         </ul>
       )}
@@ -1323,15 +1389,21 @@ function QueueCard() {
   );
 }
 
-function QueueRow({ job }: { job: QueueJob }) {
+function QueueRow({ job, onCancel }: { job: QueueJob; onCancel: (id: string) => void }) {
   const pillClass =
     job.status === "done"
       ? "pill ok"
       : job.status === "failed"
         ? "pill err"
-        : job.status === "queued"
+        : job.status === "canceled"
           ? "pill queued"
-          : "pill live";
+          : job.status === "queued"
+            ? "pill queued"
+            : "pill live";
+  // Cancel is only meaningful while yt-dlp is fetching bytes. fetching
+  // (metadata) and transcoding (ffmpeg) phases stay un-cancelable for
+  // now — metadata is fast, transcode kill is a future polish item.
+  const canCancel = job.status === "downloading";
 
   return (
     <li className="queue-row">
@@ -1416,9 +1488,24 @@ function QueueRow({ job }: { job: QueueJob }) {
         )}
 
         {job.status === "failed" && <div className="queue-error">{job.error}</div>}
+        {job.status === "canceled" && (
+          <div className="queue-error" style={{ color: "var(--text-3)" }}>
+            Canceled · partial file (if any) left on disk
+          </div>
+        )}
       </div>
       <div className="queue-status">
         <span className={pillClass}>{job.status}</span>
+        {canCancel && (
+          <button
+            className="btn btn-secondary"
+            style={{ marginTop: 6, fontSize: 11, padding: "3px 8px" }}
+            onClick={() => onCancel(job.id)}
+            title="Stop this download"
+          >
+            Cancel
+          </button>
+        )}
       </div>
     </li>
   );

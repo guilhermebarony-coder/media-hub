@@ -7,9 +7,85 @@ mod library;
 mod settings;
 
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_shell::process::CommandEvent;
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
+
+// =====================================================================
+// 1.0.1 — Cancel in-flight downloads
+// =====================================================================
+//
+// JobRegistry holds the CommandChild for every active yt-dlp process,
+// keyed by job_id. A separate `canceled` set remembers job_ids the user
+// has explicitly canceled, so when yt_download's event loop exits with
+// a non-zero code we can distinguish "user killed it" from "yt-dlp
+// crashed" — both look the same at the process layer.
+//
+// Lock discipline: take the mutex, mutate, drop immediately. Never hold
+// across await points. The map values (CommandChild) are removed via
+// `.remove()` so we own them before calling `.kill()` (which consumes
+// the handle).
+pub struct JobRegistry {
+    pub children: Mutex<HashMap<String, CommandChild>>,
+    pub canceled: Mutex<HashSet<String>>,
+}
+
+impl Default for JobRegistry {
+    fn default() -> Self {
+        Self {
+            children: Mutex::new(HashMap::new()),
+            canceled: Mutex::new(HashSet::new()),
+        }
+    }
+}
+
+/// Remove a job's child handle from the registry (no-op if absent).
+fn registry_remove(registry: &JobRegistry, job_id: &str) -> Option<CommandChild> {
+    registry
+        .children
+        .lock()
+        .ok()
+        .and_then(|mut m| m.remove(job_id))
+}
+
+/// True if the user has flagged this job_id for cancellation since the
+/// last call to `registry_take_canceled`. The flag is one-shot — reading
+/// also clears it so a follow-up job with the same id (rare, but
+/// possible on retry) starts clean.
+fn registry_take_canceled(registry: &JobRegistry, job_id: &str) -> bool {
+    registry
+        .canceled
+        .lock()
+        .map(|mut s| s.remove(job_id))
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+fn yt_download_cancel(
+    registry: tauri::State<'_, JobRegistry>,
+    job_id: String,
+) -> Result<bool, String> {
+    // Mark canceled FIRST so the event loop in yt_download (which will
+    // see the killed process land as a Terminated event) can tell the
+    // difference between user-cancel and real failure.
+    if let Ok(mut set) = registry.canceled.lock() {
+        set.insert(job_id.clone());
+    }
+    match registry_remove(&registry, &job_id) {
+        Some(child) => {
+            child
+                .kill()
+                .map_err(|e| format!("kill yt-dlp: {e}"))?;
+            Ok(true)
+        }
+        // Job not in registry — either it already finished, never
+        // started, or was never registered (single-URL flow with a
+        // missing id). Not an error from the frontend's perspective.
+        None => Ok(false),
+    }
+}
 
 // =====================================================================
 // 0.1 — Sidecar smoke test
@@ -354,6 +430,7 @@ async fn yt_download(
     app: AppHandle,
     state: tauri::State<'_, library::LibraryState>,
     settings: tauri::State<'_, settings::SettingsState>,
+    registry: tauri::State<'_, JobRegistry>,
     url: String,
     format_spec: String,
     merge_container: Option<String>,
@@ -642,10 +719,28 @@ async fn yt_download(
     // Spawn yt-dlp and read its event stream. We only consume stdout for
     // the [mh-filepath] capture and stderr for error reporting; progress
     // comes from the polling task above.
-    let (mut rx, _child) = cmd
+    let (mut rx, child) = cmd
         .args(args)
         .spawn()
         .map_err(|e| format!("spawn failed: {e}"))?;
+
+    // 1.0.1: register the child so `yt_download_cancel(job_id)` can
+    // kill it. Only jobs with an explicit job_id are cancelable — the
+    // batch queue always supplies one, the single-URL flow now also
+    // synthesizes one (`single-url`). Jobs without an id stay
+    // un-killable (no UI to cancel them anyway).
+    if let Some(jid) = job_id.as_ref() {
+        if let Ok(mut map) = registry.children.lock() {
+            map.insert(jid.clone(), child);
+        }
+        // If the lock somehow poisoned, we lose the kill handle but
+        // the download proceeds normally. Document but don't panic.
+    } else {
+        // No job_id — drop the child handle. The process keeps running
+        // until natural completion (drop doesn't kill in
+        // tauri-plugin-shell).
+        drop(child);
+    }
 
     let mut final_path: Option<String> = None;
     let mut stderr_tail: Vec<String> = Vec::new();
@@ -673,6 +768,22 @@ async fn yt_download(
                 exit_code = payload.code;
             }
             _ => {}
+        }
+    }
+
+    // Process has terminated — unregister the child handle. Best-effort:
+    // if cancel raced us to remove it, that's fine. If we never inserted
+    // (no job_id), nothing to remove.
+    if let Some(jid) = job_id.as_ref() {
+        let _ = registry_remove(&registry, jid);
+    }
+
+    // 1.0.1: distinguish user-cancel from a real yt-dlp failure. Both
+    // produce a non-zero exit code (kill = signal exit on unix, exit
+    // code 1 on windows), so we check the canceled-flag set instead.
+    if let Some(jid) = job_id.as_ref() {
+        if registry_take_canceled(&registry, jid) {
+            return Err("__canceled__".to_string());
         }
     }
 
@@ -1330,6 +1441,10 @@ pub fn run() {
             // — same philosophy as in settings::init.
             let settings_state = settings::init(&app_handle)?;
             app.manage(settings_state);
+            // 1.0.1: registry of in-flight yt-dlp children so we can
+            // cancel them. Empty at startup — populated as downloads
+            // spawn, drained as they finish or get killed.
+            app.manage(JobRegistry::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1337,6 +1452,7 @@ pub fn run() {
             yt_fetch_metadata,
             yt_resolve_stream_url,
             yt_download,
+            yt_download_cancel,
             media_transcode,
             media_extract_thumbnail,
             library::library_insert,
