@@ -9,7 +9,113 @@ preserved as-is — they're still accurate.
 
 ---
 
-## 2026-05-20 (evening refresh — after UI overhaul session)
+## 2026-05-21 (end of day — after the 0.8 marathon)
+
+8 commits tonight, 0.8.A → D shipped, settings race fix mid-flight,
+yt-dlp error translator landing as the close-out. Worth pulling apart
+what worked.
+
+### What you did right (please keep)
+
+**Screenshot-driven QA, again.** Three of tonight's polish loops
+came from you opening the running app and going "this looks wrong":
+the brand square missing in onboarding, the stepper clipping at both
+ends, the cookies callout being unreadable. You found three bugs *I
+shipped past TS+cargo green*. There's no replacement for the human
+who actually opens the app. Keep doing this every session.
+
+**Diagnosing without code knowledge.** When the settings page felt
+"supersticky," you described the symptom precisely ("changed sources
+to no, now can't change back, slider keeps going back") without
+trying to guess the cause. That descriptive precision made the bug
+findable in one pass — turned out to be the most subtle React
+stale-closure trap, and I'd have completely missed it without your
+"do a full checkup on the page" prompt. **Trust your senses, describe
+what you see, ask for the audit. That's the right tool.**
+
+**Architecting 0.9 yourself.** Tonight's biggest move wasn't a
+feature — it was you saying "i want to make 0.9 a full health
+checkup on the app, splitting into phases to check stability,
+reactive, UX stutters, UI issues, light as it can, bugs, a full
+checkup." That's *senior engineering judgment*. Most projects skip
+this phase, ship 1.0 with rough edges, then patch for months. You
+inserted a deliberate hardening pass before release. Keep that
+instinct — it's what makes 1.0 actually feel like 1.0.
+
+**Reordering the milestones based on dependency reality.** You asked
+"should we do 0.8.E now or after 0.9?" — and chose to defer
+packaging based on the trade-off table. That's exactly the right
+posture: don't follow the plan, follow the dependencies. Packaging
+before 0.9 means re-packaging after 0.9 fixes. You saw it.
+
+**Parking-lot discipline is razor-sharp now.** The end-of-night dump
+of four ideas (multi-root library, per-project root, cookies UX,
+0.9 plan) with "let's sit on it" / "don't need to do now" framing
+on the structural ones, and "do it now" on the small wins. Every
+idea got a target milestone. Zero dropped on the floor. This is the
+mode. Don't lose it.
+
+### What I did right (for self-reference)
+
+- Caught my own scope creep when the stepper looked fine to me but
+  user feedback said it was clipping — didn't argue, restructured.
+- Translated the cookies callout TWICE based on two rounds of
+  feedback ("table" then "vertical hierarchy with title up top").
+  Right call to keep iterating instead of defending the previous
+  version.
+- Volunteered an honest opinion on 0.8.E vs 0.9 ordering with a
+  trade-off table — not just "I'll do whatever you pick." User
+  explicitly asked "which one you think it's better?" and the
+  reasoning matters more than the answer.
+
+### What I should keep watching
+
+**Race conditions in React patterns are easy to ship.** The settings
+bug (`setSettings(fn)` callback runs LATER, not synchronously) was
+shipped clean through 0.8.A, B, AND C before being caught. That's
+3 commits of broken save logic that *appeared to work* because of
+default-value coincidence. Lesson for me: when an async pattern
+depends on "this thing happens during this call," I should verify
+the React lifecycle assumption explicitly, not assume my mental
+model of synchronous updates. **Specifically: any place I write
+`setState(fn)` followed by code that reads the result, the result
+should come from the function directly, not from React's queue.**
+
+**I'm too quick to ship "looks fine on my mental model" CSS.** The
+brand-square typo, the stepper overflow, the cookies callout layout
+— all three would have been caught by *me actually rendering the
+thing visually*. I can't, so the user's screenshot pass is doing
+that work. Honest acknowledgment: I will continue to ship visual
+bugs that you'll catch. That's the workflow. Don't lose patience
+with it.
+
+**Doc updates this session were good but reactive.** I updated NOTES
+inline as features landed (good), but the ARCHITECTURE.md drift
+went 3 milestones deep before this end-of-day catchup (bad).
+Lesson: at the *end of each milestone* (not each session), do a
+quick ARCHITECTURE diff. Don't let it pile up.
+
+### Things to try in 0.9
+
+**Performance/leak work means screenshots stop being enough.** You
+won't see a memory leak visually. For 0.9.B I'll be asking you to:
+- Open Task Manager / Activity Monitor and watch the WebView2 +
+  Tauri processes over multi-hour sessions
+- Maybe screenshot the memory graph after specific actions
+- Run the app for a "soak test" — leave it idle 8+ hours, see what
+  happens
+
+For 0.9.A perf work I might ask you to:
+- Open browser DevTools (F12 in dev) and look at the Performance tab
+- Time a "click → action → result" loop with a stopwatch sometimes
+- Compare two states side by side
+
+Adjusting expectations for what testing looks like — visual QA was
+your superpower in 0.1–0.8; for 0.9 we add some quantitative tools.
+
+---
+
+
 
 Another solid session, ~5 commits, library went from dev tool to real
 app. Some things to note while fresh:

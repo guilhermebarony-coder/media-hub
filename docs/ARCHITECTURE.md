@@ -1,9 +1,10 @@
 # Media Hub — Architecture
 
-Status: living doc, last refreshed 2026-05-20 (post 0.5.1 — local
-thumbnails). This document is the **map** of what's actually built and
-where it lives. As code lands, this doc updates to match. If it drifts,
-fix the doc. Detailed contracts live in per-module header comments.
+Status: living doc, last refreshed 2026-05-21 (post 0.8.D — onboarding +
+settings polish). This document is the **map** of what's actually built
+and where it lives. As code lands, this doc updates to match. If it
+drifts, fix the doc. Detailed contracts live in per-module header
+comments.
 
 ✅ = shipped · 🟡 = planned · ❌ = decided against
 
@@ -60,36 +61,67 @@ Rust-side queue daemon). We accept that for now — see NOTES.md
 What's actually written under the user's home directory today:
 
 ```
-~/Media Hub/
+~/Media Hub/                                ← default content root
 ├── library.db                              ← SQLite WAL-mode, single file
 ├── _thumbnails/<asset_uuid>.jpg            ← extracted mid-clip frames (480w q=4)
-└── Downloads/
-    └── _test/                              ← yt-dlp writes here for now
-        ├── <title> [<id>].<ext>            ← downloaded source
-        ├── <title> [<id>].seg_<in>_<out>.<ext>   ← segment-trimmed output
-        └── <title> [<id>].<preset>.<out_ext>    ← transcoded output
+├── Library/
+│   └── raw/                                ← unscoped (Library) downloads
+│       ├── <title> [<id>].<ext>            ← source (segments deleted after trim)
+│       ├── <title> [<id>] [<in>_<out>].<ext>     ← segment-trimmed outputs
+│       └── <stem>.<preset>.<out_ext>       ← transcoded outputs
+└── Projects/<slug>/                        ← per-project scope (Phase B)
+    └── raw/                                ← same structure as Library/raw
 ```
+
+The `raw/` subfolder reserves the project root for future siblings
+(`proxies/` for scrubber lo-res, `exports/` if we add user-facing
+exports). NLEs pointed at the project root pick up `raw/`
+auto-import naturally.
+
+**Slug stability:** the project slug is computed at create time and
+NEVER recomputed on rename. Renaming a project's display name keeps
+the on-disk folder name stable so existing files stay reachable.
+
+**Override paths (0.8.C):**
+```
+<library_root>/Library/raw/...              ← if settings.library_root set
+<library_root>/Projects/<slug>/raw/...
+<library_root>/_thumbnails/...
+~/Media Hub/library.db                      ← STAYS at default (intentional)
+```
+
+The library DB intentionally stays at the default `~/Media Hub/`
+regardless of `library_root` — moving an open SQLite file mid-session
+is fiddly and the user-visible win is small. Documented in the
+Settings → Library hint.
+
+**Settings persistence (0.8.A):**
+```
+%APPDATA%\com.guilherme.mediahub\settings.json   (Windows)
+~/Library/Application Support/com.guilherme.mediahub/settings.json   (macOS)
+~/.config/com.guilherme.mediahub/settings.json   (Linux)
+```
+
+Atomic writes: serialize to `settings.json.tmp` then rename. Missing
+or malformed file falls back to defaults — settings are never load-
+blocking. `#[serde(default)]` on the struct + every field means
+older settings.json files keep loading cleanly as we add fields.
 
 Browser-side state (localStorage):
 ```
-mh.queue.v1   ← the batch download queue (active + queued + completed jobs)
+mh.queue.v1          ← batch download queue (active + queued + completed jobs)
+mh.activeScope.v1    ← which scope (Library or project) the user is in
+mh.volume.v1         ← scrubber preview volume (persisted across sessions)
 ```
-
-**Planned (not yet built):**
-- 🟡 `~/Media Hub/Library/` + `~/Media Hub/Projects/<name>/` dual-root
-  layout (0.6). Today everything lands in `Downloads/_test/` — that
-  path is provisional. The library DB row already carries the full
-  path so migrating later is a path rename, not a re-index.
-- 🟡 `~/Media Hub/_thumbnails/` will move to `Library/_thumbnails/`
-  and per-project `Projects/<n>/_thumbnails/` once dual-root lands.
-- 🟡 Settings file (`settings.json`) doesn't exist yet — no
-  per-user knobs to persist.
 
 **Path safety:** no formal `assert_in_library_root` helper yet. All
 write paths are computed by Rust handlers from a known-safe parent
-(home + "Media Hub"), so user-controllable strings never become
-parent-path components. Lock this down properly when we add
-project folders (user-named) in 0.6.
+(content_root resolved via `settings::content_root()`), so
+user-controllable strings never become parent-path components. Project
+slugs are sanitized at create time (`library::slugify`) so user-typed
+project names can't escape the Projects/ tree. Lock this down with a
+proper helper if we ever add user-controllable subfolders inside
+project scope.
 
 ---
 
@@ -107,38 +139,46 @@ Commands are registered in `src-tauri/src/lib.rs::run()` via
 
 | Command | File | Purpose |
 |---------|------|---------|
-| `binaries_version` | lib.rs | Returns yt-dlp + ffmpeg version strings (smoke-test, no UI today) |
-| `yt_fetch_metadata` | lib.rs | Spawns `yt-dlp -j`, returns title/duration/formats/thumbnail |
-| `yt_download` | lib.rs | Full download via yt-dlp. Optional in/out triggers post-download ffmpeg `-c copy` trim. Streams progress |
-| `media_transcode` | lib.rs | Re-encodes a downloaded file via ffmpeg with one of 4 presets (ProRes 422 LT / DNxHR SQ / H.264 libx264 / H.264 NVENC). `-hwaccel auto` for hw decode |
-| `media_extract_thumbnail` | lib.rs | Pulls a mid-clip JPG (480w q=4) into `~/Media Hub/_thumbnails/<asset_id>.jpg` |
-| `library_insert` | library.rs | Inserts an asset row; returns its UUID |
-| `library_list` | library.rs | Returns assets matching filters (free-text query + tag-AND + limit), each with its tag list |
-| `library_count` | library.rs | Total asset row count |
-| `library_delete` | library.rs | Removes a row (file on disk untouched). CASCADE drops asset_tags |
-| `library_set_thumbnail` | library.rs | Records a local thumbnail path against an asset |
-| `library_thumbnails_missing` | library.rs | Lists assets with no `thumbnail_path` for the backfill loop |
-| `tag_set_for_asset` | library.rs | Replace-all tag set in one transaction (no diff round-trips) |
+| `binaries_version` | lib.rs | Returns yt-dlp + ffmpeg version strings — surfaced in Settings → Diagnostics |
+| `yt_fetch_metadata` | lib.rs | `yt-dlp -j` — title/duration/formats/thumbnail. Injects cookies + bandwidth from settings. Errors run through `translate_ytdlp_error` |
+| `yt_resolve_stream_url` | lib.rs | `yt-dlp -g` — direct playable URL for the scrubber's HTML5 `<video>` preview. No download |
+| `yt_download` | lib.rs | Full source via yt-dlp, optionally followed by N ffmpeg `-c copy` trims for multi-segment. Returns `Vec<DownloadResult>`. Honors `project_id` + content_root for routing. Renames via `settings::build_filename_template` |
+| `media_transcode` | lib.rs | Re-encodes via ffmpeg, one of 4 presets (ProRes 422 LT / DNxHR SQ / H.264 libx264 / H.264 NVENC). `-hwaccel auto` for hw decode |
+| `media_extract_thumbnail` | lib.rs | Mid-clip JPG (480w q=4) into `<content_root>/_thumbnails/<asset_id>.jpg` |
+| `library_insert` | library.rs | Inserts an asset row; returns UUID |
+| `library_list` | library.rs | Assets matching filters (query + tag-AND + scope + limit), each with its tag list + `sibling_count` |
+| `library_count` | library.rs | Total asset count matching filters |
+| `library_delete` | library.rs | Removes a row; optional `delete_file` also removes file + thumbnail. CASCADE drops asset_tags |
+| `library_set_thumbnail` | library.rs | Records a local thumbnail path |
+| `library_thumbnails_missing` | library.rs | Lists assets with no `thumbnail_path` for backfill loop |
+| `library_siblings` | library.rs | Returns peer assets sharing the same `source_url` (multi-segment relationships) |
+| `library_find_by_url` | library.rs | Duplicate-check helper used by the Download page before fetch |
+| `tag_set_for_asset` | library.rs | Replace-all tag set in one transaction |
 | `tag_list_all` | library.rs | All tags with usage counts, alphabetical, orphans hidden |
+| `project_create / list / rename / delete` | library.rs | CRUD for projects. Slug derived at create; never recomputed on rename |
+| `project_finish` | library.rs | Lifecycle endgame — optionally promote assets to Library, OS-trash the project folder, delete the row |
+| `asset_set_project` | library.rs | Physical move between Library ↔ project scope (rename + cross-volume copy/delete fallback + collision-safe naming) |
+| `settings_get / settings_set` | settings.rs | Read/write the user settings struct. Atomic disk write, emits `settings:changed` |
 
 ### Shipped events (renderer subscribes via `listen()`)
 
 | Event | Payload | Emitted by | Drives |
 |-------|---------|------------|--------|
-| `download:progress` | `{ job_id?, downloaded_bytes, total_bytes?, percent?, speed_bps?, eta_sec? }` | `yt_download` (filesystem-poll task) | Single-URL progress bar + queue rows |
-| `transcode:progress` | `{ job_id?, processed_sec, total_sec?, percent?, speed_mult? }` | `media_transcode` (parses ffmpeg `-progress pipe:1`) | Transcode progress bar |
-| `library:changed` | `{}` | `library_insert`, `library_delete`, `library_set_thumbnail`, `tag_set_for_asset` | Library page auto-refresh (no polling) |
+| `download:progress` | `{ job_id?, downloaded_bytes, total_bytes?, percent?, speed_bps?, eta_sec? }` | `yt_download` (filesystem-poll task) | Single-URL bar + queue rows |
+| `transcode:progress` | `{ job_id?, processed_sec, total_sec?, percent?, speed_mult? }` | `media_transcode` (parses `-progress pipe:1`) | Transcode bar |
+| `library:changed` | `{}` | `library_insert/delete/set_thumbnail/...`, all project + tag commands | Library page auto-refresh, sibling lists, active-scope context refresh |
+| `settings:changed` | `{}` | `settings_set` | SettingsProvider refetches & re-broadcasts to subscribers (Download workers, etc.) |
 
 `job_id` is `null` for the single-URL flow and a job UUID for batch
-jobs — that's how the renderer routes events to the right UI.
+jobs — the renderer routes events to the right UI by that field.
 
-### Planned commands
+### Planned commands (post-0.8)
 
-- 🟡 `library_move_to_project(asset_id, project_id)` (0.6)
-- 🟡 `project_create / list / delete / finish` (0.6)
-- 🟡 `yt_resolve_stream_url(url, format_id)` for the scrubber's
-  direct-stream playback (0.6)
-- 🟡 `settings_get / settings_set` (0.8 packaging)
+- 🟡 `cookies_test` — runs a no-op `yt-dlp --simulate` to verify the
+  current cookies config works. Slated for 0.9.C (bug census polish)
+- 🟡 `asset_relocate(asset_id, target_root_id)` — multi-root move,
+  if/when multi-root library lands (0.9 or 1.2)
+- 🟡 Platform trait commands when 1.x platforms are added
 
 ---
 
@@ -242,48 +282,22 @@ Path: `~/Media Hub/library.db`. WAL mode + 5s busy_timeout +
 ### Schema (current)
 
 ```sql
--- 001_initial.sql
-CREATE TABLE IF NOT EXISTS assets (
-  id            TEXT PRIMARY KEY,           -- UUID v4
-  source_url    TEXT NOT NULL,
-  platform      TEXT NOT NULL,              -- 'youtube' | (later: 'twitter' etc.)
-  video_id      TEXT,
-  channel       TEXT,
-  title         TEXT NOT NULL,
-  duration_sec  REAL,
-  in_sec        REAL,                       -- NULL = full download
-  out_sec       REAL,
-  file_path     TEXT NOT NULL,              -- absolute path on disk
-  file_size     INTEGER,
-  container     TEXT,                       -- 'mp4' | 'webm' | 'mov' | ...
-  codec_video   TEXT,                       -- 'h264' | 'av01' | 'prores' | ...
-  codec_audio   TEXT,
-  width         INTEGER,
-  height        INTEGER,
-  fps           REAL,
-  transcoded_to TEXT,                       -- preset name, NULL if unconverted
-  thumbnail_url TEXT,                       -- remote (YT CDN) thumbnail
-  downloaded_at INTEGER NOT NULL            -- unix epoch
-);
-CREATE INDEX IF NOT EXISTS idx_assets_downloaded_at ON assets(downloaded_at DESC);
-CREATE INDEX IF NOT EXISTS idx_assets_platform_video_id ON assets(platform, video_id);
-CREATE INDEX IF NOT EXISTS idx_assets_platform_channel ON assets(platform, channel);
-
--- 002_tags.sql
-CREATE TABLE IF NOT EXISTS tags (
-  id   INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE COLLATE NOCASE
-);
-CREATE TABLE IF NOT EXISTS asset_tags (
-  asset_id TEXT    NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-  tag_id   INTEGER NOT NULL REFERENCES tags(id)   ON DELETE CASCADE,
-  PRIMARY KEY (asset_id, tag_id)
-);
-CREATE INDEX IF NOT EXISTS idx_asset_tags_tag ON asset_tags(tag_id);
-
--- 003_thumbnails.sql
-ALTER TABLE assets ADD COLUMN thumbnail_path TEXT;
+-- 001_initial.sql       assets table (id, source_url, video_id, channel,
+--                       title, duration_sec, in_sec, out_sec, file_path,
+--                       file_size, container, codec_video, codec_audio,
+--                       width, height, fps, transcoded_to, thumbnail_url,
+--                       downloaded_at) + 3 indexes
+-- 002_tags.sql          tags(id, name UNIQUE NOCASE) + asset_tags M2M w/
+--                       CASCADE on asset, CASCADE on tag
+-- 003_thumbnails.sql    ALTER TABLE assets ADD COLUMN thumbnail_path
+-- 004_projects.sql      projects(id, name, slug UNIQUE, created_at) +
+--                       ALTER TABLE assets ADD COLUMN project_id
+--                       REFERENCES projects(id) ON DELETE SET NULL
 ```
+
+`assets.project_id` is NULL when the asset belongs to the Library
+scope (the default). When set, it points at a `projects.id` and the
+file lives under `<content_root>/Projects/<slug>/raw/`.
 
 **Migration runner** (`library::init`) loads each file via
 `include_str!`, splits on `;` after stripping `--` comments, executes
@@ -338,23 +352,36 @@ identically in dev and packaged builds.
 
 ---
 
-## 8. UI shell (✅ shipped post-0.5)
+## 8. UI shell (✅ shipped + extended through 0.8.D)
 
 `react-router-dom` v7 with **HashRouter** (avoids `tauri://` vs
 `http://localhost` origin issues). Routes:
 
 ```
 /              → /library (redirect)
-/download      → DownloadPage   (MetadataCard + QueueCard)
-/library       → LibraryPage    (filter sidebar + grid + drawer)
-/projects      → ProjectsPage   (stub, 0.6)
-/settings      → SettingsPage   (stub, 0.8)
+/download      → DownloadPage   (MetadataCard + Scrubber + QueueCard)
+/library       → LibraryPage    (filter sidebar + grid + slide-over drawer)
+/projects      → ProjectsPage   (create / rename / delete / finish)
+/settings      → SettingsPage   (Sources / Library / Downloads /
+                                 Transcode / Diagnostics / About)
 *              → /library (catch-all)
 ```
 
 `Shell` component owns the persistent chrome (44px top bar + 216px
 left nav) and renders `<Outlet />` for the active route. Stays
 mounted across route changes so navigation is instant.
+
+**Top-of-tree providers** (App.tsx, outermost first):
+- `<SettingsProvider>` — loads settings.json on mount, exposes
+  `{ settings, ready, save }` via context. Uses `useRef` mirror to
+  avoid React's stale-closure trap when computing optimistic updates
+  (see NOTES.md 2026-05-21 settings race fix).
+- `<OnboardingGate />` — first-run modal (0.8.D). Renders nothing
+  when `settings.onboarding_complete` is true; otherwise overlays
+  the whole app with a 4-step wizard.
+- `<ActiveProjectProvider>` — exposes `{ scope, setScope }`. Persists
+  to `localStorage.mh.activeScope.v1`. Subscribes to
+  `library:changed` so the picker refreshes when projects mutate.
 
 **Design tokens:** lifted verbatim from `design-reference/Media Hub
 Wireframes.html` with the amber accent recolored to our lime
@@ -368,31 +395,38 @@ dependency.
 ```
 media-hub/
 ├── src/                              ← React frontend
-│   ├── App.tsx                       ← Router (HashRouter + 4 routes)
+│   ├── App.tsx                       ← SettingsProvider → OnboardingGate → ActiveProjectProvider → Router
 │   ├── main.tsx                      ← React.createRoot entry
 │   ├── App.css                       ← Design tokens + all component styles
 │   ├── shell/
 │   │   └── Shell.tsx                 ← TopBar + Nav + <Outlet />
 │   ├── pages/
-│   │   ├── Download.tsx              ← MetadataCard, QueueCard
+│   │   ├── Download.tsx              ← MetadataCard + Scrubber + QueueCard
 │   │   ├── Library.tsx               ← Grid + filter sidebar + drawer
-│   │   ├── Projects.tsx              ← Stub (0.6)
-│   │   └── Settings.tsx              ← Stub (0.8)
+│   │   ├── Projects.tsx              ← Real (0.6 — create / rename / delete / finish)
+│   │   └── Settings.tsx              ← 6 sections (Sources / Library / Downloads / Transcode / Diagnostics / About)
+│   ├── components/
+│   │   ├── Scrubber.tsx              ← HTML5 video + multi-segment marking + jog (0.6.D + 0.6.1)
+│   │   └── Onboarding.tsx            ← First-run modal (0.8.D) — 4 screens, configures inline
 │   └── lib/
-│       ├── types.ts                  ← Shared TS types (mirror Rust)
+│       ├── types.ts                  ← Shared TS types (mirror Rust serde)
 │       ├── format.ts                 ← fmtDuration, fmtBytes, parseTimestamp
 │       ├── library.ts                ← recordInLibrary, attachLocalThumbnail, thumbnailSrc
+│       ├── settings.tsx              ← SettingsProvider + useSettings hook
+│       ├── activeProject.tsx         ← ActiveProjectProvider + useActiveProject hook
 │       └── icons.tsx                 ← Inline SVG icon set
 ├── src-tauri/                        ← Rust backend
 │   ├── src/
-│   │   ├── lib.rs                    ← App bootstrap + sidecar/yt/transcode/thumb commands
-│   │   └── library.rs                ← SQLite layer + library/tag commands
+│   │   ├── lib.rs                    ← App bootstrap + sidecar/yt/transcode/thumb/stream commands
+│   │   ├── library.rs                ← SQLite layer + library/tag/project commands
+│   │   └── settings.rs               ← settings.json persistence + cookies/bandwidth/template/error-translator helpers
 │   ├── migrations/
-│   │   ├── 001_initial.sql           ← assets table
-│   │   ├── 002_tags.sql              ← tags + asset_tags
-│   │   └── 003_thumbnails.sql        ← thumbnail_path column
+│   │   ├── 001_initial.sql
+│   │   ├── 002_tags.sql
+│   │   ├── 003_thumbnails.sql
+│   │   └── 004_projects.sql
 │   ├── capabilities/
-│   │   └── default.json              ← shell:allow-execute (yt-dlp, ffmpeg), opener scopes
+│   │   └── default.json              ← shell:execute (yt-dlp, ffmpeg) + opener + dialog scopes
 │   ├── binaries/                     ← Bundled yt-dlp + ffmpeg (gitignored)
 │   ├── icons/
 │   ├── Cargo.toml
@@ -401,24 +435,25 @@ media-hub/
 │   ├── ROADMAP.md
 │   ├── ARCHITECTURE.md               ← this file
 │   ├── NOTES.md                      ← working notes + parking lot
-│   └── FEEDBACK.md                   ← collaboration notes (personal, timeless)
-├── design-reference/                 ← Handoff JSX (used as design spec, not run)
+│   └── FEEDBACK.md                   ← collaboration notes
+├── design-reference/                 ← Handoff JSX (design spec, not run)
 ├── scripts/
 │   └── fetch-sidecars.ps1            ← Grab latest yt-dlp / ffmpeg
-├── package.json
+├── package.json                      ← @tauri-apps/{api, plugin-opener, plugin-shell, plugin-dialog}
 └── tsconfig.json
 ```
 
 **What ISN'T in the layout** (deliberate, vs the dev0 plan):
-- ❌ No `src-tauri/src/commands/` per-domain split — two files
-  (`lib.rs`, `library.rs`) is small enough that splitting adds
-  ceremony without payoff. Re-evaluate at 1000+ LOC per file.
-- ❌ No `src-tauri/src/platform/` trait yet — YouTube-only until 0.7.
+- ❌ No `src-tauri/src/commands/` per-domain split — three files
+  (`lib.rs`, `library.rs`, `settings.rs`) is small enough that
+  splitting adds ceremony without payoff. Re-evaluate at 1500+ LOC
+  per file (lib.rs is approaching this; splitting commands by
+  domain is on the radar for 0.9 if it helps readability).
+- ❌ No `src-tauri/src/platform/` trait yet — YouTube-only until 1.x.
 - ❌ No `src-tauri/src/sidecar/` parser split — inline parsing in
   each command. Will refactor if a third sidecar joins.
-- ❌ No `src/hooks/` directory — no TanStack Query, just bare
-  `useState` + `useEffect`. Add it back if state caching ever
-  becomes painful.
+- ❌ No `src/hooks/` directory — bare `useState` + `useEffect` +
+  context providers. Add it back if state caching ever becomes painful.
 
 ---
 
@@ -434,16 +469,42 @@ errors in a `msg-row` element. No structured error type yet.
 concern. `tracing` crate planned at that point + ring buffer for a
 "download diagnostic bundle."
 
-### Settings
-🟡 No settings persistence yet. Hard-coded defaults in code:
-- Download workers: 3
-- Library DB path: `~/Media Hub/library.db`
-- Transcode hardware decode: `-hwaccel auto` always
-- Thumbnail dimensions: 480w / JPG q=4
-- Search debounce: 150ms
+### Settings (✅ 0.8.A → D)
 
-Settings panel + `settings.json` arrive with the 0.8 packaging
-milestone.
+Persisted to `settings.json` in the OS-standard app-config dir. Loaded
+once on Rust startup, exposed via Tauri's `State<SettingsState>`,
+mirrored on the frontend by `SettingsProvider` (React context).
+
+Shape:
+```rust
+pub struct Settings {
+    pub cookies_source: CookiesSource,         // None | Browser{name} | File{path}
+    pub library_root: Option<String>,          // override of ~/Media Hub
+    pub rename_template: String,               // {title}/{channel}/{date}/{id} tokens
+    pub download_concurrency: u32,             // 1..=6, default 3
+    pub bandwidth_limit_kbps: Option<u32>,     // yt-dlp --limit-rate
+    pub default_transcode_preset: String,      // pre-fills the per-download picker
+    pub onboarding_complete: bool,             // gates the first-run modal
+    pub last_formats: HashMap<String, String>, // sticky format per platform
+}
+```
+
+Save flow: optimistic React update + IPC to Rust → atomic disk write
+(tmp + rename) → emit `settings:changed`. The provider mirrors live
+state in a `useRef` so successive saves see fresh data (NOT the stale
+closure — see the 2026-05-21 race fix in NOTES.md).
+
+Helper functions in `settings.rs`:
+- `content_root(state, home)` — resolves library_root override or
+  default. Used by `yt_download`, `media_extract_thumbnail`,
+  `asset_set_project`, `project_finish`, `library_delete`.
+- `cookies_args(state)` — yt-dlp argv extras for cookie mode
+- `bandwidth_args(state)` — yt-dlp argv extras for --limit-rate
+- `rename_template(state)` + `build_filename_template(s)` — token →
+  yt-dlp `-o` template converter
+- `translate_ytdlp_error(raw)` — pattern-matches common yt-dlp
+  failures and returns friendly + actionable messages
+  (closed-browser cookie lock, age-gate, private, members-only, etc.)
 
 ### Concurrency model
 - Frontend: bare React; semaphores for transcode pools, useRef for
@@ -462,11 +523,13 @@ Deliberately deferred or never:
 - ❌ Plugin system — never in 1.x
 - ❌ Localization — English only for 1.0
 - ❌ Code signing — defer until distribution path warrants it
-- 🟡 Settings persistence — 0.8
-- 🟡 Dual-root Library/Projects — 0.6
-- 🟡 In-app scrubber preview — 0.6
-- 🟡 Platform abstraction (Twitter/X) — 0.7
+- 🟡 Packaging (.msi/.dmg, sidecar bundling) — folded into 1.0
+- 🟡 Performance audit + leak hunting — 0.9
+- 🟡 Multi-root library / per-project external root — 0.9 (TBD) or 1.2
+- 🟡 Platform abstraction (Twitter/X/TikTok) — post-1.0 (was 0.7)
 - 🟡 FTS5 search — defer until LIKE perf hurts
+- 🟡 Eagle-style overhaul (folders, color labels, ratings) — 1.2
+- 🟡 Drag-to-NLE — 1.1 (front-runner post-1.0)
 
 When in doubt, the per-module header comment is the contract; this
 doc just tells you which module to open.

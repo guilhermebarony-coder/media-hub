@@ -56,9 +56,22 @@ Decided 2026-05-19. Captured here because *why* matters more than *what*.
 
 ---
 
-## Current state — 2026-05-21 (post-lunch replan)
+## Current state — 2026-05-21 (end-of-day, post 0.8.D)
 
-Four days in. **0.1 → 0.6 complete end-to-end.** ~30 commits on `main`.
+Four days in. **0.1 → 0.8 complete end-to-end.** ~45 commits on `main`.
+
+**0.8 shipped A → D this session:**
+- ✅ 0.8.A — settings.json foundation + SettingsProvider + page scaffold
+- ✅ 0.8.B — cookies wiring + transcode-default + concurrency + diagnostics
+- ✅ 0.8.C — rename rules + bandwidth + sticky format + library root
+- ✅ 0.8.D — first-run onboarding modal + folder picker + cookies layout
+- ✅ Bug fix — settings save was sending stale state (React updater
+       runs later, not synchronously). Caught from user testing.
+- ✅ yt-dlp error translator — friendly + actionable messages for
+       closed-browser cookie lock, age-gate, private, members-only
+
+Packaging (was 0.8.E) deferred to 1.0 — 0.9 health checkup goes
+first so we package the polished version.
 
 **Path to 1.0 — replanned post 0.6:**
 

@@ -420,8 +420,9 @@ function MetadataCard() {
       </h2>
       <p className="hint">
         Paste a YouTube URL. Runs <code>yt-dlp -j</code>, then lets you pick a
-        format, optionally trim a segment (In/Out), optionally transcode to an
-        editing-friendly intermediate, and saves to <code>~/Media Hub/Downloads/_test/</code>.
+        format, scrub segments, and optionally transcode. Files land in the
+        active scope (Library or current project). Hold <span className="kbd">Ctrl</span>{" "}
+        to override to Library.
       </p>
 
       <form className="field" onSubmit={fetchMetadata}>

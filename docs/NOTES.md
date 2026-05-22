@@ -1644,15 +1644,33 @@ section above. When milestones converge, the corresponding ROADMAP
 section absorbs the item. New uncategorized ideas → add to **? open**
 and we'll triage next pass.
 
-### Target 0.8 (packaging + settings)
+### Target 0.8 — all shipped ✅
 
-- **Auto-rename rule presets** — a few common patterns shipped
-  (`{channel} - {title}`, `{date} - {title}`, etc.) alongside the
-  freeform token field
-- **Bandwidth throttle in settings** — single global limit applied
-  across the queue (yt-dlp's `--limit-rate` flag)
-- **Per-platform format-preset memory** — last format chosen for
-  YouTube stays sticky on next paste
+- ✅ Auto-rename rule presets (4 built-in + freeform) — 0.8.C
+- ✅ Bandwidth throttle via `--limit-rate` — 0.8.C
+- ✅ Per-platform sticky format memory — 0.8.C
+
+### Target 0.9 (health checkup)
+
+Promoted from "? open" — items worth touching during the 0.9 sweep:
+
+- **"Test cookies" button** in Settings → Sources — runs a
+  `yt-dlp --simulate` no-op against a known-public URL to confirm
+  the configured cookies actually work. Slots into 0.9.C bug
+  census. ~30 min of work.
+- **cookies.txt extension link** in Settings → Sources → "From
+  file" hint — small inline link to the "Get cookies.txt LOCALLY"
+  extension. 5-min copy change.
+- **Stale string sweep** — comb the UI for any references to old
+  paths / states / behaviors that drifted as features moved. (We
+  caught `Downloads/_test/` in Download.tsx tonight; there may
+  be more.)
+- **Empty-state polish** — does every list (library grid, queue,
+  projects, sibling list) have a friendly empty state? Some do,
+  some don't. Visual + copy pass.
+- **Loading-state polish** — same exercise for async actions.
+  Metadata fetch shows "Fetching…", but does the library
+  thumbnail backfill show ANY indicator? Probably not.
 
 ### Target 1.2 (workflow polish from real usage)
 
