@@ -65,9 +65,9 @@ Four days in. **0.1 → 0.6 complete end-to-end.** ~30 commits on `main`.
 | Order | Milestone | Why next |
 |-------|-----------|----------|
 | **1** | 0.6.1 multi-segment | Bandwidth-saving workflow we keep wanting. Small. ~1 session. |
-| **2** | 0.8 packaging + settings | Cookies fix for age-restricted YT. Installer crosses "give to a friend" line. ~2-3 sessions. |
+| **2** | 0.8 user-facing polish | Cookies, settings panel, rename rules, onboarding. ~A→D shipped. Packaging deferred. |
 | **3** | 0.9 health checkup | Perf audit, leak hunting, bug census, UX polish, a11y. No new features. ~3-5 sessions. |
-| **4** | 1.0 release | QA pass, README, tag. ~1-2 sessions. |
+| **4** | 1.0 release (incl. packaging) | .msi/.dmg installers, sidecar bundling, README, LICENSE, app icon, QA pass, tag. ~2-3 sessions. |
 | post-1.0 | 0.7 / 1.x platforms | Twitter / TikTok / etc. Owner: "nice but not priority." Better to design the trait against 2+ known platforms. |
 
 See decision log entry **2026-05-21 — Replan: 0.6.1 → 0.8 → 1.0, 0.7 post-1.0**.
@@ -185,13 +185,15 @@ dev0 ──┐
      0.6.1  ✅  multi-segment marking + library sibling indicator
        │
        ▼
-     0.8.0  🟡  packaging, polish, public-ready (cookies, installer, onboarding)
+     0.8.0  🟡  user-facing polish (cookies, settings, rename, onboarding)
+                  shipped A ✅ B ✅ C ✅ D ✅ — packaging deferred to 1.0
        │
        ▼
      0.9.0  🟡  health checkup (perf, leaks, bugs, UX polish, a11y)
        │
        ▼
-     1.0.0  🟡  release
+     1.0.0  🟡  release — includes packaging (.msi/.dmg), README,
+                  LICENSE, app icon. Was scoped as 0.8.E originally.
        │
        ▼  post-1.0
      1.x    🟡  platform abstraction + Twitter/X/TikTok (was 0.7)
@@ -732,6 +734,26 @@ Anything more speculative than this belongs in `docs/NOTES.md` under
 ## Decision log
 
 Newest first. Every entry: what we decided, when, and *why*.
+
+### 2026-05-21 — Packaging deferred from 0.8.E to 1.0 (do 0.9 first)
+
+- Decision: pull packaging (.msi/.dmg installers, sidecar bundling,
+  README, LICENSE, app icon — originally 0.8.E) out of 0.8 entirely
+  and fold it into **1.0**. New order: 0.8.A–D ✅ → 0.9 health
+  checkup → 1.0 (package + ship). 0.8.E as a phase is canceled.
+- Why: 0.9 will probably change code (perf rewrites, bug fixes,
+  UX polish). Packaging before 0.9 means we'd reshape the bundle,
+  surface install bugs against pre-0.9 code, and likely have to
+  re-package after 0.9 lands. 0.9.A (perf audit) literally
+  includes bundle-size analysis — better measured against the
+  un-bundled-yet build so we can tune freely.
+- The install-bug risk (sidecar paths, capabilities) that "package
+  early" would catch is small and config-shaped — fits naturally
+  into 0.9.C (bug census).
+- Conceptually cleaner: 0.9 is "make existing stuff better,"
+  packaging is "lock and ship." Pairing them with 1.0 means 1.0
+  is a single coherent release-prep effort instead of "package
+  the WIP, then polish, then package again."
 
 ### 2026-05-21 — 0.9 = health checkup milestone (no new features)
 
