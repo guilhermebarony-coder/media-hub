@@ -12,15 +12,15 @@ import {
 } from "../lib/types";
 
 /**
- * Settings page — 0.8 milestone.
+ * Settings page — 0.8 shipped, 0.9 polish in flight.
  *
  * Sections:
- *   - Sources     → YouTube cookies (B) ✅
- *   - Library     → root override + rename template (C, scaffolded)
- *   - Downloads   → concurrency (B) ✅ + bandwidth + sticky format (C)
- *   - Transcode   → default preset (B) ✅
- *   - Diagnostics → tool versions, paths (B) ✅
- *   - About       → version, licenses (B) ✅
+ *   - Sources     → YouTube cookies + Chrome DPAPI warning ✅
+ *   - Library     → root override + rename template + folder picker ✅
+ *   - Downloads   → concurrency + bandwidth + sticky format ✅
+ *   - Transcode   → default preset ✅
+ *   - Diagnostics → tool versions, paths ✅
+ *   - About       → version, licenses ✅
  */
 export default function SettingsPage() {
   const { ready } = useSettings();
@@ -29,7 +29,7 @@ export default function SettingsPage() {
     <div className="content">
       <div className="content-header">
         <div className="ch-title">Settings</div>
-        <span className="ch-meta">0.8 in progress</span>
+        <span className="ch-meta">0.8 shipped · 0.9 polish in flight</span>
         <div className="ch-spacer" />
         <span className="mono faint" style={{ fontSize: 11 }}>
           {ready ? "settings.json live" : "loading…"}
@@ -193,7 +193,7 @@ function SourcesSection() {
 }
 
 // =====================================================================
-// Library — scaffolding for 0.8.C
+// Library — root override + rename template (0.8.C shipped)
 // =====================================================================
 
 function LibrarySection() {
@@ -631,7 +631,7 @@ function AboutSection() {
       <dl className="settings-kv">
         <div>
           <dt>Version</dt>
-          <dd>0.8.0-dev</dd>
+          <dd>0.9.0-dev</dd>
         </div>
         <div>
           <dt>Identifier</dt>

@@ -259,6 +259,7 @@ pub async fn init(app: &AppHandle) -> Result<LibraryState, String> {
         include_str!("../migrations/003_thumbnails.sql"),
         include_str!("../migrations/004_projects.sql"),
         include_str!("../migrations/005_indexes.sql"),
+        include_str!("../migrations/006_drop_dead_indexes.sql"),
     ] {
         for stmt in split_sql_statements(schema) {
             if let Err(e) = sqlx::query(&stmt).execute(&pool).await {

@@ -1,0 +1,31 @@
+-- 006_drop_dead_indexes.sql — 0.9.D.5 cleanup.
+--
+-- Two composite indexes were created in 001_initial.sql with intent
+-- but never gained query consumers. Confirmed via grep across the
+-- entire Rust source:
+--
+--   idx_assets_platform_video_id  ON assets(platform, video_id)
+--     Was planned for duplicate detection via (platform, video_id)
+--     equality. We ended up using `source_url` exclusively for that
+--     check (see library_find_by_url), so the composite index is
+--     never seekable.
+--
+--   idx_assets_platform_channel ON assets(platform, channel)
+--     Was planned for channel-filtered listings. The library_list
+--     search query uses LIKE %channel% which can't use an index
+--     regardless; no other query filters by channel.
+--
+-- Dropping them now:
+--   • Saves a small amount of INSERT throughput (every INSERT had
+--     to update both indexes).
+--   • Saves a small amount of disk space.
+--   • Reduces SQLite's planner search space (fewer indexes to
+--     consider during EXPLAIN — marginal).
+--
+-- If a future feature needs either back, the cost is one new
+-- migration file. Easy to recreate.
+--
+-- DROP INDEX IF EXISTS is idempotent — safe to re-run.
+
+DROP INDEX IF EXISTS idx_assets_platform_video_id;
+DROP INDEX IF EXISTS idx_assets_platform_channel;

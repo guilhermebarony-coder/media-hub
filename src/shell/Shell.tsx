@@ -8,8 +8,9 @@ import { useActiveProject } from "../lib/activeProject";
  * settings icon, left nav, route outlet on the right. Stays mounted
  * across route changes so route transitions are instant.
  *
- * The active-project picker and global search are placeholder UI for
- * now — wired up when 0.6 (real projects) and the cmd-K palette land.
+ * The active-project picker is fully wired (0.6 Phase A).
+ * Global search (Ctrl-K) is still placeholder UI — wired up when
+ * the command palette lands (parked for 1.2).
  */
 export function Shell() {
   return (
@@ -29,7 +30,7 @@ function TopBar() {
       <div className="brand">
         <div className="brand-mark" />
         <div className="brand-name">media·hub</div>
-        <div className="brand-build">0.5.0</div>
+        <div className="brand-build">0.9.0-dev</div>
       </div>
       <ActiveProject />
       <div className="topbar-spacer" />
