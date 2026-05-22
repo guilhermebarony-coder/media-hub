@@ -239,7 +239,7 @@ async fn yt_fetch_metadata(
             .last()
             .unwrap_or("(no stderr)")
             .to_string();
-        return Err(format!("yt-dlp failed: {tail}"));
+        return Err(settings::translate_ytdlp_error(&tail));
     }
 
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -681,7 +681,7 @@ async fn yt_download(
             .last()
             .cloned()
             .unwrap_or_else(|| "(no stderr)".into());
-        return Err(format!("yt-dlp failed: {tail}"));
+        return Err(settings::translate_ytdlp_error(&tail));
     }
 
     let full_path = final_path.ok_or_else(|| "yt-dlp returned no output path".to_string())?;
@@ -1260,7 +1260,7 @@ async fn yt_resolve_stream_url(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let tail = stderr.lines().last().unwrap_or("(no stderr)").trim();
-        return Err(format!("yt-dlp -g: {tail}"));
+        return Err(settings::translate_ytdlp_error(tail));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);

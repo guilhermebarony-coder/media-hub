@@ -178,6 +178,114 @@ pub fn rename_template(state: &SettingsState) -> String {
         .unwrap_or_default()
 }
 
+/// Translate a raw yt-dlp stderr line into a friendly, actionable
+/// message when we recognize it. Returns the original string
+/// unchanged when nothing matches — silently passing through is
+/// safer than guessing wrong.
+///
+/// We match on case-insensitive substrings rather than exact strings
+/// because yt-dlp formats vary across versions and the same root
+/// cause shows up in slightly different sentences.
+///
+/// Common pain points covered:
+///   - Chromium-family browser cookie DB locked (browser open) →
+///     the headline 0.8 friction we've been documenting
+///   - Browser not found (user picked a browser they don't have)
+///   - Age-restricted / private / members-only content reachable
+///     only with cookies the user hasn't configured
+///   - Cookies file missing / malformed
+///   - Network-shaped failures we can't help with but can name
+///
+/// Each branch ends with the specific user action that fixes it,
+/// not just a diagnosis. Don't tell the user something's broken
+/// without telling them what to click.
+pub fn translate_ytdlp_error(raw: &str) -> String {
+    let lower = raw.to_ascii_lowercase();
+
+    // Chromium-family cookie DB lock — the big one.
+    if lower.contains("could not copy") && lower.contains("cookie") {
+        return format!(
+            "Couldn't read browser cookies — the browser is open and locking its cookie database. \
+             Close Chrome / Brave / Edge / Vivaldi / Opera and retry, or switch to Firefox \
+             (works while open) in Settings → Sources. Raw: {raw}"
+        );
+    }
+
+    // Browser not installed / wrong path.
+    if (lower.contains("could not find") || lower.contains("not found"))
+        && (lower.contains("chrome")
+            || lower.contains("firefox")
+            || lower.contains("brave")
+            || lower.contains("edge")
+            || lower.contains("opera")
+            || lower.contains("safari")
+            || lower.contains("vivaldi")
+            || lower.contains("chromium"))
+    {
+        return format!(
+            "Browser not found on this machine. Pick a different browser in Settings → Sources, \
+             or switch to a cookies.txt file. Raw: {raw}"
+        );
+    }
+
+    // Age-gate without cookies.
+    if lower.contains("sign in to confirm your age") || lower.contains("age-restricted") {
+        return format!(
+            "Age-restricted video — needs YouTube login. Configure cookies in Settings → Sources \
+             (browser or cookies.txt file). Raw: {raw}"
+        );
+    }
+
+    // Private video.
+    if lower.contains("private video") || lower.contains("video is private") {
+        return format!(
+            "Private video — only accounts with access can fetch it. Configure cookies for that \
+             account in Settings → Sources. Raw: {raw}"
+        );
+    }
+
+    // Members-only content.
+    if lower.contains("members-only")
+        || lower.contains("join this channel")
+        || lower.contains("members only")
+    {
+        return format!(
+            "Members-only content — needs cookies for an account that's a channel member. \
+             Configure in Settings → Sources. Raw: {raw}"
+        );
+    }
+
+    // Generic "needs cookies" hint yt-dlp gives.
+    if lower.contains("use --cookies") || lower.contains("--cookies-from-browser") {
+        return format!(
+            "This video needs cookies to access. Configure browser or cookies.txt in \
+             Settings → Sources. Raw: {raw}"
+        );
+    }
+
+    // cookies.txt file missing or malformed (when user picked file mode).
+    if lower.contains("cookies file") && (lower.contains("not found") || lower.contains("invalid"))
+    {
+        return format!(
+            "cookies.txt file missing or unreadable. Re-export it from your browser via the \
+             'Get cookies.txt LOCALLY' extension and update the path in Settings → Sources. \
+             Raw: {raw}"
+        );
+    }
+
+    // Network failures — can't fix it but at least name it.
+    if lower.contains("unable to download")
+        && (lower.contains("connection") || lower.contains("timed out") || lower.contains("network"))
+    {
+        return format!(
+            "Network problem — check your connection and try again. Raw: {raw}"
+        );
+    }
+
+    // Unknown — pass through.
+    raw.to_string()
+}
+
 // =====================================================================
 // State + IO
 // =====================================================================
