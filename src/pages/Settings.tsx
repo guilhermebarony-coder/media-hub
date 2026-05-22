@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { Icon } from "../lib/icons";
 import { useSettings } from "../lib/settings";
 import {
   RENAME_PRESETS,
@@ -204,9 +206,26 @@ function LibrarySection() {
           onChange={(e) => setRoot(e.target.value)}
           spellCheck={false}
         />
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={async () => {
+            try {
+              const picked = await openDialog({
+                directory: true,
+                multiple: false,
+                title: "Choose your library folder",
+              });
+              if (typeof picked === "string") setRoot(picked);
+            } catch (e) {
+              console.warn("folder picker failed:", e);
+            }
+          }}
+        >
+          <Icon.folder width={12} height={12} /> Browse…
+        </button>
         <span className="hint-text faint">
-          Empty = default. Use an absolute path (e.g.{" "}
-          <code>D:\Footage\MediaHub</code>).
+          Empty = default. Existing files don't move.
         </span>
       </div>
 

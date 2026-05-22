@@ -2026,52 +2026,48 @@ textarea.field-input {
 .onb-steps {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   flex: 1;
   justify-content: center;
-  overflow: hidden;
-}
-
-.onb-step {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 11px;
-  color: var(--text-3);
-  white-space: nowrap;
+  min-width: 0;
 }
 
 .onb-step-dot {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: 0 0 auto;
   width: 18px;
   height: 18px;
   border-radius: 50%;
   background: var(--bg-3);
-  color: var(--text-2);
+  color: var(--text-3);
   font-size: 10px;
   font-weight: 600;
   font-family: var(--mono);
+  border: 1px solid var(--line);
 }
 
-.onb-step.active {
-  color: var(--text-0);
-  background: var(--bg-3);
-}
-.onb-step.active .onb-step-dot {
+.onb-step-dot.active {
   background: var(--accent);
   color: var(--bg-0);
+  border-color: var(--accent);
 }
 
-.onb-step.done {
-  color: var(--text-2);
-}
-.onb-step.done .onb-step-dot {
+.onb-step-dot.done {
   background: color-mix(in srgb, var(--accent) 28%, transparent);
   color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+
+.onb-step-current {
+  font-size: 11.5px;
+  color: var(--text-1);
+  margin-left: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .onb-skip {
@@ -2166,6 +2162,65 @@ textarea.field-input {
 .onb-callout-pro { background: var(--bg-2); border-color: var(--line-hi); }
 .onb-callout-pro > svg { flex: 0 0 auto; margin-top: 2px; color: var(--accent); }
 .onb-callout-pro code { font-size: 11px; }
+
+/* Cookie-compat list inside the cookies-screen callout. Restructured
+   as a tag + label per row so the closed/open distinction reads at
+   a glance instead of being a paragraph blob. */
+.onb-cookie-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.onb-cookie-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-1);
+}
+.onb-cookie-why {
+  font-size: 11px;
+  color: var(--text-3);
+  width: 100%;
+  margin-left: 80px;
+}
+.onb-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-family: var(--mono);
+  flex: 0 0 auto;
+  width: 110px;
+  justify-content: center;
+}
+.onb-tag-warn {
+  background: color-mix(in srgb, #e0a93a 18%, transparent);
+  border: 1px solid color-mix(in srgb, #e0a93a 50%, transparent);
+  color: #e0a93a;
+}
+.onb-tag-ok {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+}
+.onb-cookie-tip {
+  padding-top: 10px;
+  margin-top: 6px;
+  border-top: 1px dashed var(--line);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-1);
+}
 
 .onb-radio-group {
   display: flex;

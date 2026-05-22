@@ -24,6 +24,7 @@
  */
 
 import { useState } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Icon } from "../lib/icons";
 import { useSettings } from "../lib/settings";
 import {
@@ -117,19 +118,25 @@ function OnboardingModal() {
       <div className="onb-card">
         <header className="onb-head">
           <div className="onb-brand">
-            <span className="brand-square" aria-hidden />
-            <span>Media Hub</span>
+            <span className="brand-mark" aria-hidden />
+            <span className="brand-name">Media Hub</span>
           </div>
+          {/* Compact stepper: 4 numbered dots + the active step's
+              label only. Showing all four labels overflowed the
+              header on standard window widths and clipped both ends. */}
           <div className="onb-steps">
             {STEP_TITLES.map((t, i) => (
-              <div
+              <span
                 key={t}
-                className={"onb-step" + (i === step ? " active" : i < step ? " done" : "")}
+                className={"onb-step-dot" + (i === step ? " active" : i < step ? " done" : "")}
+                title={`${i + 1}. ${t}`}
               >
-                <span className="onb-step-dot">{i + 1}</span>
-                <span className="onb-step-label">{t}</span>
-              </div>
+                {i + 1}
+              </span>
             ))}
+            <span className="onb-step-current">
+              Step {step + 1} of 4 · {STEP_TITLES[step]}
+            </span>
           </div>
           <button
             className="onb-skip"
@@ -237,18 +244,38 @@ function ScreenConfigure(props: {
 
       <div className="onb-field">
         <label className="onb-label">Library root</label>
-        <input
-          type="text"
-          className="field-input"
-          placeholder="(default) ~/Media Hub"
-          value={libraryRoot}
-          onChange={(e) => setLibraryRoot(e.target.value)}
-          spellCheck={false}
-        />
+        <div style={{ display: "flex", gap: 6 }}>
+          <input
+            type="text"
+            className="field-input"
+            placeholder="(default) ~/Media Hub"
+            value={libraryRoot}
+            onChange={(e) => setLibraryRoot(e.target.value)}
+            spellCheck={false}
+            style={{ flex: 1 }}
+          />
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={async () => {
+              try {
+                const picked = await openDialog({
+                  directory: true,
+                  multiple: false,
+                  title: "Choose your library folder",
+                });
+                if (typeof picked === "string") setLibraryRoot(picked);
+              } catch (e) {
+                console.warn("folder picker failed:", e);
+              }
+            }}
+          >
+            <Icon.folder width={12} height={12} /> Browse…
+          </button>
+        </div>
         <p className="onb-hint">
           Where downloaded clips live on disk. Leave empty for the
-          default (<code>~/Media Hub</code>). Use an absolute path to
-          send them elsewhere (e.g. <code>D:\Footage\MediaHub</code>).
+          default (<code>~/Media Hub</code>).
         </p>
       </div>
 
@@ -297,11 +324,28 @@ function ScreenCookies(props: {
       </p>
 
       <div className="onb-callout">
-        <strong>Heads up:</strong> Chrome / Brave / Edge / Vivaldi /
-        Opera must be <em>closed</em> while yt-dlp reads their cookies
-        (Chromium locks its cookie database). <strong>Firefox</strong>{" "}
-        and <strong>Safari</strong> are friendlier — they work while
-        open.
+        <strong>Heads up — browser cookie compatibility:</strong>
+        <ul className="onb-cookie-list">
+          <li>
+            <span className="onb-tag onb-tag-warn">Must be closed</span>
+            Chrome · Brave · Edge · Vivaldi · Opera · Chromium
+            <span className="onb-cookie-why">
+              (the Chromium cookie database is file-locked while the
+              browser runs)
+            </span>
+          </li>
+          <li>
+            <span className="onb-tag onb-tag-ok">Works while open</span>
+            Firefox · Safari (macOS)
+          </li>
+        </ul>
+        <div className="onb-cookie-tip">
+          <strong>Tip:</strong> if your main browser is on the
+          "must be closed" list, sign in to YouTube in a second
+          browser (e.g. Firefox) and point Media Hub at that one.
+          You won't have to close your primary browser every time
+          you download.
+        </div>
       </div>
 
       <div className="onb-radio-group">
