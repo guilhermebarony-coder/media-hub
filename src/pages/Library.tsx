@@ -5,6 +5,7 @@ import { useTauriEvent } from "../lib/useTauriEvent";
 import { Icon } from "../lib/icons";
 import { fmtBytes, fmtDuration } from "../lib/format";
 import { attachLocalThumbnail, openFileInDefaultApp, revealFile, thumbnailSrc } from "../lib/library";
+import { alertDialog, confirmDialog } from "../lib/dialog";
 import { scopeToFilter, useActiveProject } from "../lib/activeProject";
 import type { Asset, LibraryFilters, SiblingSummary, TagCount } from "../lib/types";
 
@@ -495,36 +496,46 @@ function CardContextMenu({
    * safe path. The menu closes naturally after the user dismisses
    * the confirm (whether they accept or cancel).
    */
+  /**
+   * Destructive actions go through Tauri's plugin-dialog (native OS
+   * dialogs) instead of window.confirm — the browser dialog is
+   * silently suppressed in WebView2 contexts. Real-user testing
+   * 2026-05-22 PM confirmed the old window.confirm path was deleting
+   * files with NO prompt. See lib/dialog.ts for the wrapper.
+   */
   async function forget() {
-    const ok = confirm(
+    const ok = await confirmDialog(
       `Forget "${asset.title}" from the library?\n\nThe file on disk is NOT deleted (you'll find it at:\n${asset.file_path}).`,
+      { title: "Forget asset?", kind: "warning" },
     );
     onClose();
     if (!ok) return;
     try {
       await invoke("library_delete", { id: asset.id, deleteFile: false });
     } catch (e) {
-      alert(`Forget failed: ${String(e)}`);
+      await alertDialog(`Forget failed: ${String(e)}`, { title: "Forget failed" });
     }
   }
 
   async function deleteFromDisk() {
-    const first = confirm(
-      `⚠ Delete "${asset.title}" PERMANENTLY?\n\nFile to delete:\n${asset.file_path}\n\nThis removes:\n  • the file from disk\n  • the row from the library\n  • the thumbnail\n\nClick OK to continue, Cancel to back out.`,
+    const first = await confirmDialog(
+      `Delete "${asset.title}" PERMANENTLY?\n\nFile to delete:\n${asset.file_path}\n\nThis removes:\n  • the file from disk\n  • the row from the library\n  • the thumbnail`,
+      { title: "Delete file?", kind: "error" },
     );
     if (!first) {
       onClose();
       return;
     }
-    const second = confirm(
+    const second = await confirmDialog(
       "Last chance — this cannot be undone from inside Media Hub.\n\nReally delete the file?",
+      { title: "Confirm permanent delete", kind: "error" },
     );
     onClose();
     if (!second) return;
     try {
       await invoke("library_delete", { id: asset.id, deleteFile: true });
     } catch (e) {
-      alert(`Delete failed: ${String(e)}`);
+      await alertDialog(`Delete failed: ${String(e)}`, { title: "Delete failed" });
     }
   }
 
@@ -872,42 +883,43 @@ function AssetDrawer({
     try {
       await invoke("asset_set_project", { assetId: asset.id, projectId });
     } catch (e) {
-      alert(`Move failed: ${String(e)}`);
+      await alertDialog(`Move failed: ${String(e)}`, { title: "Move failed" });
     }
   }
 
   async function forget() {
-    if (
-      !confirm(
-        `Forget "${asset.title}" from the library?\n\nThe file on disk is NOT deleted (you'll find it at:\n${asset.file_path}).`,
-      )
-    )
-      return;
+    const ok = await confirmDialog(
+      `Forget "${asset.title}" from the library?\n\nThe file on disk is NOT deleted (you'll find it at:\n${asset.file_path}).`,
+      { title: "Forget asset?", kind: "warning" },
+    );
+    if (!ok) return;
     try {
       await invoke("library_delete", { id: asset.id, deleteFile: false });
       onClose();
     } catch (e) {
-      alert(`Forget failed: ${String(e)}`);
+      await alertDialog(`Forget failed: ${String(e)}`, { title: "Forget failed" });
     }
   }
 
   async function deleteFromDisk() {
-    // Two-stage confirm because this is destructive. First confirm
-    // sets the user up to read the actual path; second is the
-    // commit. The thumbnail JPG is also removed inside the Rust
-    // command — no need to mention it here.
-    if (
-      !confirm(
-        `Delete "${asset.title}" from disk?\n\nThis removes the FILE at:\n${asset.file_path}\n\nThe row will be removed from the library too. Files moved to OS trash are unrecoverable from inside the app.`,
-      )
-    )
-      return;
-    if (!confirm("This cannot be undone from inside Media Hub. Proceed?")) return;
+    // Two-stage Tauri-dialog confirm because this is destructive.
+    // Native browser confirm() is suppressed in WebView2 so we'd
+    // silently delete the file — fixed 2026-05-22 PM.
+    const first = await confirmDialog(
+      `Delete "${asset.title}" PERMANENTLY?\n\nFile to delete:\n${asset.file_path}\n\nThis removes the file from disk, the row from the library, and the thumbnail.`,
+      { title: "Delete file?", kind: "error" },
+    );
+    if (!first) return;
+    const second = await confirmDialog(
+      "Last chance — this cannot be undone from inside Media Hub. Really delete?",
+      { title: "Confirm permanent delete", kind: "error" },
+    );
+    if (!second) return;
     try {
       await invoke("library_delete", { id: asset.id, deleteFile: true });
       onClose();
     } catch (e) {
-      alert(`Delete failed: ${String(e)}`);
+      await alertDialog(`Delete failed: ${String(e)}`, { title: "Delete failed" });
     }
   }
 

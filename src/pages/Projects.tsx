@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTauriEvent } from "../lib/useTauriEvent";
+import { confirmDialog } from "../lib/dialog";
 import { Icon } from "../lib/icons";
 import { useActiveProject } from "../lib/activeProject";
 import type { Project } from "../lib/types";
@@ -89,7 +90,7 @@ export default function ProjectsPage() {
       p.asset_count > 0
         ? `Delete project "${p.name}"?\n\n${p.asset_count} ${p.asset_count === 1 ? "clip" : "clips"} will be moved back to the Library. Files on disk are not deleted.`
         : `Delete project "${p.name}"?`;
-    if (!confirm(msg)) return;
+    if (!(await confirmDialog(msg, { title: "Delete project?", kind: "warning" }))) return;
     try {
       await invoke("project_delete", { id: p.id });
       // If the deleted project was active, fall back to Library.
@@ -127,7 +128,7 @@ export default function ProjectsPage() {
       : `Finish project "${p.name}"?\n\nThe project folder will be moved to Recycle Bin.`;
 
     if (!hasAssets) {
-      if (!confirm(intro)) return;
+      if (!(await confirmDialog(intro, { title: "Finish project?", kind: "warning" }))) return;
       try {
         await invoke("project_finish", { id: p.id, promote: false });
         if (scope.kind === "project" && scope.id === p.id) {
@@ -141,15 +142,19 @@ export default function ProjectsPage() {
 
     // Three-way choice: promote / trash-with-folder / cancel. Native
     // confirm can only do yes/no, so we do two stages.
-    const promote = confirm(intro);
+    const promote = await confirmDialog(intro, {
+      title: "Finish project — promote clips?",
+      kind: "warning",
+    });
     if (!promote) {
       // User picked Cancel from the promote prompt — offer the
       // destructive path explicitly.
-      const trashAll = confirm(
+      const trashAll = await confirmDialog(
         `Trash everything in "${p.name}"?\n\n` +
           `${p.asset_count} ${p.asset_count === 1 ? "clip" : "clips"} AND the project folder will be moved to Recycle Bin.\n\n` +
           `Recoverable from the OS Recycle Bin, but not from inside Media Hub. ` +
           `Choose "Cancel" to back out entirely.`,
+        { title: "Trash everything?", kind: "error" },
       );
       if (!trashAll) return;
       try {

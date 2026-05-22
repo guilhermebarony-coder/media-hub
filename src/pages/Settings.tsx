@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Icon } from "../lib/icons";
+import { confirmDialog } from "../lib/dialog";
 import { useSettings } from "../lib/settings";
 import {
   RENAME_PRESETS,
@@ -505,48 +506,40 @@ function DownloadsSection() {
 
       <div className="settings-row">
         <span className="settings-label">Scrubber jog</span>
-        {/* Plain buttons instead of label+input radios. The original
-         *  radio variant triggered a layout glitch on click (TopBar
-         *  and Nav Workspace section disappeared — see NOTES.md
-         *  2026-05-22 PM). Buttons sidestep whatever browser-quirk
-         *  the label+input triggered. UX is identical. */}
-        <div className="settings-radio-group" role="radiogroup">
-          {(
-            [
-              { value: 0.5, label: "Coarse · 0.5×" },
-              { value: 1.0, label: "Default · 1×" },
-              { value: 2.0, label: "Fine · 2×" },
-            ] as const
-          ).map((opt) => {
-            const active = Math.abs(settings.jog_sensitivity - opt.value) < 0.01;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                className={"settings-radio" + (active ? " active" : "")}
-                onClick={(e) => {
-                  e.preventDefault();
-                  // Debug log — if a future layout glitch returns
-                  // we can confirm the click actually fired and
-                  // the save promise resolved cleanly.
-                  console.debug("[settings] jog_sensitivity →", opt.value);
-                  save((s) => ({ ...s, jog_sensitivity: opt.value }))
-                    .catch((err) =>
-                      console.warn("[settings] jog save failed:", err),
-                    );
-                }}
-              >
-                {opt.label}
-              </button>
+        {/* Continuous slider (0.9.D, requested 2026-05-22 PM).
+         *  Range 0.25× → 2.5× in 0.25 steps. The user can pick
+         *  any granularity they like instead of 3 fixed presets. */}
+        <input
+          type="range"
+          min={0.25}
+          max={2.5}
+          step={0.25}
+          value={settings.jog_sensitivity}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            console.debug("[settings] jog_sensitivity →", v);
+            save((s) => ({ ...s, jog_sensitivity: v })).catch((err) =>
+              console.warn("[settings] jog save failed:", err),
             );
-          })}
-        </div>
+          }}
+          style={{ flex: 1 }}
+        />
+        <span
+          className="mono"
+          style={{
+            flex: "0 0 auto",
+            minWidth: 48,
+            textAlign: "center",
+            color: "var(--accent)",
+            fontSize: 12,
+          }}
+        >
+          {settings.jog_sensitivity.toFixed(2)}×
+        </span>
         <span className="hint-text faint">
           Mouse-drag sensitivity on the scrubber's fine-jog disc.
           Higher = less drag needed per second of timeline.
-          Frame-step keys (←/→) ignore this.
+          Frame-step keys (←/→) ignore this. Default 1.00×.
         </span>
       </div>
     </section>
@@ -761,8 +754,12 @@ function ResetButton({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       className="settings-reset"
-      onClick={() => {
-        if (confirm("Reset this section to defaults?")) onClick();
+      onClick={async () => {
+        const ok = await confirmDialog("Reset this section to defaults?", {
+          title: "Reset section?",
+          kind: "warning",
+        });
+        if (ok) onClick();
       }}
       title="Reset this section to defaults"
     >
