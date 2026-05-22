@@ -1,5 +1,11 @@
 # Media Hub — 0.9 Health Checkup Plan
 
+> **STATUS: 0.9.0 TAGGED — 2026-05-22 PM.**
+> What shipped landed. Remaining owner-active audit slices
+> (A.4 render, A.6 scale, B.1 soak, C.6 root migration, D.1/D.2/D.6,
+> E.1/E.3) carried forward into `1_0_PLAN.md`. This doc is the
+> historical record of what 0.9 did. Don't add new work here.
+
 Written 2026-05-22, updated as slices land. The full A→E breakdown
 of what 0.9 covers, what needs owner involvement vs what can be
 done solo, expected effort per slice, and success criteria.

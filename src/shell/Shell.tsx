@@ -83,7 +83,7 @@ function TopBar() {
       <div className="brand">
         <div className="brand-mark" />
         <div className="brand-name">media·hub</div>
-        <div className="brand-build">0.9.0-dev</div>
+        <div className="brand-build">0.9.0</div>
       </div>
       <ActiveProject />
       <div className="topbar-spacer" />

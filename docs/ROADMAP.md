@@ -748,6 +748,26 @@ Anything more speculative than this belongs in `docs/NOTES.md` under
 
 Newest first. Every entry: what we decided, when, and *why*.
 
+### 2026-05-22 — 0.9.0 tagged, 1.0 plan opened
+
+- Decision: cut **0.9.0 tag** with everything that shipped in the
+  health-checkup pass (A.1/A.2/A.3/A.5 perf, B.2 + B.3/4/5 leak
+  audit, C.7 strings, D.5/D.7 polish, UX wins #1-10, dialog fix,
+  scrubber sensitivity slider). Remaining owner-active audit
+  slices (A.4 render audit, A.6 scale test, B.1 soak, C.6 root
+  migration, D.1/D.2/D.6 verify, E.1/E.3) carried into
+  **1.0 Phase A** instead of blocking the tag.
+- Why: 0.9.0 already represents a real quality jump over 0.8.D —
+  delete confirms work, dialogs are native, code-split startup,
+  bundle indexes correct, listener leaks closed, UX paper-cuts
+  fixed. Holding the tag waiting for an overnight soak test
+  doesn't add value; the soak can land as 1.0-prep work whenever
+  the owner's got an empty evening.
+- New shape: 0.9.0 (today) → **1.0 Phase P** (packaging — slim
+  ffmpeg, NSIS installer, icon, LICENSE) → **1.0 Phase A** (audit
+  carryover, parallel-safe) → **1.0 Phase R** (release smoke).
+  See `docs/1_0_PLAN.md`.
+
 ### 2026-05-21 — Packaging deferred from 0.8.E to 1.0 (do 0.9 first)
 
 - Decision: pull packaging (.msi/.dmg installers, sidecar bundling,

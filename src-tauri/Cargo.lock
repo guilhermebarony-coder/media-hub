@@ -2172,7 +2172,7 @@ dependencies = [
 
 [[package]]
 name = "media-hub"
-version = "0.9.0-dev"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "serde",
