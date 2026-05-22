@@ -22,6 +22,49 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-05-22 (parked, owner to test) — Cookies story: where we landed after morning testing
+
+Real-user testing this morning confirmed:
+
+**Chrome family is broken upstream.** Chrome 127+ (Aug 2024) moved
+cookies to "App-Bound Encryption." yt-dlp can't decrypt cookies
+from any Chromium browser anymore (Chrome / Brave / Edge / Vivaldi
+/ Opera). Tracked at yt-dlp/yt-dlp#10927. Symptom: `Failed to
+decrypt with DPAPI` error. We added a translation that names this
+exactly + the Settings → Sources page now shows an amber warning
+callout when a Chromium browser is picked. We can't fix the root
+cause — it's a deliberate Google security change.
+
+**cookies.txt mode tested but still hit age-gate.** Owner exported
+via "Get cookies.txt LOCALLY" while signed in (multiple accounts
+visible in the export). cookies WERE applied (yt-dlp didn't fail
+on the file load — it failed on YouTube's response). Two
+hypotheses, owner to test:
+
+1. **Google account isn't age-verified at the account level.**
+   YouTube's age-gate often needs more than session cookies —
+   most regions require ID verification before treating an account
+   as confirmed-adult. Being signed in ≠ being age-verified.
+   Sanity check: try a PUBLIC video with the same cookies.txt;
+   if that works, problem is account-level verification.
+2. **cookies.txt missing tokens.** Re-export while ON the actual
+   age-restricted video page (not just youtube.com root) — some
+   auth tokens are scoped tighter than expected.
+
+**Recommended workaround going forward:** Firefox-by-default in
+docs + onboarding wording. It's the only browser whose cookies
+yt-dlp can still read. Update 0.8.D onboarding cookies screen at
+some point in 0.9.D to surface Firefox as the recommended option
+(not just "one option among several"). Tracked here.
+
+**One more polish item if Firefox doesn't pan out for owner:**
+- A "Diagnose cookies" Settings button that runs `yt-dlp -j`
+  against a known public + a known age-restricted reference URL
+  and reports both results. Would isolate "cookies aren't loading"
+  from "account isn't verified." ~1hr. Slots into 0.9.C.
+
+---
+
 ## 2026-05-21 (parked, target 0.9 / 1.2) — Multi-root library (Steam-style)
 
 **Owner note (2026-05-21):** "Want some of the footage to be on C:/
