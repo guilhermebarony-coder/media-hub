@@ -379,21 +379,14 @@ and updates a specific file.
 3. Next morning, snapshot again
 4. If RAM is within ±10% of starting → clean. If grew >50% → leak hunt time.
 
-### B.2 follow-up — GPU process baseline check 🟡 partial (2026-05-22)
-**Result so far:** 130 MB during scrubber → 67 MB after navigating away.
-Big spike released cleanly (~63 MB freed). But ~30 MB stuck above the
-fresh-launch baseline of ~35 MB — need to determine if that's a
-one-time GPU decode pool allocation (normal) or a per-session leak.
-
-**Next ~2 min test to disambiguate:**
-1. Note current GPU process memory in Task Manager
-2. Open Download page, paste a URL, wait for scrubber to mount (~1 sec)
-3. Navigate to Library (scrubber unmounts)
-4. Check GPU memory
-5. Repeat steps 2-4 **two more times**
-6. Compare cycle 1 vs cycle 3 final GPU memory:
-   - Stable at ~67 MB → one-time allocation, normal, **stop worrying**
-   - Climbs ~90 / ~120 / ~150 MB → real leak, **hunt it**
+### B.2 follow-up — GPU process baseline check ✅ done (2026-05-22)
+- Fresh launch baseline: 35.2 MB
+- During scrubber active: 110.5 MB
+- After multiple scrubber → nav-away cycles: **59.9 MB** (lower than
+  single-cycle 67 MB — clear evidence of release, not accumulation)
+- Conclusion: persistent ~25 MB is a one-time GPU decode pool
+  allocation by WebView2 + Windows DXVA. Not our memory to free.
+- **B.2 closed: no leak.**
 
 ### B.3 — Drawer stress test (~3 min)
 **Where:** mental note + tell me what happened

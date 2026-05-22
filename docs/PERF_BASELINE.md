@@ -210,22 +210,20 @@ under "Utilitário (6/7)" in Task Manager.
 ✅ **Library at 11 assets adds ~2 MB total.** Tracks with the
    Rust-side per-asset finding of ~18 KB. Scales linearly.
 
-🟡 **GPU process spiked to 91 MB during download — partially
-   confirmed.** Likely the scrubber's `<video>` element holding
-   decoded frame buffers. Dropped to 48 MB after download
-   settled, and a follow-up B.2 check confirmed it drops further
-   (130 MB → 67 MB, ~63 MB released) when the user navigates
-   AWAY from the Download page entirely.
-
-   Residual: ~30 MB above the pristine fresh-launch baseline of
-   ~35 MB. **Open question:** is this a one-time GPU decode
-   pool allocation (normal) or a per-scrubber-session leak
-   (bug)? Tell-apart test parked in 0_9_PLAN.md:
-     - Cycle: load scrubber → navigate away → load → navigate away. 3×.
-     - Stable at ~67 MB → one-time allocation. Stop worrying.
-     - Climbs ~90 / ~120 / ~150 MB → real leak, hunt it.
-
-   Owner pending the cycle test next sit-down.
+✅ **GPU process spike confirmed normal (no leak).** Owner ran
+   the full B.2 cycle test 2026-05-22 PM:
+     - Fresh launch baseline: 35.2 MB
+     - During active scrubber: 110.5 MB (+75 MB decode pool)
+     - After multiple scrubber → nav-away cycles: **59.9 MB**
+   The 59.9 MB reading is LOWER than the single-cycle 67 MB
+   reading — clear evidence the GPU process actively releases
+   memory it isn't using. If this were a per-scrubber-session
+   leak, the number would have climbed (~90 / ~120 / ~150 MB)
+   instead of decreasing.
+   The persistent ~25 MB above pristine baseline is a one-time
+   GPU decode pool allocation by WebView2 + Windows DXVA. The
+   OS keeps it reserved for re-use across video sessions. Not
+   our memory to free. Closed.
 
 **Code-splitting expected impact (A.5):** the 43-55 MB
 "Tauri + React" process should drop ~5-10 MB once we lazy-load
