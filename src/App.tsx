@@ -1,5 +1,6 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
+import { invoke } from "@tauri-apps/api/core";
 import { Shell } from "./shell/Shell";
 import { ActiveProjectProvider } from "./lib/activeProject";
 import { SettingsProvider } from "./lib/settings";
@@ -55,6 +56,31 @@ function RouteLoading() {
 }
 
 /**
+ * Default route — `/` redirect chooser (0.9 UX win #4).
+ *
+ * Empty library? Send the user to /download (their first task is
+ * "get something"). Non-empty? /library (their natural workflow:
+ * see what you have, click Download when you need more).
+ *
+ * Renders nothing while the count query is in flight — visually a
+ * one-frame blank, but in practice the query is sub-millisecond on
+ * a local SQLite and the redirect kicks in before paint.
+ *
+ * On lookup failure, defaults to /library (safer — non-destructive,
+ * the page renders an empty state which is also fine for new installs).
+ */
+function HomeRedirect() {
+  const [target, setTarget] = useState<string | null>(null);
+  useEffect(() => {
+    invoke<number>("library_count", { scope: null })
+      .then((n) => setTarget(n > 0 ? "/library" : "/download"))
+      .catch(() => setTarget("/library"));
+  }, []);
+  if (target == null) return null;
+  return <Navigate to={target} replace />;
+}
+
+/**
  * Router. HashRouter (not BrowserRouter) because Tauri serves the app
  * over `tauri://` in production and `http://localhost` in dev, and
  * we don't want to deal with serving routes from different origins.
@@ -77,7 +103,7 @@ export default function App() {
         <HashRouter>
           <Routes>
             <Route element={<Shell />}>
-              <Route path="/" element={<Navigate to="/library" replace />} />
+              <Route path="/" element={<HomeRedirect />} />
               <Route
                 path="/download"
                 element={

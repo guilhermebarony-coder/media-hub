@@ -118,6 +118,20 @@ function pickBestFormat(formats: FormatOption[]): FormatOption | null {
 }
 
 /**
+ * Pattern-match a URL string against known platform shapes. Used to
+ * decide whether to auto-fetch on paste (0.9 UX win #5). Conservative:
+ * we'd rather skip an auto-fetch on an unrecognized URL than fire a
+ * useless yt-dlp call. Manual Fetch button always works.
+ */
+function isLikelyVideoUrl(s: string): boolean {
+  const t = s.trim();
+  if (!t.startsWith("http://") && !t.startsWith("https://")) return false;
+  return /youtube\.com\/watch|youtu\.be\/|youtube\.com\/shorts\/|twitter\.com\/|x\.com\/|tiktok\.com\//i.test(
+    t,
+  );
+}
+
+/**
  * Detect the source platform from a paste-able URL. Today we only
  * support YouTube — but the 0.8.C sticky-format feature stores last
  * picks per platform so the shape is forward-compatible with the 1.x
@@ -170,6 +184,12 @@ function MetadataCard() {
   useEffect(() => {
     urlInputRef.current?.focus();
   }, []);
+
+  // Track URLs we've already auto-fetched so the same URL doesn't
+  // re-fire (e.g. user pastes → auto-fetches → edits something else
+  // → reverts to the original URL). Also acts as the "manual Fetch
+  // already happened" memory.
+  const autoFetchedUrlRef = useRef<string>("");
 
   const [meta, setMeta] = useState<VideoMetadata | null>(null);
   const [loading, setLoading] = useState(false);
@@ -240,9 +260,37 @@ function MetadataCard() {
     };
   }, []);
 
+  // Auto-fetch on paste (0.9 UX win #5). When the URL input changes
+  // and the value LOOKS like a video URL we recognize, fire
+  // fetchMetadata automatically after a 350ms debounce. Skips when:
+  //   - already loading (avoid concurrent fetches)
+  //   - same URL we already auto-fetched (no re-fire on edit-and-revert)
+  //   - URL doesn't match a known platform pattern (conservative)
+  // Manual Fetch button still works for the rare edge case where
+  // we don't detect the platform.
+  useEffect(() => {
+    const trimmed = url.trim();
+    if (!trimmed) return;
+    if (loading) return;
+    if (autoFetchedUrlRef.current === trimmed) return;
+    if (!isLikelyVideoUrl(trimmed)) return;
+    const handle = setTimeout(() => {
+      autoFetchedUrlRef.current = trimmed;
+      void fetchMetadata();
+    }, 350);
+    return () => clearTimeout(handle);
+    // We intentionally only depend on `url`. Re-creating the effect
+    // on every fetchMetadata identity churn would cause it to fire
+    // on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url]);
+
   async function fetchMetadata(e?: FormEvent) {
     e?.preventDefault();
     if (!url.trim()) return;
+    // Track manual fetches in the same ref so the auto-fetch effect
+    // won't re-fire after a manual click on the same URL.
+    autoFetchedUrlRef.current = url.trim();
     setLoading(true);
     setErr(null);
     setMeta(null);
