@@ -6,6 +6,7 @@ import ProjectsPage from "./pages/Projects";
 import SettingsPage from "./pages/Settings";
 import { ActiveProjectProvider } from "./lib/activeProject";
 import { SettingsProvider } from "./lib/settings";
+import { OnboardingGate } from "./components/Onboarding";
 import "./App.css";
 
 /**
@@ -20,6 +21,11 @@ import "./App.css";
 export default function App() {
   return (
     <SettingsProvider>
+      {/* First-run onboarding overlay (0.8.D). Shows itself when
+       *  settings.onboarding_complete is false; renders nothing
+       *  otherwise. Positioned via fixed CSS so it can live here
+       *  outside the router. */}
+      <OnboardingGate />
       <ActiveProjectProvider>
         <HashRouter>
           <Routes>
