@@ -22,6 +22,58 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-05-23 afternoon (SHIPPED, 1.0.5) — library-root migration command
+
+Defuses the silent-data-loss footgun documented at 2026-05-22 in
+the parking lot ("Library-root change footgun, HIGH PRIORITY"):
+previously, changing `library_root` in Settings only applied to
+future downloads, and any user who cleaned up the "old" folder
+wiped both their content AND library.db.
+
+**What shipped:**
+- New Rust command `library_migrate_root(new_root)` in library.rs
+  with full validation (refuses self-moves, cycles, conflicting
+  content at destination, in-flight downloads via JobRegistry
+  check), filesystem moves with same-volume `fs::rename` + cross-
+  volume copy+delete fallback, single-transaction DB rewrite of
+  every `assets.file_path` that starts with the old root prefix
+  (path-boundary safe — won't rewrite a different folder with the
+  same prefix), settings update via a new `set_library_root`
+  helper, and a structured `MigrateResult` return.
+- New helper `crate::settings::set_library_root(app, state, new_root)`
+  so library.rs can persist the change without duplicating the
+  save+emit pattern.
+- Frontend "Move existing library to…" button under the library
+  root row in Settings → Library. Folder picker → confirmDialog
+  with the warnings list → invoke with spinner state → alertDialog
+  with the result (moved dirs, skipped dirs, rows updated, warnings).
+
+**What stayed the same:**
+- `library.db` still lives at `~/Media Hub/library.db`. Moving an
+  open SQLite mid-session is fiddly and the user-visible win is
+  small. Documented in the section hint copy.
+
+**What's NOT in 1.0.5:**
+- Filesystem rollback on partial failure. The DB transaction
+  rolls back cleanly, but if you've moved 2 of 3 content dirs and
+  the 3rd fails, the half-state is surfaced in the error message
+  and the user has to inspect/finish manually. Robust rollback
+  would need a per-file journal; out of scope for a 1.0.x patch.
+- Progress events during the move itself. Big libraries on slow
+  disks could take a minute; we just show "Moving…" spinner. If
+  testers complain, easy to add via emit() inside copy_dir_recursive.
+
+**Lesson logged:** path validation is the boring part. Spent a real
+amount of cycles getting `path_is_inside` right (canonicalize both
+sides when possible, fall back to lexical), the "conflicting
+content at destination" check (empty subdir is fine, populated
+subdir refuses), and the prefix-boundary check on file_path
+rewrites (avoid rewriting `/foo/barbaz/...` when `/foo/bar` is the
+old root). All three are the kind of bug that wouldn't show up in
+casual testing but would corrupt real-user data once it shipped.
+
+---
+
 ## 2026-05-23 noon (POSTMORTEM, 1.0.3 → 1.0.4) — TV-client default broke metadata fetch
 
 After shipping 1.0.3 with `--extractor-args youtube:player_client=tv,web`

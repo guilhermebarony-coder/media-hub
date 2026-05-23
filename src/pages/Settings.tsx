@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Icon } from "../lib/icons";
-import { confirmDialog } from "../lib/dialog";
+import { alertDialog, confirmDialog } from "../lib/dialog";
 import { useSettings } from "../lib/settings";
 import {
   RENAME_PRESETS,
@@ -293,10 +293,21 @@ function CookiesFileStatus({ path }: { path: string }) {
 // Library — root override + rename template (0.8.C shipped)
 // =====================================================================
 
+// 1.0.5 — shape returned by the Rust library_migrate_root command.
+type MigrateResult = {
+  old_root: string;
+  new_root: string;
+  moved_dirs: string[];
+  skipped_dirs: string[];
+  asset_rows_updated: number;
+  warnings: string[];
+};
+
 function LibrarySection() {
   const { settings, save } = useSettings();
   const root = settings.library_root ?? "";
   const template = settings.rename_template;
+  const [migrating, setMigrating] = useState(false);
 
   // The rename preset dropdown matches the current template value
   // against the built-in patterns. If the user typed something custom
@@ -342,9 +353,11 @@ function LibrarySection() {
       <p className="hint">
         Override where Media Hub stores downloads. Pick a rename
         pattern (or write your own) for how files land on disk.
-        Existing files don't move — the override applies to new
-        downloads. <code>library.db</code> always lives at the default
-        path so it survives root changes.
+        Editing the path here only redirects <em>future</em> downloads;
+        use the <strong>Move library</strong> button below if you also
+        want to relocate everything you've already downloaded.{" "}
+        <code>library.db</code> always lives at <code>~/Media Hub/</code>{" "}
+        so it survives root changes.
       </p>
 
       <div className="settings-row">
@@ -376,7 +389,90 @@ function LibrarySection() {
           <Icon.folder width={12} height={12} /> Browse…
         </button>
         <span className="hint-text faint">
-          Empty = default. Existing files don't move.
+          Empty = default. Editing here only affects new downloads.
+        </span>
+      </div>
+
+      <div className="settings-row">
+        <span className="settings-label">Move library</span>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          disabled={migrating}
+          onClick={async () => {
+            // 1.0.5 — full physical migration: pick destination, confirm,
+            // run Rust library_migrate_root, surface result. The Rust
+            // side validates everything (refuses cycles, conflicting
+            // content, in-flight downloads). We just orchestrate UX.
+            let picked: string | string[] | null;
+            try {
+              picked = await openDialog({
+                directory: true,
+                multiple: false,
+                title: "Pick a destination folder for your library",
+              });
+            } catch (e) {
+              console.warn("folder picker failed:", e);
+              return;
+            }
+            if (typeof picked !== "string") return;
+
+            const ok = await confirmDialog(
+              `Move your entire library to:\n\n${picked}\n\n` +
+                `This will physically move all downloaded files AND rewrite every ` +
+                `database row to point at the new location. The migration is atomic ` +
+                `at the database level — if it fails partway, nothing in your ` +
+                `library.db gets corrupted.\n\n` +
+                `Make sure: (1) no downloads are running, (2) the destination has ` +
+                `enough free space, (3) you have a backup if this is your only copy.\n\n` +
+                `Continue?`,
+              { title: "Move library?", kind: "warning" },
+            );
+            if (!ok) return;
+
+            setMigrating(true);
+            try {
+              const result = await invoke<MigrateResult>("library_migrate_root", {
+                newRoot: picked,
+              });
+              const lines = [
+                `Migration complete.`,
+                ``,
+                `Old root: ${result.old_root}`,
+                `New root: ${result.new_root}`,
+                ``,
+                `Moved: ${result.moved_dirs.join(", ") || "(none)"}`,
+                result.skipped_dirs.length > 0
+                  ? `Skipped (didn't exist): ${result.skipped_dirs.join(", ")}`
+                  : "",
+                `Database rows updated: ${result.asset_rows_updated}`,
+                result.warnings.length > 0
+                  ? `\nWarnings:\n- ${result.warnings.join("\n- ")}`
+                  : "",
+              ]
+                .filter(Boolean)
+                .join("\n");
+              await alertDialog(lines, {
+                title: "Library moved",
+                kind: result.warnings.length > 0 ? "warning" : "info",
+              });
+            } catch (e) {
+              await alertDialog(`Migration failed:\n\n${String(e)}`, {
+                title: "Couldn't move library",
+                kind: "error",
+              });
+            } finally {
+              setMigrating(false);
+            }
+          }}
+        >
+          <Icon.folder width={12} height={12} />
+          {migrating ? "Moving…" : "Move existing library to…"}
+        </button>
+        <span className="hint-text faint">
+          Physically moves Library/, Projects/, _thumbnails/ and
+          rewrites every asset's file path. Refuses if any download
+          is in flight.
         </span>
       </div>
 

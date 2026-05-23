@@ -1489,6 +1489,7 @@ pub fn run() {
             library::project_finish,
             library::asset_set_project,
             library::library_find_by_url,
+            library::library_migrate_root,
             settings::settings_get,
             settings::settings_set,
             settings::cookies_validate,

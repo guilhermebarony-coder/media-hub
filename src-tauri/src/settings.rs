@@ -423,6 +423,35 @@ pub fn init(app: &AppHandle) -> Result<SettingsState, String> {
     })
 }
 
+/// 1.0.5 — set `library_root` from non-command code (e.g. the
+/// library-root migration in library.rs). Mutates the in-memory state,
+/// persists to disk, emits `settings:changed` so the renderer refreshes
+/// its copy. Returns the old root value so callers can rollback /
+/// report it.
+///
+/// We expose this rather than have callers reach in via the State
+/// directly because (a) the save+emit pattern is easy to forget and
+/// (b) keeping the serde/save logic owned by settings.rs avoids
+/// duplication.
+pub fn set_library_root(
+    app: &AppHandle,
+    state: &SettingsState,
+    new_root: Option<String>,
+) -> Result<Option<String>, String> {
+    let old = {
+        let mut guard = state
+            .inner
+            .lock()
+            .map_err(|e| format!("settings lock: {e}"))?;
+        let old = guard.library_root.clone();
+        guard.library_root = new_root;
+        save_to_disk(&state.path, &guard)?;
+        old
+    };
+    let _ = app.emit("settings:changed", ());
+    Ok(old)
+}
+
 /// Atomic write: serialize to tmp, then rename over the target.
 /// Avoids the "crashed mid-save, file is now half a JSON object"
 /// pathology.

@@ -820,6 +820,345 @@ pub async fn resolve_download_dir(
 /// Build a non-colliding target path for moving a file into a new
 /// directory. If `<dir>/<basename>` already exists, append ` (N)`
 /// before the extension and increment until free.
+// =====================================================================
+// 1.0.5 — Library-root migration
+// =====================================================================
+//
+// The footgun this defuses: when the user sets a new `library_root` in
+// Settings → Library, today's behavior is FORWARD-ONLY. Future downloads
+// land at the new root, but every existing `assets.file_path` row still
+// points at the OLD location, and `library.db` itself stays at
+// `~/Media Hub/library.db` regardless. If the user then "cleans up"
+// the old folder, they wipe their entire history.
+//
+// `library_migrate_root` is the rescue: physically moves the content
+// directories AND rewrites every asset row's file_path in a single
+// sqlx transaction. The DB itself intentionally stays put — moving an
+// open SQLite mid-session is fiddly and the user-visible win is small.
+// Documented behavior.
+//
+// Strategy:
+//   1. Validate: refuse self-moves, refuse new_root inside old_root
+//      (would create cycles), refuse if new_root already has a
+//      conflicting Library/ or Projects/ subdir with content.
+//   2. For each of [Library, Projects, _thumbnails], move from
+//      old → new. Try `fs::rename` first (atomic same-volume), fall
+//      back to recursive copy + delete on EXDEV / cross-device.
+//   3. In a sqlx transaction, rewrite every `assets.file_path` whose
+//      string starts with the old root prefix → swap in the new root.
+//      Atomic at the DB level: if anything fails mid-loop, the whole
+//      UPDATE rolls back.
+//   4. Update `settings.library_root` via the helper in settings.rs.
+//   5. Emit `library:changed` so the UI reloads with the new paths.
+//
+// What we don't try to do:
+//   - Move library.db (documented design — stays at home/Media Hub)
+//   - Move yt-dlp's logs / cache (not ours)
+//   - Roll back filesystem moves on later failure. The DB rollback
+//     handles the "row rewrite failed" case but undoing filesystem
+//     moves robustly would need a journal. For 1.0.5 we surface the
+//     half-done state in the result struct so the user can see what
+//     succeeded.
+
+#[derive(Serialize, Debug, Clone)]
+pub struct MigrateResult {
+    pub old_root: String,
+    pub new_root: String,
+    pub moved_dirs: Vec<String>,       // names of subdirs successfully relocated
+    pub skipped_dirs: Vec<String>,     // subdirs that didn't exist at old root (nothing to move)
+    pub asset_rows_updated: u32,       // count of file_path rewrites in DB
+    pub warnings: Vec<String>,         // non-fatal issues (orphan files, mismatched paths)
+}
+
+/// Recursively copy `src` directory tree to `dst`. Used as a fallback
+/// when `fs::rename` fails across volumes. Caller is responsible for
+/// deleting `src` after a successful copy.
+///
+/// We don't use a crate for this because adding a dep for ~30 lines
+/// of trivial recursion isn't worth it. Skips symlinks (unlikely in
+/// our content dirs, would need extra ceremony to handle correctly).
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        let ty = entry.file_type()?;
+        let target = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&entry_path, &target)?;
+        } else if ty.is_file() {
+            std::fs::copy(&entry_path, &target)?;
+        }
+        // Symlinks intentionally skipped — not part of our content layout.
+    }
+    Ok(())
+}
+
+/// Move a directory tree from `src` to `dst`. Tries `rename` first
+/// (instant, atomic, same-volume only) and falls back to recursive
+/// copy + delete. On copy+delete failure mid-flight, the half-copied
+/// destination is best-effort cleaned up before returning the error,
+/// leaving the source intact so the user doesn't lose data.
+fn move_dir(src: &Path, dst: &Path) -> Result<(), String> {
+    // Path::exists checks resolved (followed) target — fine for our
+    // case where we know there's no symlink shenanigans.
+    if !src.exists() {
+        return Err(format!("source doesn't exist: {}", src.display()));
+    }
+    if dst.exists() {
+        return Err(format!("destination already exists: {}", dst.display()));
+    }
+    // Ensure parent of dst exists.
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create dst parent {}: {e}", parent.display()))?;
+    }
+
+    match std::fs::rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Most cross-device move errors land as ErrorKind::Other or
+            // raw os error 17/18 depending on platform. Don't try to
+            // discriminate too cleverly — any rename failure → try the
+            // copy fallback.
+            eprintln!(
+                "[migrate] rename failed ({e}), falling back to copy+delete for {} → {}",
+                src.display(),
+                dst.display()
+            );
+            if let Err(copy_err) = copy_dir_recursive(src, dst) {
+                // Half-copied → clean up the partial destination so the
+                // user's old data stays intact.
+                let _ = std::fs::remove_dir_all(dst);
+                return Err(format!(
+                    "copy fallback failed for {}: {copy_err} (original rename error: {e})",
+                    src.display()
+                ));
+            }
+            // Copy succeeded — now delete source. If delete fails, the
+            // data is safely at dst but we have a duplicate at src.
+            // Surface that as a warning, not a hard failure.
+            if let Err(del_err) = std::fs::remove_dir_all(src) {
+                eprintln!(
+                    "[migrate] copy succeeded but source delete failed for {}: {del_err}",
+                    src.display()
+                );
+                return Err(format!(
+                    "moved content to {} but couldn't delete original at {} ({del_err}). \
+                     Verify both locations and delete the old copy manually.",
+                    dst.display(),
+                    src.display()
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+/// True if `child` is `parent` or sits anywhere underneath it. Used to
+/// reject "move library to a folder inside the current library" which
+/// would otherwise create a cycle. Compares canonicalized paths when
+/// possible (so symlinks / `..` segments don't bypass the check) and
+/// falls back to lexical comparison when canonicalization fails (target
+/// might not exist yet).
+fn path_is_inside(child: &Path, parent: &Path) -> bool {
+    let canon_child = std::fs::canonicalize(child).ok();
+    let canon_parent = std::fs::canonicalize(parent).ok();
+    match (canon_child, canon_parent) {
+        (Some(c), Some(p)) => c.starts_with(&p),
+        _ => child.starts_with(parent),
+    }
+}
+
+#[tauri::command]
+pub async fn library_migrate_root(
+    app: AppHandle,
+    state: tauri::State<'_, LibraryState>,
+    settings: tauri::State<'_, crate::settings::SettingsState>,
+    registry: tauri::State<'_, crate::JobRegistry>,
+    new_root: String,
+) -> Result<MigrateResult, String> {
+    let new_root_trimmed = new_root.trim();
+    if new_root_trimmed.is_empty() {
+        return Err("new_root is empty".into());
+    }
+    let new_root_path = PathBuf::from(new_root_trimmed);
+
+    // Refuse migration if any download is in flight. The alternative
+    // would be to coordinate with the JobRegistry — pause workers,
+    // wait for child processes to finish — but that's enough
+    // complexity to deserve its own session. For 1.0.5 the rule is:
+    // ALL downloads complete or canceled before migrating.
+    let active_jobs = registry
+        .children
+        .lock()
+        .map(|m| m.len())
+        .unwrap_or(0);
+    if active_jobs > 0 {
+        return Err(format!(
+            "Can't migrate while {active_jobs} download(s) are running. \
+             Wait for them to finish or cancel them, then retry."
+        ));
+    }
+
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| format!("resolve home dir: {e}"))?;
+    let old_root = crate::settings::content_root(&settings, &home);
+
+    // Validate target.
+    if path_is_inside(&new_root_path, &old_root) || path_is_inside(&old_root, &new_root_path) {
+        // Includes the "same path" case (a path is inside itself for
+        // starts_with purposes). Refuse cycles either direction.
+        if new_root_path == old_root {
+            return Err("New root is the same as current root — nothing to do.".into());
+        }
+        return Err(format!(
+            "Can't migrate into a folder that's nested inside the current root \
+             (or vice versa): {} ↔ {}",
+            old_root.display(),
+            new_root_path.display()
+        ));
+    }
+
+    // Create new_root if it doesn't exist yet; if it does, ensure the
+    // critical subdirs aren't already populated (we'd clobber).
+    std::fs::create_dir_all(&new_root_path)
+        .map_err(|e| format!("create new_root {}: {e}", new_root_path.display()))?;
+    for subdir in ["Library", "Projects", "_thumbnails"] {
+        let candidate = new_root_path.join(subdir);
+        if candidate.exists() {
+            let is_empty = std::fs::read_dir(&candidate)
+                .map(|mut it| it.next().is_none())
+                .unwrap_or(false);
+            if !is_empty {
+                return Err(format!(
+                    "New root already contains '{subdir}/' with files. \
+                     Pick an empty folder or remove existing content first: {}",
+                    candidate.display()
+                ));
+            }
+        }
+    }
+
+    // Move the three content subdirs. Track which moved + which were
+    // missing-at-source (e.g. a fresh install that never created
+    // _thumbnails/ yet).
+    let mut moved_dirs: Vec<String> = Vec::new();
+    let mut skipped_dirs: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    for subdir in ["Library", "Projects", "_thumbnails"] {
+        let src = old_root.join(subdir);
+        let dst = new_root_path.join(subdir);
+        if !src.exists() {
+            skipped_dirs.push(subdir.to_string());
+            continue;
+        }
+        // Remove the empty candidate dir we may have created during
+        // the validation check above — move_dir refuses if dst exists.
+        if dst.exists() {
+            let _ = std::fs::remove_dir(&dst);
+        }
+        if let Err(e) = move_dir(&src, &dst) {
+            // Hard fail: surface what already moved so the user knows
+            // recovery state. They can manually finish or roll back.
+            return Err(format!(
+                "Move failed at '{subdir}/': {e}\n\
+                 Successfully moved before failure: {moved_dirs:?}\n\
+                 Old root: {}\nNew root: {}",
+                old_root.display(),
+                new_root_path.display()
+            ));
+        }
+        moved_dirs.push(subdir.to_string());
+    }
+
+    // Rewrite asset file_path rows. Single transaction — all-or-nothing
+    // at the DB layer. Pattern: take rows whose file_path starts with
+    // the old_root string, swap that prefix for the new_root string.
+    //
+    // We use string-prefix matching rather than canonical-path math
+    // because the stored file_path values are exactly what the
+    // download flow wrote — same casing, same separators. SQLite's
+    // LIKE doesn't natively know about prefix matching efficiently
+    // but for our row counts (< 10k assets typical) it's fine.
+    let old_prefix = old_root.to_string_lossy().to_string();
+    let new_prefix = new_root_path.to_string_lossy().to_string();
+
+    let updated = {
+        let mut tx = state
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("db transaction begin: {e}"))?;
+
+        // Fetch all rows that look like they live under the old root.
+        // We do this in Rust rather than `UPDATE ... WHERE file_path LIKE`
+        // so we can warn about edge cases (paths that don't actually
+        // start with the prefix, mid-string matches, etc.).
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT id, file_path FROM assets WHERE file_path LIKE ?")
+                .bind(format!("{}%", old_prefix))
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(|e| format!("db select: {e}"))?;
+
+        let mut count = 0u32;
+        for (id, file_path) in &rows {
+            // Defensive: ensure the prefix actually matches as a path
+            // boundary (next char after prefix should be a separator).
+            // Avoids accidentally rewriting a different folder that
+            // happens to share a string prefix.
+            let after_prefix = &file_path[old_prefix.len()..];
+            if !after_prefix.starts_with(std::path::MAIN_SEPARATOR) && !after_prefix.is_empty() {
+                warnings.push(format!(
+                    "Skipped suspicious row id={id} path={file_path} (prefix matched but not at a path boundary)"
+                ));
+                continue;
+            }
+            let rewritten = format!("{new_prefix}{after_prefix}");
+            sqlx::query("UPDATE assets SET file_path = ? WHERE id = ?")
+                .bind(&rewritten)
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| format!("db update id={id}: {e}"))?;
+            count += 1;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("db transaction commit: {e}"))?;
+        count
+    };
+
+    // Persist the new root in settings. Done LAST so a failure here
+    // doesn't leave us with a half-migrated state where settings point
+    // at a new location but content + DB rows still reference the old.
+    if let Err(e) =
+        crate::settings::set_library_root(&app, &settings, Some(new_prefix.clone()))
+    {
+        warnings.push(format!(
+            "Migration complete but failed to persist new library_root in settings: {e}. \
+             Set it manually in Settings → Library."
+        ));
+    }
+
+    // Tell the UI to reload.
+    let _ = app.emit("library:changed", ());
+
+    Ok(MigrateResult {
+        old_root: old_prefix,
+        new_root: new_prefix,
+        moved_dirs,
+        skipped_dirs,
+        asset_rows_updated: updated,
+        warnings,
+    })
+}
+
 fn unique_target_path(dir: &Path, src: &Path) -> PathBuf {
     let file_name = src.file_name().unwrap_or_default();
     let candidate = dir.join(file_name);
