@@ -257,23 +257,35 @@ pub fn translate_ytdlp_error(raw: &str) -> String {
         );
     }
 
-    // Age-gate. The translation here is intentionally honest about
-    // what works and what doesn't — "configure cookies" alone isn't
-    // helpful when the user has ALREADY configured them and is still
-    // hitting the wall, which is common because YouTube's age
-    // verification often needs more than just session cookies.
+    // Age-gate. As of 1.0.3 we ALSO pass --extractor-args
+    // youtube:player_client=tv,web on every call — meaning by the
+    // time we see this error, both the TV client (no-cookies bypass)
+    // AND the web client (cookies path) have failed. That narrows
+    // the diagnosis significantly: it's no longer "you forgot to set
+    // cookies," it's specifically "your cookies don't authenticate
+    // you as a logged-in YouTube user."
+    //
+    // The owner's 2026-05-23 case turned out to be exactly this:
+    // cookies.txt had full google.com auth but ZERO `.youtube.com`
+    // auth cookies (LOGIN_INFO etc.) — because the source Firefox
+    // profile had signed into google.com but never actually loaded
+    // youtube.com. The cookies-validator chip in Settings catches
+    // this proactively now; this message is the reactive backstop.
     if lower.contains("sign in to confirm your age") || lower.contains("age-restricted") {
         return format!(
-            "Age-restricted video. yt-dlp tried with your configured cookies but \
-             YouTube still required age confirmation. Common causes: \
-             • Your Google account isn't fully age-verified (some regions require \
-             ID verification — check google.com/account). \
-             • cookies.txt is missing auth tokens — re-export with \"Get cookies.txt \
-             LOCALLY\" while signed in AND on the video page itself. \
-             • If using browser cookies on Chrome/Brave/Edge: the DPAPI bug is \
-             silently breaking cookie reads — switch to Firefox. \
-             • Try a non-age-restricted video first to confirm cookies work AT ALL \
-             — if that works, the issue is account-level age verification. Raw: {raw}"
+            "Age-restricted video — we tried both the TV client (no-cookies bypass) \
+             AND your configured cookies, and YouTube rejected both. \
+             • Most likely: your cookies.txt is missing youtube.com auth tokens. \
+             Check Settings → Sources for the cookies-file warning chip. The fix \
+             is to re-export from a browser where you're signed in directly on \
+             youtube.com (not just google.com — they're separate sessions). \
+             • If using browser cookies on Chrome/Brave/Edge: the DPAPI bug \
+             silently breaks cookie reads — switch to Firefox. \
+             • If using Firefox: open Firefox, go to youtube.com, click your \
+             avatar to confirm you're signed in (not just google.com), \
+             then retry. YouTube rotates auth cookies every few days. \
+             • Last resort: your Google account isn't fully age-verified \
+             (some regions require ID verification at google.com/account). Raw: {raw}"
         );
     }
 
@@ -429,6 +441,160 @@ fn save_to_disk(path: &PathBuf, settings: &Settings) -> Result<(), String> {
 /// arbitrary string through could shell-quote-injection territory
 /// (yt-dlp uses argv so it's safer than a shell command line, but
 /// still: defense in depth).
+/// 1.0.3 — YouTube extractor args every yt-dlp call should carry.
+///
+/// `player_client=tv,web` makes yt-dlp try the TV InnerTube client
+/// first, then fall back to web. The TV client enforces age-gate
+/// much less strictly than the web client — many "Sign in to confirm
+/// your age" videos download fine through TV without any cookies at
+/// all. When TV doesn't have the format we need, web fills in.
+///
+/// Format catalog is merged across clients, so callers' format
+/// pickers see the union (no regression for non-age-gated videos).
+///
+/// Safe to apply unconditionally: the `youtube:` prefix means
+/// non-YouTube extractors silently ignore these args.
+pub fn youtube_extractor_args() -> Vec<String> {
+    vec![
+        "--extractor-args".to_string(),
+        "youtube:player_client=tv,web".to_string(),
+    ]
+}
+
+/// 1.0.3 — diagnostic snapshot of a cookies.txt file.
+///
+/// Returned by `cookies_validate` so the UI can warn the user when
+/// their picked file doesn't actually contain a YouTube login. The
+/// owner hit this exact failure mode on 2026-05-23: full google.com
+/// auth but zero `.youtube.com`-scoped auth cookies, because the
+/// Firefox profile that produced the file never had an active
+/// youtube.com session. The warning lets us flag the file before the
+/// user wastes a download attempt on it.
+#[derive(Serialize, Debug, Clone)]
+pub struct CookiesFileStatus {
+    pub exists: bool,
+    pub total_cookies: u32,
+    pub youtube_cookies: u32,
+    /// True if at least one of the auth cookies YouTube actually
+    /// reads is present on `.youtube.com`. LOGIN_INFO is the
+    /// definitive signal; the __Secure-*PSID variants are also
+    /// auth-critical and worth checking as a fallback.
+    pub has_youtube_login: bool,
+    /// Human-readable summary safe to drop directly into a UI chip.
+    /// Empty string when the file is healthy.
+    pub warning: String,
+}
+
+/// Parse a Netscape-format cookies.txt and report whether it actually
+/// looks like it could authenticate a YouTube request. Tolerant of
+/// malformed lines (returns 0 counts rather than erroring) — we'd
+/// rather surface a "no YT auth" warning than refuse to look.
+pub fn validate_cookies_file(path: &str) -> CookiesFileStatus {
+    use std::fs;
+
+    if !std::path::Path::new(path).exists() {
+        return CookiesFileStatus {
+            exists: false,
+            total_cookies: 0,
+            youtube_cookies: 0,
+            has_youtube_login: false,
+            warning: format!("File not found: {path}"),
+        };
+    }
+
+    let contents = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            return CookiesFileStatus {
+                exists: true,
+                total_cookies: 0,
+                youtube_cookies: 0,
+                has_youtube_login: false,
+                warning: format!("Couldn't read file: {e}"),
+            };
+        }
+    };
+
+    // Netscape format: 7 tab-separated fields per line, header lines
+    // start with `#`. Field 1 is the domain, field 6 is the cookie
+    // name. Anything else we skip — including blank lines and lines
+    // with fewer fields (some exporters add extra junk).
+    let mut total = 0u32;
+    let mut yt = 0u32;
+    let mut has_login = false;
+
+    // Auth cookies that prove a real YT login. LOGIN_INFO is the gold
+    // standard; the __Secure-*PSID variants come along when the user
+    // has a fully-verified Google account session active on YT.
+    const YT_AUTH_NAMES: &[&str] = &[
+        "LOGIN_INFO",
+        "__Secure-1PSID",
+        "__Secure-3PSID",
+        "SAPISID",
+        "__Secure-1PAPISID",
+        "__Secure-3PAPISID",
+    ];
+
+    for line in contents.lines() {
+        let line = line.trim_end();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 7 {
+            continue;
+        }
+        let domain = fields[0];
+        let name = fields[5];
+
+        total += 1;
+
+        // Match `.youtube.com` and `youtube.com` (some exporters drop
+        // the leading dot). Doesn't match `www.youtube.com`-specific
+        // entries but those are rare and never carry auth.
+        let is_yt = domain == ".youtube.com" || domain == "youtube.com";
+        if is_yt {
+            yt += 1;
+            if YT_AUTH_NAMES.contains(&name) {
+                has_login = true;
+            }
+        }
+    }
+
+    let warning = if !has_login {
+        if yt == 0 {
+            "No YouTube cookies at all — file likely exported from the wrong domain. \
+             Re-export with the \"Get cookies.txt LOCALLY\" extension while youtube.com is the active tab."
+                .to_string()
+        } else {
+            format!(
+                "Cookies for youtube.com are present ({yt}) but none of them are auth tokens \
+                 (LOGIN_INFO / __Secure-*PSID missing). You're probably signed into google.com \
+                 but not youtube.com in the source browser. Open youtube.com directly, sign in \
+                 with your avatar, then re-export."
+            )
+        }
+    } else {
+        String::new()
+    };
+
+    CookiesFileStatus {
+        exists: true,
+        total_cookies: total,
+        youtube_cookies: yt,
+        has_youtube_login: has_login,
+        warning,
+    }
+}
+
+/// Tauri command wrapper for `validate_cookies_file`. The Settings UI
+/// calls this whenever the user picks a new cookies path, so the
+/// warning chip can render before any download is attempted.
+#[tauri::command]
+pub fn cookies_validate(path: String) -> CookiesFileStatus {
+    validate_cookies_file(&path)
+}
+
 pub fn cookies_args(state: &SettingsState) -> Vec<String> {
     let guard = match state.inner.lock() {
         Ok(g) => g,

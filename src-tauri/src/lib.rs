@@ -288,6 +288,9 @@ async fn yt_fetch_metadata(
     // Owned strings because .args() needs &str references that outlive
     // the call.
     let cookies = settings::cookies_args(&settings);
+    // 1.0.3 — TV client first, web fallback. Lets a chunk of
+    // age-restricted videos resolve metadata without cookies at all.
+    let yt_args = settings::youtube_extractor_args();
     let mut args: Vec<&str> = vec![
         "-j",                  // dump single JSON object, no download
         "--no-playlist",       // never expand playlists at this stage
@@ -297,6 +300,9 @@ async fn yt_fetch_metadata(
     ];
     for c in &cookies {
         args.push(c.as_str());
+    }
+    for a in &yt_args {
+        args.push(a.as_str());
     }
     args.push("--");           // end of options, URL is positional
     args.push(trimmed);
@@ -592,6 +598,12 @@ async fn yt_download(
     let cookies = settings::cookies_args(&settings);
     for c in &cookies {
         args.push(c.as_str());
+    }
+    // 1.0.3 — TV-client-first extractor args. See youtube_extractor_args
+    // doc for why. Owned outside the loop so the &str references survive.
+    let yt_args = settings::youtube_extractor_args();
+    for a in &yt_args {
+        args.push(a.as_str());
     }
     // Bandwidth throttle (0.8.C). Empty when unlimited (default);
     // otherwise emits --limit-rate <N>K. yt-dlp's rate limiter is
@@ -1366,6 +1378,9 @@ async fn yt_resolve_stream_url(
         "best[ext=mp4][height<=720]/best[ext=mp4]/best[height<=720]/best";
 
     let cookies = settings::cookies_args(&settings);
+    // 1.0.3 — TV-client-first. Scrubber stream resolution benefits
+    // from the same age-gate bypass as the main download flow.
+    let yt_args = settings::youtube_extractor_args();
     let mut args: Vec<&str> = vec![
         "-g",
         "--no-warnings",
@@ -1375,6 +1390,9 @@ async fn yt_resolve_stream_url(
     ];
     for c in &cookies {
         args.push(c.as_str());
+    }
+    for a in &yt_args {
+        args.push(a.as_str());
     }
     args.push(trimmed);
 
@@ -1473,6 +1491,7 @@ pub fn run() {
             library::library_find_by_url,
             settings::settings_get,
             settings::settings_set,
+            settings::cookies_validate,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

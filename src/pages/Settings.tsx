@@ -154,47 +154,138 @@ function SourcesSection() {
       )}
 
       {src.kind === "file" && (
-        <div className="settings-row">
-          <span className="settings-label">Path</span>
-          <input
-            className="field-input"
-            type="text"
-            placeholder="C:\path\to\cookies.txt"
-            value={src.path}
-            onChange={(e) => setPath(e.target.value)}
-            spellCheck={false}
-          />
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={async () => {
-              try {
-                const picked = await openDialog({
-                  directory: false,
-                  multiple: false,
-                  title: "Choose your cookies.txt file",
-                  filters: [
-                    { name: "cookies.txt", extensions: ["txt"] },
-                    { name: "All files", extensions: ["*"] },
-                  ],
-                });
-                if (typeof picked === "string") setPath(picked);
-              } catch (e) {
-                console.warn("file picker failed:", e);
-              }
-            }}
-          >
-            <Icon.folder width={12} height={12} /> Browse…
-          </button>
-          <span className="hint-text faint">
-            Netscape-format cookies.txt. Tip: avoid paths with
-            non-ASCII characters (e.g. "Área de Trabalho") — they
-            can break yt-dlp file access. Try{" "}
-            <code>C:\cookies.txt</code> as a test.
-          </span>
-        </div>
+        <>
+          <div className="settings-row">
+            <span className="settings-label">Path</span>
+            <input
+              className="field-input"
+              type="text"
+              placeholder="C:\path\to\cookies.txt"
+              value={src.path}
+              onChange={(e) => setPath(e.target.value)}
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={async () => {
+                try {
+                  const picked = await openDialog({
+                    directory: false,
+                    multiple: false,
+                    title: "Choose your cookies.txt file",
+                    filters: [
+                      { name: "cookies.txt", extensions: ["txt"] },
+                      { name: "All files", extensions: ["*"] },
+                    ],
+                  });
+                  if (typeof picked === "string") setPath(picked);
+                } catch (e) {
+                  console.warn("file picker failed:", e);
+                }
+              }}
+            >
+              <Icon.folder width={12} height={12} /> Browse…
+            </button>
+            <span className="hint-text faint">
+              Netscape-format cookies.txt. Tip: avoid paths with
+              non-ASCII characters (e.g. "Área de Trabalho") — they
+              can break yt-dlp file access. Try{" "}
+              <code>C:\cookies.txt</code> as a test.
+            </span>
+          </div>
+          <CookiesFileStatus path={src.path} />
+        </>
       )}
     </section>
+  );
+}
+
+// =====================================================================
+// 1.0.3 — Cookies file validator chip
+// =====================================================================
+//
+// Renders right under the file path input. Re-runs the Rust
+// `cookies_validate` command whenever the path changes (300ms debounce
+// so typing isn't spammy). Surfaces a red warning when the file is
+// missing YouTube auth cookies — the exact failure mode that bit the
+// owner on 2026-05-23 where a "logged in to google.com" Firefox
+// profile produced a cookies.txt with zero `.youtube.com` auth tokens.
+//
+// The Rust side returns a structured CookiesFileStatus; we trust its
+// `warning` string for display so the messaging stays in one place.
+
+type CookiesFileStatusPayload = {
+  exists: boolean;
+  total_cookies: number;
+  youtube_cookies: number;
+  has_youtube_login: boolean;
+  warning: string;
+};
+
+function CookiesFileStatus({ path }: { path: string }) {
+  const [status, setStatus] = useState<CookiesFileStatusPayload | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!path.trim()) {
+      setStatus(null);
+      return;
+    }
+    setLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const s = await invoke<CookiesFileStatusPayload>("cookies_validate", {
+          path,
+        });
+        setStatus(s);
+      } catch (e) {
+        console.warn("[cookies_validate] failed:", e);
+        setStatus(null);
+      } finally {
+        setLoading(false);
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [path]);
+
+  if (!path.trim()) return null;
+  if (loading && !status) {
+    return (
+      <div className="settings-row">
+        <span className="settings-label" />
+        <span className="hint-text faint">Checking file…</span>
+      </div>
+    );
+  }
+  if (!status) return null;
+
+  // Healthy file — show a quiet green confirmation, not the warning style.
+  if (status.has_youtube_login) {
+    return (
+      <div className="settings-row">
+        <span className="settings-label" />
+        <span className="hint-text" style={{ color: "var(--accent)" }}>
+          ✓ {status.youtube_cookies} youtube.com cookies, auth token detected.
+          Should work for age-restricted videos.
+        </span>
+      </div>
+    );
+  }
+
+  // Unhealthy file — surface the warning prominently using the same
+  // visual treatment as the Chromium DPAPI warning above. Same look =
+  // same urgency in the user's mental model.
+  return (
+    <div className="settings-warn">
+      <strong>⚠ This cookies file is missing YouTube login</strong>
+      <div style={{ marginTop: 4 }}>{status.warning}</div>
+      <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
+        Found: {status.total_cookies} total cookies,{" "}
+        {status.youtube_cookies} on youtube.com, 0 auth tokens
+        (LOGIN_INFO / __Secure-*PSID).
+      </div>
+    </div>
   );
 }
 
