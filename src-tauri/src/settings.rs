@@ -326,14 +326,26 @@ pub fn translate_ytdlp_error(raw: &str) -> String {
         || lower.contains("no video formats found")
     {
         return format!(
-            "yt-dlp got zero formats for this video. Most common cause: cookies \
-             aren't actually being applied. \
-             • If using browser cookies: close the browser completely (especially \
-             Chrome / Brave / Edge — they lock the cookie DB). \
-             • If using cookies.txt: try moving the file to a simple ASCII path \
-             like C:\\cookies.txt — non-ASCII path characters can fail silently. \
-             • If on a public video this happens: the format simply isn't \
-             offered by YouTube for this content. Raw: {raw}"
+            "yt-dlp got zero formats for this video. This means YouTube refused to \
+             serve format manifests for this URL with the auth (or lack of auth) \
+             we presented. \
+             • If the cookies-file validator in Settings → Sources shows GREEN \
+             but you still see this: it's a hard-age-gated video that YT \
+             refuses even to logged-in accounts unless certain extra account \
+             conditions are met (region-specific age verification, account \
+             age, watch history, etc.). yt-dlp can't fix this — try a \
+             different video to confirm your cookies work elsewhere, or \
+             download via your browser directly and drop the file into the \
+             Library folder. \
+             • If the validator shows RED: fix the cookies file first (see \
+             the warning chip's instructions). \
+             • If using browser cookies on Chrome / Brave / Edge: the DPAPI \
+             bug is silently breaking cookie reads — switch to Firefox or \
+             file mode. \
+             • If using browser cookies and the browser is open: close it \
+             completely so yt-dlp can read the cookie DB. \
+             • Public-video edge case: the format genuinely isn't offered for \
+             this content (rare, e.g. livestream archives). Raw: {raw}"
         );
     }
 
@@ -441,23 +453,28 @@ fn save_to_disk(path: &PathBuf, settings: &Settings) -> Result<(), String> {
 /// arbitrary string through could shell-quote-injection territory
 /// (yt-dlp uses argv so it's safer than a shell command line, but
 /// still: defense in depth).
-/// 1.0.3 — YouTube extractor args every yt-dlp call should carry.
+/// 1.0.3 / patched 1.0.4 — YouTube extractor args every yt-dlp call
+/// should carry.
 ///
-/// `player_client=tv,web` makes yt-dlp try the TV InnerTube client
-/// first, then fall back to web. The TV client enforces age-gate
-/// much less strictly than the web client — many "Sign in to confirm
-/// your age" videos download fine through TV without any cookies at
-/// all. When TV doesn't have the format we need, web fills in.
+/// `player_client=web,tv` keeps the default web client first (full
+/// format catalog, original behavior) and adds TV as a backup that
+/// kicks in when web can't extract — typically the age-gate case
+/// where the web client refuses but TV's looser enforcement returns
+/// formats anyway.
 ///
-/// Format catalog is merged across clients, so callers' format
-/// pickers see the union (no regression for non-age-gated videos).
+/// **1.0.3 had `tv,web`** which broke metadata fetch for at least
+/// one hard-age-gated video: TV returned formats but in a shape that
+/// made yt-dlp report "Requested format is not available" on the
+/// `-j` dump, even though we don't pass `-f` to fetch. Putting web
+/// first restores the proven path and keeps TV as additive coverage
+/// rather than the primary.
 ///
 /// Safe to apply unconditionally: the `youtube:` prefix means
 /// non-YouTube extractors silently ignore these args.
 pub fn youtube_extractor_args() -> Vec<String> {
     vec![
         "--extractor-args".to_string(),
-        "youtube:player_client=tv,web".to_string(),
+        "youtube:player_client=web,tv".to_string(),
     ]
 }
 

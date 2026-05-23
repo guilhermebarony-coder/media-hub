@@ -22,6 +22,57 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-05-23 noon (POSTMORTEM, 1.0.3 → 1.0.4) — TV-client default broke metadata fetch
+
+After shipping 1.0.3 with `--extractor-args youtube:player_client=tv,web`
+as default, the owner hit a new failure mode on the same EqVkMLZv2RU
+age-restricted test video.
+
+**What worked in 1.0.3:**
+- ✅ Cookies validator caught the bad initial cookies file
+  ("This cookies file is missing YouTube login" — exactly the case
+  it was designed for)
+- ✅ Owner re-exported cookies properly with the LOCALLY extension
+  (this time targeting youtube.com tab directly)
+- ✅ Validator turned green: "30 youtube.com cookies, auth token
+  detected" — confirming the file is now genuinely good
+- ✅ The age-gate error message translator's new wording landed
+  correctly when the download was attempted
+
+**What broke in 1.0.3:**
+- The `Fetch` button (yt_fetch_metadata) returned "Requested format
+  is not available" — the long-standing "yt-dlp got zero formats"
+  translator hit
+- Root cause: with `tv,web` ordering, the TV client was tried first.
+  For this hard-age-gated video, TV returned no usable format
+  manifests, and yt-dlp surfaced the error before merging in web
+  client formats (or merge happened but produced empty set).
+- This was a regression — the same video used to at least *fetch*
+  metadata in 1.0.2 and below.
+
+**Fix in 1.0.4 (commit pending):**
+- Reverted ordering to `web,tv` — web client first (proven path,
+  original behavior), TV as backup
+- Rewrote the "zero formats" translator to acknowledge that GREEN
+  validator + this error = hard-age-gated content YT refuses even
+  to logged-in accounts. Don't blame the cookies when our own
+  validator just said they're good.
+
+**Lesson:** when adding extractor-args defaults, the safe default is
+NEVER to put a new client first in the priority list. Always
+append. The web client is yt-dlp's tested baseline; TV is good as
+additive coverage but unreliable as primary.
+
+**For the EqVkMLZv2RU video specifically:** even with the fix, this
+particular video may simply not be downloadable through yt-dlp at
+the moment. YouTube's hard-age-gate sometimes refuses formats even
+to fully-verified logged-in accounts depending on region / account
+age / watch history. Documented as a known unfixable upstream
+edge case (yt-dlp issues #13445, #11296). Owner's escape hatch:
+download in browser, drop file into Library folder.
+
+---
+
 ## 2026-05-23 morning (RESEARCH, age-restricted YT) — cookies story diagnosed
 
 Owner: "tried everything, downloading firefox, exporting the cookies on
