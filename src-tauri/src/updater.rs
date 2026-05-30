@@ -353,3 +353,103 @@ pub struct EngineInfo {
     pub version: Option<String>,
     pub managed: bool,
 }
+
+// =====================================================================
+// 1.3.0 — App auto-updater (distinct from the yt-dlp engine updater above).
+// =====================================================================
+//
+// The yt-dlp updater above keeps the *download engine* fresh. This second
+// updater keeps the *Media Hub app itself* fresh — so when we ship a bug
+// fix, testers don't need to walk through a manual reinstall.
+//
+// How it works at runtime:
+//   1. App calls `check_for_app_update`. tauri-plugin-updater hits the
+//      endpoint in tauri.conf.json (a GitHub Releases-hosted
+//      `latest.json` manifest), compares its `version` field to the
+//      bundled app version.
+//   2. If newer, plugin downloads the signed installer, verifies the
+//      minisign signature against the public key baked into the binary
+//      (also in tauri.conf.json), then asks Windows to run it. The
+//      `installMode: "passive"` config shows a silent progress dialog
+//      and relaunches automatically.
+//
+// What you (the human) do per release:
+//   - Build the installer with the matching private key in your env
+//     (TAURI_SIGNING_PRIVATE_KEY_PATH=~/.tauri/media-hub.key).
+//   - Publish a GitHub Release with the .exe + a signed `latest.json`
+//     attached. See docs/NOTES.md "App auto-update release process"
+//     for the exact recipe.
+//
+// LOSING THE PRIVATE KEY = every existing install can never auto-update
+// again (they verify against a public key they won't match). Back it up.
+
+use tauri_plugin_updater::UpdaterExt;
+
+/// Status returned from `check_for_app_update`. Keeps the IPC surface
+/// JSON-friendly even though the plugin's own `Update` type isn't.
+#[derive(serde::Serialize)]
+pub struct AppUpdateStatus {
+    /// True when the server reports a newer version than the installed one.
+    pub available: bool,
+    /// Version string from the manifest. Always populated.
+    pub remote_version: String,
+    /// Currently installed app version (matches Cargo.toml / tauri.conf).
+    pub current_version: String,
+    /// Optional release notes body from the manifest.
+    pub notes: Option<String>,
+}
+
+/// One-shot "is there a newer build?" check. Cheap (single HTTP GET).
+/// Returns even when no update — caller can show "you're up to date."
+#[tauri::command]
+pub async fn check_for_app_update(app: AppHandle) -> Result<AppUpdateStatus, String> {
+    let current_version = app.package_info().version.to_string();
+    let updater = app
+        .updater()
+        .map_err(|e| format!("init updater: {e}"))?;
+    match updater.check().await {
+        Ok(Some(update)) => Ok(AppUpdateStatus {
+            available: true,
+            remote_version: update.version.clone(),
+            current_version,
+            notes: update.body.clone(),
+        }),
+        Ok(None) => Ok(AppUpdateStatus {
+            available: false,
+            remote_version: current_version.clone(),
+            current_version,
+            notes: None,
+        }),
+        Err(e) => Err(format!("update check failed: {e}")),
+    }
+}
+
+/// Download + install the latest update. After a successful run on
+/// Windows the installer relaunches the app automatically (we set
+/// `installMode: "passive"` in tauri.conf.json so the user sees a
+/// progress UI but doesn't have to click through wizard pages).
+///
+/// Returns the version that was installed so the UI can show a final
+/// "Updated to X — relaunching" message, though in practice the app
+/// is usually gone by the time JS would render that.
+#[tauri::command]
+pub async fn install_app_update(app: AppHandle) -> Result<String, String> {
+    let updater = app
+        .updater()
+        .map_err(|e| format!("init updater: {e}"))?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| format!("update check: {e}"))?
+        .ok_or_else(|| "no update available".to_string())?;
+    let version = update.version.clone();
+    // download_and_install handles signature verification + Windows
+    // launch internally. The two callbacks are for progress reporting;
+    // we ignore them for now (the plugin's own UI is enough at this
+    // stage; can wire a Tauri event later if we want a custom bar).
+    update
+        .download_and_install(|_chunk, _total| {}, || {})
+        .await
+        .map_err(|e| format!("download/install failed: {e}"))?;
+    Ok(version)
+}

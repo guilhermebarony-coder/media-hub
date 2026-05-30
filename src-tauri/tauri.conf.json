@@ -53,6 +53,15 @@
       "desktop": {
         "schemes": ["mediahub"]
       }
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZDNTdDRkRBNjcyMzc0MQpSV1JCTjNLbS9YekZCb0NONFRkQzNRamZYOWJaRVF3NzJQNU1tSGdmYzltcUtmVkx3ZDJQUm12bwo=",
+      "endpoints": [
+        "https://github.com/GUILHERME_GH_USERNAME/media-hub/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

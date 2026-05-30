@@ -2210,6 +2210,14 @@ pub fn run() {
         // gesture for both internal + external. See docs/NOTES.md
         // 2026-05-24 PM for the design write-up.
         .plugin(tauri_plugin_drag::init())
+        // 1.3.0 — App auto-updater. Verifies signed update bundles
+        // against the public key in tauri.conf.json (see
+        // `plugins.updater.pubkey`). The matching private key lives at
+        // ~/.tauri/media-hub.key on the build machine, NEVER in the
+        // repo. Endpoint hits GitHub Releases for latest.json. See the
+        // updater::check_for_app_update / install_app_update commands +
+        // docs/NOTES.md "release process" for the per-build steps.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // Open / create the library DB synchronously at startup so
             // the first command call doesn't race the pool initialization.
@@ -2363,6 +2371,8 @@ pub fn run() {
             settings::cookies_validate,
             updater::yt_dlp_update_now,
             updater::yt_dlp_engine_info,
+            updater::check_for_app_update,
+            updater::install_app_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

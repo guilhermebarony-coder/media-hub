@@ -991,6 +991,11 @@ function DiagnosticsSection() {
   const [engine, setEngine] = useState<EngineInfo | null>(null);
   const [updating, setUpdating] = useState(false);
   const [updateMsg, setUpdateMsg] = useState<string | null>(null);
+  // 1.3.0 — app auto-updater (distinct from the yt-dlp engine updater
+  // above). Checks GitHub Releases for a signed installer, downloads +
+  // installs + relaunches. See updater.rs for the backend wiring.
+  const [appUpdating, setAppUpdating] = useState(false);
+  const [appUpdateMsg, setAppUpdateMsg] = useState<string | null>(null);
 
   async function refresh() {
     setLoading(true);
@@ -1003,6 +1008,36 @@ function DiagnosticsSection() {
       setErr(String(e));
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Check + (optionally) install an app update from GitHub Releases.
+  // One button does both: first click checks; if there's an update,
+  // second click downloads + verifies + installs (app relaunches).
+  async function checkAndInstallAppUpdate() {
+    if (appUpdating) return;
+    setAppUpdating(true);
+    setAppUpdateMsg("Checking…");
+    try {
+      const status = await invoke<{
+        available: boolean;
+        remote_version: string;
+        current_version: string;
+        notes: string | null;
+      }>("check_for_app_update");
+      if (!status.available) {
+        setAppUpdateMsg(`Up to date (${status.current_version})`);
+      } else {
+        setAppUpdateMsg(
+          `Installing ${status.current_version} → ${status.remote_version}…`,
+        );
+        const installed = await invoke<string>("install_app_update");
+        setAppUpdateMsg(`Installed ${installed} — relaunching…`);
+      }
+    } catch (e) {
+      setAppUpdateMsg(`Update failed: ${String(e)}`);
+    } finally {
+      setAppUpdating(false);
     }
   }
 
@@ -1074,6 +1109,31 @@ function DiagnosticsSection() {
         <div className="msg-row">
           <span className="label">engine</span>
           <code>{updateMsg}</code>
+        </div>
+      )}
+
+      {/* 1.3.0 — app auto-updater. Single button: checks the GitHub
+          Releases manifest, and if there's a newer signed build,
+          downloads + verifies + installs (the installer relaunches the
+          app on success). */}
+      <div className="settings-row">
+        <span className="settings-label">Media Hub app</span>
+        <button
+          className="btn btn-secondary"
+          onClick={() => void checkAndInstallAppUpdate()}
+          disabled={appUpdating}
+        >
+          {appUpdating ? "Working…" : "Check for app updates"}
+        </button>
+      </div>
+      <p className="hint">
+        Updates the whole app to the latest signed release. The installer
+        verifies the signature, runs silently, then relaunches Media Hub.
+      </p>
+      {appUpdateMsg && (
+        <div className="msg-row">
+          <span className="label">app</span>
+          <code>{appUpdateMsg}</code>
         </div>
       )}
 

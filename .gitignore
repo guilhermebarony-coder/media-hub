@@ -37,3 +37,8 @@ src-tauri/target.lnk
 *.db
 *.db-shm
 *.db-wal
+
+# Tauri updater signing keys — NEVER commit. Real keys live at
+# ~/.tauri/media-hub.key{,.pub}. This catches accidental copies.
+*.key
+*.key.pub
