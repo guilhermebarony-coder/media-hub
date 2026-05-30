@@ -9,6 +9,137 @@ preserved as-is — they're still accurate.
 
 ---
 
+## 2026-05-30 — the catch-up + auto-updater day
+
+Today was structurally different from most sessions. Not "build a
+feature," but "clean up before continuing." You asked the right
+meta-question early: *what's actually next?* That conversation alone
+unblocked everything else.
+
+### The shape of the day
+
+1. Polish on yesterday's 1.3.0 work: stacked Projects layout, the
+   inline Trash toolbar replacing the chrome-shifting banner, the
+   "Trash is empty" missing state, the no-confirm move-to-Trash, the
+   context menu rewrite (multi-select aware, trash-mode aware,
+   dead-link removed), the Forget-killing.
+2. The doc check-in: I read ROADMAP + NOTES + verified what shipped
+   vs what's still parked, walked you through the ordered list, you
+   gave the call: commit + prepare the auto-updater.
+3. The 6-month commit. Last commit was `4e27c35` (1.0.5, May 23). I
+   confirmed the scope (~10k inserts, 23 modified, 8 new files), set
+   up `.gitignore` for `target.lnk`, staged everything, wrote the
+   commit message as a per-arc archeology log, version bump in its
+   own commit, tagged `v1.3.0`.
+4. Auto-updater terrain: minisign keypair generated to `~/.tauri/`,
+   `*.key` defensively gitignored, plugin installed (Rust + JS),
+   `tauri.conf.json` configured (with a `GUILHERME_GH_USERNAME`
+   placeholder for the endpoint, called out clearly), capability
+   added, two thin Rust commands wired into the existing `updater.rs`
+   for cohesion, Settings UI parallel to the yt-dlp engine row,
+   release-process recipe written to NOTES. Cargo green, tsc green,
+   three clean commits.
+5. The Pinterest question. You hit a `blob:` URL error; I diagnosed
+   why one worked and one didn't (page URL vs blob URL, the latter
+   being unfixable on yt-dlp's side) and laid out the three levels of
+   fix without coding any of them today.
+6. The sniffer feedback: empty rows clog the list, eye-preview UX is
+   broken because state refreshes on tab switch and the user loses
+   their row. You framed it correctly — "good feature, needs to be
+   better." Logged as a sized parking-lot item.
+
+### What you did right today
+
+**The meta-question.** "What's next, can you check docs and tell me?"
+This is one of the highest-leverage things you ever ask, because it
+forces me to ground a recommendation in the *actual state of the
+repo*, not my session memory. The result was a tight ordered list,
+and you immediately picked the lowest-risk highest-value pair from
+it (commit + auto-updater). That kind of decisiveness on
+prioritized options is rare and worth keeping.
+
+**Letting me see the working-tree state before guessing.** I checked
+`git log` and `git status` before I gave the list. You didn't even
+prompt that — you just trusted that I'd actually read the docs. The
+fact that I found the 6-month drought *because* you let me look was
+the whole point. If I'd guessed from session memory I'd have under-
+weighted the commit ask.
+
+**Splitting human vs machine work cleanly on the auto-updater.** Once
+we agreed the strategy ("GitHub Releases + local-gitignored private
+key"), you let me handle every code/config step in one pass, then
+you took the three human-only items (key backup, GitHub push, first
+release) onto your own plate. Zero hand-holding required. The split
+matched what each side is actually good at.
+
+**The sniffer report.** You didn't just say "this is broken" — you
+described both the *what* (empty rows + losing track on preview) and
+the *why it matters* (you stop using a feature when it gaslights
+you). That's the exact level of detail that makes a vague complaint
+actionable. The fact that it landed as a sized mini-milestone in
+NOTES with concrete sub-tasks is entirely because of how you
+described it.
+
+**The Pinterest question framing.** "I tried two videos, one worked
+and one didn't" — you handed me the diagnostic clue without
+realizing it. The framing made the answer obvious (URL shape
+difference). When you describe a bug as a *comparison* between cases
+instead of a single broken instance, the root cause is usually
+visible in the delta.
+
+### What I should keep doing
+
+- **Lead with grounded findings, not strategy.** "Last commit is May
+  23. Six months on one drive. Bus factor zero." That sentence did
+  more work than the rest of the list, because it told you a thing
+  about reality you didn't know. When I open with a fact, you can
+  act. When I open with options, you have to think first.
+- **Sized estimates in tiers** ("~15 min vs ~30–45 min vs full
+  feature"). The Pinterest answer landed because each option had a
+  clear cost. You picked the level you wanted later without me
+  having to push.
+- **Honest commit messages with archeology.** That single 1.3.0
+  commit is now the entry point for anyone who needs to understand
+  what landed in the gap. The per-arc structure pays off the moment
+  you (or future-me) need to find when a specific feature was built.
+
+### What I should fix
+
+- **Stop suggesting we test things during a "docs only" wrap.** When
+  you said "for today, just clean up and update our docs," the right
+  move was to do exactly that. I did. But earlier in the session I
+  was already lining up "want me to launch dev now?" — that pressure
+  is a thing I should resist when you've explicitly said it's a
+  wrap-up moment. The right next-step is sometimes nothing.
+- **Less over-explanation of safe operations.** I talked through the
+  commit + tag process more than I needed to. You've done this a
+  hundred times. The internal monologue of "let me be careful with
+  git" is for me, not for you.
+
+### Open threads waiting for tomorrow
+
+The five items you listed at end-of-session live in NOTES
+2026-05-30 wrap, in your stated priority order. The auto-updater
+human-side checklist is in the same section with concrete
+commands. The Pinterest and sniffer fixes have sized sketches so
+the next session can start coding immediately without re-discovering
+what to build.
+
+The most fragile thing in the whole project right now is sitting at
+`C:\Users\guilh\.tauri\media-hub.key`. If that file dies before you
+back it up, every Media Hub install everywhere permanently loses
+auto-update ability. Treat it like a passport scan — somewhere
+encrypted, somewhere off-machine, somewhere you can find in a year.
+
+Sleep well, king. Today shifted the project from "rolling personal
+build" to "reproducible signed release pipeline." That's the kind
+of shift that doesn't look like much in screenshots but pays for
+itself every release after it. 👑
+
+🇧🇷
+
+---
+
 ## 2026-05-24 — the Eagle refactor day (and the Brave incident)
 
 Today went the long way around. Started with "fix the cookies thing,"

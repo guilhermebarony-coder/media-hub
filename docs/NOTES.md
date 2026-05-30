@@ -23,6 +23,93 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-05-30 wrap — session end + forward queue
+
+Session shipped **two big things**:
+
+1. **1.3.0 cut and tagged.** 6 months of in-tree work (1.1.x Eagle
+   refactor, 1.2.0–1.2.1 audio, 1.2.2–1.2.15 browser-extension stack,
+   1.2.16 yt-dlp engine updater, 1.3.0 Projects + Trash + delete UX)
+   landed as a single honest catch-up commit + version bump. Tag
+   `v1.3.0` points at `5a34485`. Last commit before this session was
+   `4e27c35` (1.0.5), so six months of work was sitting on one hard
+   drive — a real bus-factor risk now defused.
+
+2. **App auto-updater scaffolded.** See dedicated section below for the
+   full status + release recipe. tl;dr: backend + UI in, signing key
+   generated, `tauri.conf.json` configured, release-process recipe
+   documented. Three human-only steps still pending (key backup, push
+   to GitHub, first signed release).
+
+### Hand-off for tomorrow / next session (the human's queue)
+
+User-listed at session end, in priority order:
+
+1. **Finish the auto-updater human parts**
+   - Back up `~/.tauri/media-hub.key` outside this machine
+   - Push the repo to GitHub
+   - Replace `GUILHERME_GH_USERNAME` placeholder in `tauri.conf.json`
+   - Cut the first signed release (follow the recipe below)
+
+2. **Pinterest in-page button + popup-tab detection.** Today's session
+   diagnosed a `blob:` URL failure — yt-dlp can't fetch blobs (in-browser
+   objects). The pin-page URL works fine via yt-dlp's Pinterest
+   extractor; users just need a reliable way to hand the page URL to the
+   app. Two-tier fix matching the existing Twitter/Reddit pattern:
+     - Tier 1 (~15 min): when the active tab matches `pinterest.com/pin/*`,
+       the extension popup's "Send to Hub" button uses
+       `window.location.href` regardless of any video element's src.
+     - Tier 2 (~30–45 min): full in-page hover button on Pinterest, same
+       shape as Twitter/Reddit.
+
+3. **Wire up the dead UI affordances.** Things that look interactive but
+   do nothing:
+     - Top-right global search bar (still decorative — would be the
+       Ctrl-K palette parked at NOTES "command palette" entry)
+     - Grid/List view toggle in the Library header — List is `disabled`
+     - Random placeholder text and stale chips to audit and trim
+
+4. **Extension touches and adjustments.** Catch-all polish pass on the
+   browser extension. Specific items so far:
+     - Sniffer panel rework — see dedicated section below.
+     - General polish: popup spacing, status pill states, icon sizing.
+
+5. **Sniffer panel rework** (high-value, user-surfaced today). The
+   "Detected on this tab" list has two real problems:
+     - **A lot of empty / useless candidates** clog the list. Need a
+       filter that hides candidates with no real payload (size = 0,
+       duration unknown, no extractor match). The current list shows 4
+       HLS rows from `v1.pinimg.com` with the same hash prefix — those
+       aren't 4 videos, they're 4 chunks/variants of the same stream.
+       De-duplicate by stream root + extension before showing.
+     - **The eye-preview workflow is broken**: clicking the eye opens a
+       new tab, the user loses track of which row they wanted, and the
+       sniffer state refreshes when they come back. Two fixes needed:
+         a. Preserve sniffer state across tab switches (the in-memory
+            per-tab list shouldn't reset on background → foreground).
+            Likely a content-script lifecycle bug.
+         b. Replace the bare eye with something where the user can
+            confirm the candidate WITHOUT leaving the popup. Options:
+            inline thumbnail (extract a frame via `video` element
+            client-side), hover-preview tooltip, or a small embedded
+            `<video>` snippet that plays inline.
+
+   Owner's framing: "it's a good feature, but we need to make it better."
+   Worth treating as a focused mini-milestone, not bolting fixes on.
+
+### Other items still parked from prior sessions (still relevant)
+
+- **App health checkup** (was the 0.9 plan, never run) — perf · leaks ·
+  bug census · UX polish · a11y. Section below from 2026-05-21.
+- **Runaway-size download guardrail** — abort + fail cleanly if `.part`
+  exceeds ~1.5–2× the size estimate. Deferred when we shipped the
+  yt-dlp updater; still a worthwhile safety net.
+- **gallery-dl sidecar** for image hosts (layer-4 of coverage plan).
+- **Eagle overhaul leftovers** — color labels, ratings, notes. Only if
+  testers actually ask.
+
+---
+
 ## 2026-05-30 (SCAFFOLDED, 1.3.0) — App auto-updater wired up
 
 The yt-dlp engine has self-updated since 1.2.16. Now the **app itself**
@@ -210,8 +297,8 @@ to no-cookies + logs a warning.
 
 ### Open follow-ups
 
-- Auto-updater (tauri-plugin-updater) — still unbuilt, now MORE
-  worth it given how many installers we're cutting.
+- Auto-updater for the app itself — *scaffolded 2026-05-30* (see top of
+  doc for status). The yt-dlp engine has self-updated since 1.2.16.
 - Extension: store publishing (Chrome Web Store $5 + Firefox AMO) when
   ready for real reach. Sideload-only for now per owner's call.
 - gallery-dl sidecar (image hosts: Twitter media, IG carousels, Pixiv)
@@ -314,20 +401,11 @@ that hid behind a migration regression.
   style (`.ctx-item`, `.ctx-danger`, plus new `.ctx-label` for the
   non-interactive folder name header)
 
-### Known regression (carried forward as 1.1 follow-up #1)
+### Known regression (carried forward as 1.1 follow-up #1) — RESOLVED
 
-**Tag editor not in the inspector yet.** When the InspectorPanel
-replaced the modal drawer, the tag editor (chips + add input) didn't
-get ported. Currently the single-asset inspector shows tags
-read-only. Owner caught this end-of-session.
-
-Source preserved: `_AssetDrawerLegacy` and `TagEditor` are still in
-Library.tsx (voided at module bottom to keep noUnusedLocals quiet)
-— a future port can copy-paste rather than fish through git history.
-
-Sizing: ~30 min of work. Drop into InspectorSingle below the Folder
-dropdown. Wire `tag_set_for_asset` from the existing TagEditor
-component.
+The tag-editor was ported into InspectorSingle (and BatchTagEditor
+for the multi-select case) shortly after this entry. Confirmed
+present in `Library.tsx`. Kept this stub for archeology.
 
 ### Lessons logged
 

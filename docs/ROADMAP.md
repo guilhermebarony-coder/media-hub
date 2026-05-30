@@ -56,7 +56,41 @@ Decided 2026-05-19. Captured here because *why* matters more than *what*.
 
 ---
 
-## Current state — 2026-05-21 (end-of-day, post 0.8.D)
+## Current state — 2026-05-30 (post 1.3.0 + auto-updater scaffolded)
+
+**The original 1.0 plan is moot — the app shipped past it.**
+We never cut a formal 1.0; the project flowed past 0.8 → 1.0 → 1.1 → 1.2
+→ 1.3.0 as a rolling release to a small tester circle. Daily-usable
+since ~1.1, with tester-shipped builds at 1.0.x and 1.2.15. Today the
+6-month working-tree drought ended: `v1.3.0` tagged at `5a34485`.
+
+What's live right now:
+- Library: multi-select + box-drag, folders sidebar, always-on inspector,
+  filter/tag/sort popups, drag-to-NLE, missing-file flagging, in-app
+  trash with restore.
+- Projects: custom on-disk folder location, master/detail UX,
+  Close vs Delete with custom-folder safety.
+- Audio downloads (MP3 / M4A / FLAC) + waveform thumbnails.
+- Browser extension: localhost bridge, deep-link `mediahub://`,
+  MV3 popup + stream sniffer + in-page buttons on Twitter/Reddit.
+- yt-dlp engine auto-updater (silent, 24h-throttled, nightly channel).
+- App auto-updater **scaffolded** (signed key + plugin + UI in tree;
+  needs first GitHub Release to be useful — see NOTES 2026-05-30).
+
+What's parked for the next session(s):
+- Pinterest support (popup-aware page URL + in-page button) — *blob URL
+  diagnosis logged in NOTES*.
+- Sniffer panel rework (filter empties / dedupe streams / preserve
+  state across tab switches / inline preview).
+- Wire up the dead UI affordances (top-bar search, Grid/List toggle,
+  copy audit).
+- App health checkup (was 0.9 plan) — still owed before 2.0.
+
+The "Path to 1.0" table below is HISTORICAL — keeping it for archeology.
+
+---
+
+## Historical: Current state — 2026-05-21 (end-of-day, post 0.8.D)
 
 Four days in. **0.1 → 0.8 complete end-to-end.** ~45 commits on `main`.
 
@@ -747,6 +781,46 @@ Anything more speculative than this belongs in `docs/NOTES.md` under
 ## Decision log
 
 Newest first. Every entry: what we decided, when, and *why*.
+
+### 2026-05-30 — 1.3.0 cut + app auto-updater scaffolded (catch-up commit)
+
+**Two big things.** First, the working-tree drought ended: every commit
+since `4e27c35` (1.0.5) was just sitting untracked. Captured as one
+honest catch-up commit (`e7838c0`) — version bump + `v1.3.0` tag follow.
+Second, scaffolded `tauri-plugin-updater` for app self-update so testers
+stop needing to walk through reinstalls per patch.
+
+What landed under the 1.3.0 catch-up:
+- **1.1.x Eagle library refactor** (multi-select, folders sidebar,
+  filter/tag/sort popups, always-on inspector, drag-to-NLE)
+- **1.2.0–1.2.1** audio downloads (MP3/M4A/FLAC + waveform thumbs)
+- **1.2.2–1.2.15** browser-extension stack (localhost axum bridge,
+  `mediahub://` deep link, MV3 popup + stream sniffer, Twitter/Reddit
+  in-page buttons — Instagram pulled as click-locked)
+- **1.2.16** yt-dlp engine auto-updater (silent, 24h-throttled, prefers
+  managed nightly in `%APPDATA%`)
+- **1.3.0** Projects rewrite (custom on-disk folder, master/detail
+  layout, Close vs Delete with safety for custom folders) +
+  missing-file flagging + in-app trash (`_trash/` with restore) +
+  delete UX cleanup (dropped the Forget concept entirely, no confirms
+  on move-to-Trash)
+
+App auto-updater specifics:
+- Signing keypair generated at `~/.tauri/media-hub.key{,.pub}`.
+- Public key in `tauri.conf.json -> plugins.updater.pubkey`. Endpoint
+  set to GitHub Releases `latest/download/latest.json` with a
+  `GUILHERME_GH_USERNAME` placeholder pending the repo move.
+- `tauri-plugin-updater` registered; `check_for_app_update` +
+  `install_app_update` Rust commands; Settings → Diagnostics gets a
+  "Check for app updates" button parallel to the yt-dlp engine one.
+- Release recipe documented in NOTES.md 2026-05-30 section.
+- Outstanding (human only): key backup, GitHub push + placeholder
+  swap, first signed release.
+
+Why this shape: the yt-dlp engine updater (1.2.16) proved the
+"self-healing binary" pattern works in practice. Extending it to the
+whole app means a one-click ship from us → testers' machines without
+any manual reinstall friction. Bigger wins per session as a result.
 
 ### 2026-05-27 — 1.2.0 → 1.2.15: Audio downloads + the browser-extension stack (SHIPPED to testers)
 
