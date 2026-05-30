@@ -83,6 +83,13 @@ export const Icon = {
       <path d="M2.5 3v3h3" />
     </svg>
   ),
+  trash: (p: P = {}) => (
+    <svg viewBox="0 0 16 16" {...base} {...p}>
+      <path d="M3 4h10M6 4V2.5a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 .5.5V4" />
+      <path d="M4 4l.7 9a1 1 0 0 0 1 1h4.6a1 1 0 0 0 1-1L12 4" />
+      <path d="M7 7v4M9 7v4" />
+    </svg>
+  ),
   folder: (p: P = {}) => (
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinejoin="round" {...p}>
       <path d="M2 5a1 1 0 0 1 1-1h3l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5z" />
@@ -108,6 +115,21 @@ export const Icon = {
   twitter: (p: P = {}) => (
     <svg viewBox="0 0 16 16" fill="currentColor" {...p}>
       <path d="M11.7 2H14l-4.8 5.5L14.5 14H10l-3.5-4.4L2.5 14H.2l5.2-6L.5 2h4.6l3.1 4zM11 12.7h1.3L4.5 3.2H3.1z" />
+    </svg>
+  ),
+  // 1.2.0 — video + audio tab icons. Minimal "film strip" and
+  // "music note" so the Video|Audio mode tabs are scannable at a glance.
+  video: (p: P = {}) => (
+    <svg viewBox="0 0 16 16" {...base} {...p}>
+      <rect x="1.5" y="3.5" width="13" height="9" rx="1" />
+      <path d="M1.5 6h13M1.5 10h13M5 3.5v9M11 3.5v9" />
+    </svg>
+  ),
+  music: (p: P = {}) => (
+    <svg viewBox="0 0 16 16" {...base} {...p}>
+      <path d="M6 12V3l7-1v8" />
+      <circle cx="4.5" cy="12" r="1.8" fill="currentColor" stroke="none" />
+      <circle cx="11.5" cy="10" r="1.8" fill="currentColor" stroke="none" />
     </svg>
   ),
 };

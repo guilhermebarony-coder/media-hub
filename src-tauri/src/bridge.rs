@@ -1,0 +1,269 @@
+// Media Hub — Browser-extension bridge (1.2.2).
+//
+// Tiny HTTP server bound to 127.0.0.1 that the Media Hub browser
+// extension (and any `curl` script) hits to enqueue downloads.
+//
+// Design choices:
+//   - Loopback-only bind. Never exposed to the network. The Windows
+//     firewall doesn't even need a rule for 127.0.0.1 listeners.
+//   - Bearer token auth. The token is generated on first launch and
+//     stored in settings.json. The extension prompts the user to paste
+//     it once on install; after that it's just a header.
+//   - CORS allows any `chrome-extension://`, `moz-extension://`, and
+//     `null` (file:// + extension service workers). Tight enough that a
+//     drive-by website can't POST from a normal page.
+//   - The server doesn't directly touch the React queue. It emits a
+//     Tauri event `bridge:enqueue` — the frontend listens and routes
+//     through the existing DownloadsProvider.enqueueUrls. This keeps
+//     all the queue/persist/worker logic in one place and means the
+//     bridge could be unit-tested in isolation later.
+//
+// Routes:
+//   GET  /health  — no auth. Returns app version + a tiny shape the
+//                   extension uses to verify a port is the right app.
+//   POST /enqueue — auth required. Body: { url, audio_format?,
+//                   project_id? }. Emits `bridge:enqueue` with the
+//                   normalized payload, returns 202 immediately.
+//   OPTIONS *     — handled by the CORS layer.
+//
+// Failure modes:
+//   - Port collision → log + exit the bridge task. The app keeps
+//     running, just no extension support until the user changes the
+//     port in Settings. Future: try a small range of ports.
+//   - Token mismatch → 401. We don't leak whether the token shape was
+//     right (deliberate; "is X a valid token?" is not a probe we want
+//     to answer).
+
+use axum::{
+    extract::State,
+    http::{HeaderMap, HeaderValue, Method, StatusCode},
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
+use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter};
+use tower_http::cors::{AllowOrigin, CorsLayer};
+
+/// Snapshot of the data the bridge needs from settings. Cloned at
+/// spawn time so the long-lived axum handlers don't have to take the
+/// settings mutex on every request. If the user regenerates the token
+/// or changes the port, we restart the server (TODO future polish —
+/// for MVP, the user just relaunches).
+#[derive(Clone)]
+struct BridgeState {
+    app: AppHandle,
+    token: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct EnqueueBody {
+    /// URL to download. Required.
+    url: String,
+    /// Optional — when set ("mp3"/"m4a"/"flac"), enqueues as audio.
+    #[serde(default)]
+    audio_format: Option<String>,
+    /// Optional — when set, downloads land in that project's folder
+    /// instead of the library root. Same id shape as the active
+    /// project picker uses.
+    #[serde(default)]
+    project_id: Option<String>,
+    /// Optional — cosmetic, for future logging ("queued via Chrome
+    /// extension" etc.). Defaults to "extension" when omitted.
+    #[serde(default)]
+    source: Option<String>,
+}
+
+/// Event payload the frontend listens for. Mirrors `enqueueUrls`'s
+/// shape in downloads.tsx but transport-agnostic — we forward only
+/// what the bridge accepts, no transcode preset (extension flows
+/// always use the user's default from Settings).
+#[derive(Serialize, Clone, Debug)]
+struct EnqueueEvent {
+    url: String,
+    audio_format: Option<String>,
+    project_id: Option<String>,
+    source: String,
+}
+
+#[derive(Serialize)]
+struct HealthResponse {
+    ok: bool,
+    app: &'static str,
+    version: &'static str,
+}
+
+#[derive(Serialize)]
+struct EnqueueResponse {
+    ok: bool,
+}
+
+#[derive(Serialize)]
+struct ErrorResponse {
+    ok: bool,
+    error: String,
+}
+
+/// Tiny constant-time comparison so timing attacks can't reveal a
+/// prefix match. Both inputs are hex strings of the same expected
+/// length but we tolerate length mismatch.
+fn token_matches(provided: &str, expected: &str) -> bool {
+    if provided.len() != expected.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (a, b) in provided.bytes().zip(expected.bytes()) {
+        diff |= a ^ b;
+    }
+    diff == 0
+}
+
+/// Pull the bearer token from `Authorization: Bearer <token>`. Returns
+/// None when missing or malformed (caller responds 401).
+fn extract_bearer(headers: &HeaderMap) -> Option<&str> {
+    let auth = headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
+    auth.strip_prefix("Bearer ").map(str::trim)
+}
+
+async fn health_handler() -> impl IntoResponse {
+    Json(HealthResponse {
+        ok: true,
+        app: "media-hub",
+        version: env!("CARGO_PKG_VERSION"),
+    })
+}
+
+async fn enqueue_handler(
+    State(state): State<Arc<BridgeState>>,
+    headers: HeaderMap,
+    Json(body): Json<EnqueueBody>,
+) -> Result<(StatusCode, Json<EnqueueResponse>), (StatusCode, Json<ErrorResponse>)> {
+    // Auth.
+    let provided = extract_bearer(&headers).unwrap_or("");
+    if !token_matches(provided, &state.token) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse {
+                ok: false,
+                error: "invalid token".into(),
+            }),
+        ));
+    }
+
+    // Validate URL — just a presence + length sanity check. We don't
+    // try to verify it's a known platform; yt-dlp's site detection is
+    // the source of truth and runs anyway during the actual fetch.
+    let url = body.url.trim().to_string();
+    if url.is_empty() || url.len() > 2048 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                ok: false,
+                error: "url is empty or too long".into(),
+            }),
+        ));
+    }
+
+    // Validate audio_format against the same allowlist yt_download
+    // enforces. Defensive — the renderer also validates — but never
+    // trust input crossing a process boundary.
+    let audio_format = body
+        .audio_format
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| matches!(*s, "mp3" | "m4a" | "flac"))
+        .map(|s| s.to_string());
+
+    let payload = EnqueueEvent {
+        url,
+        audio_format,
+        project_id: body.project_id,
+        source: body.source.unwrap_or_else(|| "extension".to_string()),
+    };
+
+    // Fire to the renderer. If the emit fails the queue isn't going
+    // to receive it — return 500 so the extension can show a real
+    // error instead of silently dropping the request.
+    if let Err(e) = state.app.emit("bridge:enqueue", payload) {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                ok: false,
+                error: format!("emit failed: {e}"),
+            }),
+        ));
+    }
+
+    // 202 Accepted — the queue might take seconds to actually fetch
+    // metadata + start the download, and we've fired the event but
+    // not waited. Semantically accurate.
+    Ok((StatusCode::ACCEPTED, Json(EnqueueResponse { ok: true })))
+}
+
+/// Build the axum router. Pulled out so we could test it standalone
+/// without spinning a real TCP listener.
+fn build_app(state: Arc<BridgeState>) -> Router {
+    // CORS: allow the extension origins + null. Predicate-based
+    // because chrome-extension:// has the extension id baked in
+    // (different per install) so we can't enumerate origins. The
+    // predicate only allows the scheme.
+    let cors = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::CONTENT_TYPE,
+        ])
+        .allow_origin(AllowOrigin::predicate(
+            |origin: &HeaderValue, _req_parts: &_| {
+                let Ok(s) = origin.to_str() else { return false };
+                s == "null"
+                    || s.starts_with("chrome-extension://")
+                    || s.starts_with("moz-extension://")
+                    || s.starts_with("safari-web-extension://")
+            },
+        ));
+
+    Router::new()
+        .route("/health", get(health_handler))
+        .route("/enqueue", post(enqueue_handler))
+        .with_state(state)
+        .layer(cors)
+}
+
+/// Spawn the HTTP server on a tokio task. Returns immediately —
+/// errors during bind are logged but don't fail the app startup
+/// (the rest of Media Hub works fine without the bridge).
+pub fn spawn(app: AppHandle, token: String, port: u16) {
+    let state = Arc::new(BridgeState {
+        app: app.clone(),
+        token,
+    });
+    let router = build_app(state);
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+
+    // Use Tauri's managed async runtime instead of `tokio::spawn`.
+    // `setup()` runs before any tokio runtime is active on the
+    // current thread, so a bare `tokio::spawn` panics with "no
+    // reactor running" (observed 1.2.2 first launch). Tauri's
+    // `async_runtime::spawn` runs the future on Tauri's internal
+    // multi-threaded tokio runtime — same primitives, just hosted
+    // by Tauri so it's alive whenever the app is.
+    tauri::async_runtime::spawn(async move {
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => {
+                eprintln!("[bridge] listening on http://{}", addr);
+                if let Err(e) = axum::serve(listener, router).await {
+                    eprintln!("[bridge] server error: {e}");
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "[bridge] could not bind {}: {} — extension support disabled this session",
+                    addr, e
+                );
+            }
+        }
+    });
+}

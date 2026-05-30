@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Icon } from "../lib/icons";
 import {
   fmtBytes,
@@ -8,36 +7,45 @@ import {
   fmtEta,
   fmtUploadDate,
   parseTimestamp,
-  extFromPath,
 } from "../lib/format";
-import {
-  attachLocalThumbnail,
-  audioCodecFor,
-  recordInLibrary,
-  revealFile,
-  videoCodecFor,
-} from "../lib/library";
+import { revealFile } from "../lib/library";
 import { useActiveProject } from "../lib/activeProject";
 import { useSettings } from "../lib/settings";
+import {
+  useDownloads,
+  type QueueJob,
+  type QueueStatus,
+  type AudioFormat,
+} from "../lib/downloads";
 import { Scrubber } from "../components/Scrubber";
 import type {
-  DownloadResult,
   DuplicateMatch,
   FormatOption,
-  ProgressEvent,
   Segment,
   TranscodePreset,
-  TranscodeProgress,
-  TranscodeResult,
   VideoMetadata,
 } from "../lib/types";
 import { TRANSCODE_PRESETS } from "../lib/types";
 
-// 1.0.1: sentinel job_id used by the single-URL panel. There's only
-// ever one active single-URL download at a time, so a fixed string is
-// fine — it's also distinguishable from queue job ids ("job-…")
-// which keeps the registry self-explanatory in any log output.
-const SINGLE_URL_JOB_ID = "single-url";
+// 1.1 — cross-card event for handing playlist entries to the queue.
+// MetadataCard's playlist picker dispatches; QueueCard listens and
+// appends jobs. Window event = zero plumbing through component
+// boundaries, no shared state to keep in sync. Both lifecycles
+// (mount/unmount) are tied to the Download page so no leak risk.
+const QUEUE_ENQUEUE_EVENT = "mh:queue:enqueue";
+type QueueEnqueueDetail = {
+  urls: string[];
+  /** Project to capture for each enqueued job. Snapshotted at enqueue
+   *  time (same rule as the textarea path) — switching scope mid-batch
+   *  doesn't reroute jobs already in the queue. */
+  projectId: string | null;
+  /** Cosmetic only — labels the toast/log if we add one. */
+  source?: string;
+};
+
+// 1.1.3 — SINGLE_URL_JOB_ID lives in lib/downloads.tsx now. This file
+// no longer needs to reference it directly (cancel goes through the
+// context's cancelSingleDownload, progress is filtered there too).
 
 // =====================================================================
 // Page wrapper
@@ -153,6 +161,100 @@ function detectPlatform(url: string): string {
   return "youtube";
 }
 
+/**
+ * 1.1 — Classify a YouTube URL by what the user probably meant.
+ *
+ * Critical UX rule: a `/watch?v=X&list=Y` URL means "I clicked a video
+ * that happens to be in a playlist." The user almost always wants just
+ * X. We treat it as `watch_with_list` so the default flow is single-
+ * video, but we surface a chip ("expand to playlist of N videos?") so
+ * the user can opt in when they actually want the whole list.
+ *
+ * `/playlist?list=Y` means "I clicked through to the playlist page" —
+ * here the playlist IS the intent, so we default to picker mode.
+ *
+ * Channel URLs (`/@channel/videos`, `/c/.../videos`, `/channel/.../videos`)
+ * are effectively unbounded; refuse with a helpful message rather than
+ * accidentally enumerating thousands of videos.
+ */
+// 1.1 — shapes returned by the Rust yt_fetch_playlist command.
+type PlaylistEntry = {
+  id: string;
+  title: string;
+  channel: string | null;
+  duration_sec: number | null;
+  thumbnail: string | null;
+  url: string;
+  unavailable: boolean;
+};
+type PlaylistInfo = {
+  id: string;
+  title: string;
+  uploader: string | null;
+  entry_count: number;
+  entries: PlaylistEntry[];
+  truncated: boolean;
+};
+
+type YouTubeUrlKind =
+  | "single"           // /watch?v=X, /shorts/X, youtu.be/X — no list param
+  | "watch_with_list"  // /watch?v=X&list=Y — single by default, expandable
+  | "pure_playlist"    // /playlist?list=Y — picker by default
+  | "channel"          // unbounded, refuse
+  | "unknown";         // not a recognizable YT URL
+
+function classifyYouTubeUrl(url: string): YouTubeUrlKind {
+  const t = url.trim();
+  if (!t) return "unknown";
+  let u: URL;
+  try {
+    u = new URL(t);
+  } catch {
+    return "unknown";
+  }
+  const host = u.hostname.toLowerCase();
+  if (
+    !host.endsWith("youtube.com") &&
+    !host.endsWith("youtu.be") &&
+    !host.endsWith("youtube-nocookie.com")
+  ) {
+    return "unknown";
+  }
+  const path = u.pathname.toLowerCase();
+  const params = u.searchParams;
+
+  // Channel: /@handle/videos, /c/Name/videos, /channel/UC.../videos,
+  // /user/Name/videos. Also bare channel home URLs.
+  if (
+    /^\/@[^/]+(\/|$)/.test(path) ||
+    /^\/c\/[^/]+/.test(path) ||
+    /^\/channel\/[^/]+/.test(path) ||
+    /^\/user\/[^/]+/.test(path)
+  ) {
+    return "channel";
+  }
+
+  if (path === "/playlist" && params.has("list")) {
+    return "pure_playlist";
+  }
+
+  if (path === "/watch" && params.has("v")) {
+    return params.has("list") ? "watch_with_list" : "single";
+  }
+
+  // youtu.be/ID
+  if (host.endsWith("youtu.be") && /^\/[A-Za-z0-9_-]{6,}$/.test(path)) {
+    return params.has("list") ? "watch_with_list" : "single";
+  }
+
+  // /shorts/ID
+  if (/^\/shorts\/[A-Za-z0-9_-]+/.test(path)) {
+    return "single";
+  }
+
+  return "unknown";
+}
+
 function useLibraryOverride(): boolean {
   const [held, setHeld] = useState(false);
   useEffect(() => {
@@ -174,6 +276,15 @@ function useLibraryOverride(): boolean {
   }, []);
   return held;
 }
+
+/** 1.2.0 — Audio format card metadata. Server-side bitrate defaults
+ *  (see lib.rs yt_download audio mode); displayed here purely for the
+ *  user's workflow decision ("which app/device am I feeding?"). */
+const AUDIO_FORMAT_META: Record<AudioFormat, { hint: string; specs: string }> = {
+  mp3: { hint: "Universal compatibility", specs: "320 kbps CBR" },
+  m4a: { hint: "Apple ecosystem friendly", specs: "AAC 256 kbps" },
+  flac: { hint: "Lossless archival", specs: "lossless · larger files" },
+};
 
 function MetadataCard() {
   const { scope } = useActiveProject();
@@ -211,14 +322,30 @@ function MetadataCard() {
   const [duplicate, setDuplicate] = useState<DuplicateMatch | null>(null);
 
   const [selectedFormat, setSelectedFormat] = useState<FormatOption | null>(null);
-  const [downloading, setDownloading] = useState(false);
-  const [dlErr, setDlErr] = useState<string | null>(null);
-  const [dlResult, setDlResult] = useState<DownloadResult | null>(null);
-  const [progress, setProgress] = useState<ProgressEvent | null>(null);
+  // 1.2.0 — Video | Audio mode tabs. Audio mode swaps the format
+  // picker for three big buttons (MP3 / M4A / FLAC), forces
+  // transcode preset to "none" (irrelevant for audio), and skips
+  // pickedFormat entirely on submit (Rust picks bestaudio).
+  const [downloadMode, setDownloadMode] = useState<"video" | "audio">("video");
+  const [audioFormat, setAudioFormat] = useState<AudioFormat>("mp3");
+  // 1.1.3 — downloading/dlErr/dlResult/progress/transcodeProgress/phase/
+  // downloadedPaths now live in DownloadsContext (see useDownloads()
+  // call below). The `submitting` local exists only to gate the form's
+  // double-click between user click and the context state actually
+  // updating (one render tick).
+  const [submitting, setSubmitting] = useState(false);
   // 0.6.1: list of segments to trim from the single source download.
   // Empty = full video. N = N independent clip files on disk after
   // ffmpeg trims. The scrubber drives this entirely.
   const [segments, setSegments] = useState<Segment[]>([]);
+  // 1.1 — playlist mode state. `kind` mirrors what classifyYouTubeUrl
+  // returned for the current URL; `playlist` is the enumeration result
+  // when we've fetched one; `playlistLoading` covers the spinner.
+  // null kind means we haven't classified yet (empty input).
+  const [urlKind, setUrlKind] = useState<YouTubeUrlKind | null>(null);
+  const [playlist, setPlaylist] = useState<PlaylistInfo | null>(null);
+  const [playlistLoading, setPlaylistLoading] = useState(false);
+  const [playlistErr, setPlaylistErr] = useState<string | null>(null);
   // Manual text-entry mode — when the scrubber's stream fails (age-
   // gated, region-locked, etc.) or the user wants exact-second
   // precision. Currently single-segment only; for multi-segment
@@ -226,9 +353,11 @@ function MetadataCard() {
   const [manualMode, setManualMode] = useState(false);
   const [inStr, setInStr] = useState("");
   const [outStr, setOutStr] = useState("");
-  // Track the last batch of completed asset paths so the "downloaded"
-  // success message can list them.
-  const [downloadedPaths, setDownloadedPaths] = useState<string[]>([]);
+  // 1.1.3 — downloadedPaths now lives in singleDownload.
+  // Client-side validation errors (bad timestamps, etc.) shown before
+  // a download even starts. Cleared on next attempt or URL change.
+  // These never reach the provider — they're purely form errors.
+  const [validationErr, setValidationErr] = useState<string | null>(null);
 
   // Initial preset comes from settings; user can still override per-
   // download. We sync on first ready (settings is async) so the
@@ -244,66 +373,90 @@ function MetadataCard() {
       presetInitialized.current = true;
     }
   }, [settings.default_transcode_preset]);
-  const [transcodeProgress, setTranscodeProgress] = useState<TranscodeProgress | null>(null);
-  const [phase, setPhase] = useState<"idle" | "downloading" | "transcoding">("idle");
+  // 1.1.3 — single-URL download state moved to DownloadsContext so it
+  // survives route navigation. Local names below are projections off
+  // singleDownload for render compatibility; setters are gone (the
+  // download() function calls into the provider's startSingleDownload
+  // and the provider drives the state from there).
+  const {
+    singleDownload,
+    startSingleDownload,
+    cancelSingleDownload,
+    resetSingleDownload,
+  } = useDownloads();
+  const progress = singleDownload?.progress ?? null;
+  const transcodeProgress = singleDownload?.transcodeProgress ?? null;
+  const phase: "idle" | "downloading" | "transcoding" =
+    singleDownload?.phase ?? "idle";
+  // Combine form-side validation errors with download errors so the
+  // existing single error-row UI keeps working without a second render
+  // branch. Validation errors take precedence (they're newer).
+  const dlErr = validationErr ?? singleDownload?.error ?? null;
+  const dlResult = singleDownload?.result ?? null;
+  const downloadedPaths = singleDownload?.downloadedPaths ?? [];
+  // `downloading` was previously a local useState; now derived from
+  // phase. `submitting` covers the click-to-state-update tick.
+  const downloading = submitting || phase !== "idle";
 
-  // Single-URL flow listens for its own job_id (SINGLE_URL_JOB_ID) and
-  // anything untagged (back-compat with media_transcode which is still
-  // called with jobId: null from this panel). Batch events use their
-  // own job_id and route to QueueCard's listener — QueueCard matches
-  // by exact id, so there's no cross-flow leakage.
-  //
-  // 1.0.1 regression note: this used to be `if (e.payload.job_id) return;`,
-  // which broke the single-URL progress bar the moment we started
-  // tagging single-URL events with "single-url" so the Cancel button
-  // could find the right child process. Be careful editing this filter.
+  // 1.1 — keep urlKind in sync with the input. Classification is
+  // cheap (regex + URL parse), no debounce needed. Cleared playlist
+  // state when the URL changes so a stale picker doesn't leak across
+  // pastes. We don't auto-clear `meta` here — that's the metadata
+  // fetch's job, and clearing it eagerly would flicker the existing
+  // card off-screen as the user types in the next URL.
   useEffect(() => {
-    let unlistenDl: UnlistenFn | null = null;
-    let unlistenTx: UnlistenFn | null = null;
-    listen<ProgressEvent>("download:progress", (e) => {
-      const jid = e.payload.job_id;
-      if (jid && jid !== SINGLE_URL_JOB_ID) return;
-      setProgress(e.payload);
-    }).then((fn) => {
-      unlistenDl = fn;
-    });
-    listen<TranscodeProgress>("transcode:progress", (e) => {
-      const jid = e.payload.job_id;
-      if (jid && jid !== SINGLE_URL_JOB_ID) return;
-      setTranscodeProgress(e.payload);
-    }).then((fn) => {
-      unlistenTx = fn;
-    });
-    return () => {
-      unlistenDl?.();
-      unlistenTx?.();
-    };
-  }, []);
+    const trimmed = url.trim();
+    if (!trimmed) {
+      setUrlKind(null);
+      setPlaylist(null);
+      setPlaylistErr(null);
+      return;
+    }
+    const kind = classifyYouTubeUrl(trimmed);
+    setUrlKind(kind);
+    // When user starts typing a new URL, drop any previous playlist
+    // enumeration. Auto-fetch below will refresh if needed.
+    setPlaylist(null);
+    setPlaylistErr(null);
+  }, [url]);
 
-  // Auto-fetch on paste (0.9 UX win #5). When the URL input changes
-  // and the value LOOKS like a video URL we recognize, fire
-  // fetchMetadata automatically after a 350ms debounce. Skips when:
+  // Auto-fetch on paste (0.9 UX win #5 + 1.1 playlist routing). When
+  // the URL input changes and looks like something we can act on, fire
+  // the appropriate fetch after a 350ms debounce:
+  //   - "single" / "watch_with_list" / unknown-but-video → metadata
+  //   - "pure_playlist" → playlist enumeration (picker mode)
+  //   - "channel" → no auto-fetch; the UI shows a refusal chip instead
+  //
+  // The watch_with_list case still defaults to single-video metadata
+  // (user-intent rule: clicking a video in a playlist context usually
+  // means "I want this one video"). The "expand to playlist of N"
+  // chip is the explicit opt-in.
+  //
+  // Skips when:
   //   - already loading (avoid concurrent fetches)
   //   - same URL we already auto-fetched (no re-fire on edit-and-revert)
-  //   - URL doesn't match a known platform pattern (conservative)
-  // Manual Fetch button still works for the rare edge case where
-  // we don't detect the platform.
   useEffect(() => {
     const trimmed = url.trim();
     if (!trimmed) return;
-    if (loading) return;
+    if (loading || playlistLoading) return;
     if (autoFetchedUrlRef.current === trimmed) return;
-    if (!isLikelyVideoUrl(trimmed)) return;
+    const kind = urlKind ?? classifyYouTubeUrl(trimmed);
+    // Channel URLs never auto-fetch — the inline refusal chip is the
+    // entire UX. Unknown URLs that don't even pattern-match a video
+    // shape (e.g. partial paste) also skip.
+    if (kind === "channel") return;
+    if (kind === "unknown" && !isLikelyVideoUrl(trimmed)) return;
     const handle = setTimeout(() => {
       autoFetchedUrlRef.current = trimmed;
-      void fetchMetadata();
+      if (kind === "pure_playlist") {
+        void fetchPlaylist();
+      } else {
+        void fetchMetadata();
+      }
     }, 350);
     return () => clearTimeout(handle);
-    // We intentionally only depend on `url`. Re-creating the effect
-    // on every fetchMetadata identity churn would cause it to fire
-    // on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url]);
+  }, [url, urlKind]);
 
   async function fetchMetadata(e?: FormEvent) {
     e?.preventDefault();
@@ -316,13 +469,14 @@ function MetadataCard() {
     setMeta(null);
     setShowFormats(true);
     setSelectedFormat(null);
-    setDlResult(null);
-    setDlErr(null);
+    // 1.1.3 — clear any prior single-URL download result so the success
+    // panel from the previous download doesn't linger when fetching
+    // metadata for a new URL.
+    resetSingleDownload();
     setDuplicate(null);
     setSegments([]);
     setInStr("");
     setOutStr("");
-    setDownloadedPaths([]);
     try {
       // Run metadata fetch and dupe check in parallel — both are
       // network/IO so doing them sequentially would slow the UI
@@ -358,6 +512,44 @@ function MetadataCard() {
     }
   }
 
+  // 1.1 — fetch playlist entries. Triggered both by the auto-fetch
+  // effect (when the URL is a pure_playlist) and by the
+  // "expand to playlist" chip on watch_with_list URLs. Independent of
+  // fetchMetadata — they can co-exist when the user is on a
+  // watch+list URL and explicitly expanded.
+  async function fetchPlaylist() {
+    if (!url.trim()) return;
+    autoFetchedUrlRef.current = url.trim();
+    setPlaylistLoading(true);
+    setPlaylistErr(null);
+    setPlaylist(null);
+    try {
+      const out = await invoke<PlaylistInfo>("yt_fetch_playlist", { url });
+      setPlaylist(out);
+    } catch (e) {
+      setPlaylistErr(String(e));
+    } finally {
+      setPlaylistLoading(false);
+    }
+  }
+
+  // 1.1 — enqueue handler called from the playlist picker. Dispatches
+  // a window event the queue listens for; snapshot the active project
+  // scope here so the jobs route the same way the textarea path does.
+  function enqueuePlaylistEntries(entries: PlaylistEntry[]) {
+    if (entries.length === 0) return;
+    const projectId =
+      !overrideLibrary && scope.kind === "project" ? scope.id : null;
+    const detail: QueueEnqueueDetail = {
+      urls: entries.map((e) => e.url),
+      projectId,
+      source: playlist?.title,
+    };
+    window.dispatchEvent(
+      new CustomEvent<QueueEnqueueDetail>(QUEUE_ENQUEUE_EVENT, { detail }),
+    );
+  }
+
   // Compose `-f` spec — video-only picks auto-promote to <id>+bestaudio
   // with container hygiene (MP4 → MP4, WebM → WebM, else MKV).
   function composeFormatSpec(f: FormatOption): { spec: string; mergeContainer: string | null } {
@@ -368,8 +560,15 @@ function MetadataCard() {
   }
 
   async function download() {
-    if (!selectedFormat || !url.trim()) return;
-    const { spec, mergeContainer } = composeFormatSpec(selectedFormat);
+    if (!url.trim() || !meta) return;
+    // 1.2.0 — video mode requires a picked format; audio mode picks
+    // "bestaudio/best" server-side and ignores the table.
+    if (downloadMode === "video" && !selectedFormat) return;
+    setValidationErr(null);
+    const { spec, mergeContainer } =
+      downloadMode === "audio"
+        ? { spec: "bestaudio/best", mergeContainer: null as string | null }
+        : composeFormatSpec(selectedFormat!);
 
     // Resolve effective segment list. Manual mode wins when on (single
     // segment). Otherwise the scrubber's committed list is the source
@@ -379,15 +578,15 @@ function MetadataCard() {
       const i = parseTimestamp(inStr);
       const o = parseTimestamp(outStr);
       if (inStr.trim() !== "" && i == null) {
-        setDlErr(`Invalid In timestamp: "${inStr}"`);
+        setValidationErr(`Invalid In timestamp: "${inStr}"`);
         return;
       }
       if (outStr.trim() !== "" && o == null) {
-        setDlErr(`Invalid Out timestamp: "${outStr}"`);
+        setValidationErr(`Invalid Out timestamp: "${outStr}"`);
         return;
       }
       if ((i == null) !== (o == null)) {
-        setDlErr("Specify both In and Out, or neither (for full video)");
+        setValidationErr("Specify both In and Out, or neither (for full video)");
         return;
       }
       effectiveSegments = i != null && o != null ? [{ inSec: i, outSec: o }] : [];
@@ -396,27 +595,28 @@ function MetadataCard() {
     // Per-segment validation: in < out, out within duration if known.
     for (const seg of effectiveSegments) {
       if (seg.outSec <= seg.inSec) {
-        setDlErr(`Invalid segment: Out (${seg.outSec.toFixed(1)}s) must be after In (${seg.inSec.toFixed(1)}s)`);
+        setValidationErr(
+          `Invalid segment: Out (${seg.outSec.toFixed(1)}s) must be after In (${seg.inSec.toFixed(1)}s)`,
+        );
         return;
       }
-      if (meta?.duration_sec != null && seg.outSec > meta.duration_sec) {
-        setDlErr(
+      if (meta.duration_sec != null && seg.outSec > meta.duration_sec) {
+        setValidationErr(
           `Segment Out (${seg.outSec.toFixed(1)}s) exceeds video duration (${Math.floor(meta.duration_sec)}s)`,
         );
         return;
       }
     }
 
-    const bytesHint = selectedFormat.filesize_bytes;
-
-    // Resolve target scope at click time, respecting Ctrl+Space.
-    // Capture into a local so subsequent state changes don't leak in.
+    const bytesHint = selectedFormat?.filesize_bytes ?? null;
     const targetProjectId =
       !overrideLibrary && scope.kind === "project" ? scope.id : null;
 
-    // 0.8.C: remember this format pick for the platform. Fire-and-
-    // forget — failure to persist isn't worth blocking the download.
-    {
+    // 0.8.C: remember this format pick for the platform. Fire-and-forget.
+    // Audio mode doesn't pick a video format so nothing to persist;
+    // the audio container choice is local UI state (user re-picks per
+    // download since it's a workflow decision, not a quality default).
+    if (downloadMode === "video" && selectedFormat) {
       const platform = detectPlatform(url);
       const fmtId = selectedFormat.id;
       void saveSettings((s) => ({
@@ -425,129 +625,38 @@ function MetadataCard() {
       })).catch(() => {});
     }
 
-    setDownloading(true);
-    setDlErr(null);
-    setDlResult(null);
-    setDownloadedPaths([]);
-    setProgress(null);
-    setTranscodeProgress(null);
-    setPhase("downloading");
+    // 1.1.3 — Hand off to the app-level DownloadsProvider. The provider
+    // owns the invoke + transcode + library-record + thumbnail
+    // backfill. UI here just reads singleDownload for progress and
+    // result. The `submitting` flag gates double-clicks for the one
+    // tick before the provider's phase flips to "downloading".
+    setSubmitting(true);
     try {
-      // 0.6.1: yt_download now returns Vec<DownloadResult>. Full-video
-      // mode is just [single result]; segment mode is N results, one
-      // per trim. Backend deletes the source after all trims succeed.
-      const rustSegments = effectiveSegments.map((s) => [s.inSec, s.outSec] as [number, number]);
-      const dlResults = await invoke<DownloadResult[]>("yt_download", {
+      await startSingleDownload({
         url,
         formatSpec: spec,
         mergeContainer,
-        totalBytesHint: bytesHint,
-        videoId: meta?.id ?? "",
-        segments: rustSegments.length > 0 ? rustSegments : null,
-        // 1.0.1: synthetic job id so the Cancel button in this panel
-        // can route a yt_download_cancel to the right child process.
-        // The single-URL flow is always one-at-a-time, so a fixed
-        // sentinel is sufficient.
-        jobId: SINGLE_URL_JOB_ID,
+        // In audio mode we don't know exact bytes (yt-dlp picks "best"
+        // and the post-extract converts container) — the progress bar
+        // shows live-bytes without percent until done. Fine for audio.
+        totalBytesHint: downloadMode === "audio" ? null : bytesHint,
+        videoId: meta.id ?? "",
+        segments: effectiveSegments.length > 0 ? effectiveSegments : null,
         projectId: targetProjectId,
+        transcodePreset,
+        meta,
+        pickedFormat: downloadMode === "audio" ? null : selectedFormat,
+        audioFormat: downloadMode === "audio" ? audioFormat : null,
       });
-
-      // Transcode + library-insert + thumbnail per result. Sequential
-      // because: transcodes are CPU-bound and parallel would thrash;
-      // library inserts are cheap but emitting library:changed once
-      // per row coalesces nicely in the UI; thumbnails are fire-and-
-      // forget anyway.
-      const finalPaths: string[] = [];
-      for (let i = 0; i < dlResults.length; i++) {
-        const dlRes = dlResults[i];
-        const seg = effectiveSegments[i]; // undefined for full-video mode
-        let finalRes = dlRes;
-        let usedPreset: TranscodePreset = "none";
-
-        if (transcodePreset !== "none") {
-          setPhase("transcoding");
-          const totalSecHint = seg
-            ? seg.outSec - seg.inSec
-            : meta?.duration_sec ?? null;
-          try {
-            const txRes = await invoke<TranscodeResult>("media_transcode", {
-              srcPath: dlRes.path,
-              preset: transcodePreset,
-              totalSecHint,
-              jobId: null,
-            });
-            finalRes = txRes;
-            usedPreset = transcodePreset;
-          } catch (e) {
-            // Surface the transcode failure but keep the source
-            // segment as the asset on disk. Continue with the rest
-            // — one bad transcode shouldn't abort the whole batch.
-            setDlErr(
-              `transcode failed for segment ${i + 1}: ${String(e)} (source kept: ${dlRes.path})`,
-            );
-          }
-        }
-
-        const effectiveDuration = seg
-          ? seg.outSec - seg.inSec
-          : meta?.duration_sec ?? null;
-
-        const assetId = await recordInLibrary({
-          source_url: url,
-          platform: "youtube",
-          video_id: meta?.id ?? null,
-          channel: meta?.channel ?? null,
-          title: meta?.title ?? url,
-          duration_sec: meta?.duration_sec ?? null,
-          in_sec: seg ? seg.inSec : null,
-          out_sec: seg ? seg.outSec : null,
-          file_path: finalRes.path,
-          file_size: finalRes.bytes ?? null,
-          container: extFromPath(finalRes.path),
-          codec_video: videoCodecFor(usedPreset, selectedFormat.vcodec),
-          codec_audio: audioCodecFor(usedPreset, selectedFormat.acodec),
-          width: selectedFormat.width,
-          height: selectedFormat.height,
-          fps: selectedFormat.fps,
-          transcoded_to: usedPreset === "none" ? null : usedPreset,
-          thumbnail_url: meta?.thumbnail ?? null,
-          project_id: targetProjectId,
-        });
-        if (assetId) {
-          void attachLocalThumbnail(assetId, finalRes.path, effectiveDuration);
-        }
-        finalPaths.push(finalRes.path);
-      }
-
-      // Show the LAST result as the canonical dlResult (drives the
-      // existing single-file success row). For multi-segment, also
-      // remember the full path list for the summary panel.
-      if (finalPaths.length > 0) {
-        setDlResult({ path: finalPaths[finalPaths.length - 1], bytes: null });
-        setDownloadedPaths(finalPaths);
-      }
-    } catch (e) {
-      // 1.0.1: hide the canceled sentinel from the user — a friendly
-      // "canceled" message replaces it. Real errors fall through.
-      const msg = String(e);
-      setDlErr(msg.includes("__canceled__") ? "Canceled" : msg);
     } finally {
-      setDownloading(false);
-      setProgress(null);
-      setTranscodeProgress(null);
-      setPhase("idle");
+      setSubmitting(false);
     }
   }
 
-  // 1.0.1: cancel the active single-URL download. Marks UI as canceling
-  // optimistically; the awaiting invoke() above will reject with the
-  // sentinel which we map to the "Canceled" message.
+  // 1.1.3 — delegated to context. Keeping the wrapper so the cancel
+  // button's onClick stays a stable, named function (cheap readability).
   async function cancelSingleUrlDownload() {
-    try {
-      await invoke<boolean>("yt_download_cancel", { jobId: SINGLE_URL_JOB_ID });
-    } catch (e) {
-      console.warn("[cancel] yt_download_cancel failed:", e);
-    }
+    await cancelSingleDownload();
   }
 
   const videoFormats = meta?.formats.filter((f) => f.has_video) ?? [];
@@ -565,21 +674,109 @@ function MetadataCard() {
         to override to Library.
       </p>
 
-      <form className="field" onSubmit={fetchMetadata}>
+      <form
+        className="field"
+        onSubmit={(e) => {
+          // 1.1 — submit routes by URL kind so the user's intent
+          // (single video vs whole playlist) doesn't get crossed.
+          e.preventDefault();
+          if (urlKind === "pure_playlist") void fetchPlaylist();
+          else void fetchMetadata();
+        }}
+      >
         <input
           ref={urlInputRef}
           className="field-input"
           type="text"
-          placeholder="https://www.youtube.com/watch?v=…"
+          placeholder="https://www.youtube.com/watch?v=…  (or /playlist?list=…)"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           spellCheck={false}
           autoComplete="off"
         />
-        <button type="submit" className="btn" disabled={loading || !url.trim()}>
-          {loading ? "Fetching…" : "Fetch"}
+        <button
+          type="submit"
+          className="btn"
+          disabled={loading || playlistLoading || !url.trim() || urlKind === "channel"}
+        >
+          {loading || playlistLoading
+            ? "Fetching…"
+            : urlKind === "pure_playlist"
+              ? "List playlist"
+              : "Fetch"}
         </button>
       </form>
+
+      {/* 1.1 — channel-URL refusal. Surfaced inline rather than as an
+          error after a yt-dlp call because channels are unbounded and
+          we don't want to even try. */}
+      {urlKind === "channel" && (
+        <div className="msg-row err">
+          <span className="label">channel URL</span>
+          <span style={{ flex: 1 }}>
+            Channel URLs aren't supported — they can have thousands of
+            videos. Paste a specific video URL, a <code>/playlist?list=…</code>{" "}
+            URL, or queue specific URLs in the batch panel below.
+          </span>
+        </div>
+      )}
+
+      {/* 1.1 — "expand to playlist" chip for watch?v=…&list=… URLs.
+          Defaults to single-video mode (the user's likely intent
+          when clicking a video in a playlist context). One-click
+          escape hatch when they actually want the whole playlist. */}
+      {urlKind === "watch_with_list" && !playlist && !playlistLoading && (
+        <div className="msg-row" style={{ background: "var(--bg-2)" }}>
+          <span className="label">playlist</span>
+          <span style={{ flex: 1 }}>
+            This URL is also part of a playlist. By default we'll just
+            download <strong>this one video</strong>.
+          </span>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => void fetchPlaylist()}
+            disabled={playlistLoading}
+          >
+            See all in playlist…
+          </button>
+        </div>
+      )}
+
+      {playlistLoading && (
+        <div className="msg-row" style={{ background: "var(--bg-2)" }}>
+          <span className="label">loading</span>
+          <span style={{ flex: 1 }}>Enumerating playlist entries…</span>
+        </div>
+      )}
+
+      {playlistErr && (
+        <div className="msg-row err">
+          <span className="label">playlist error</span>
+          <code style={{ flex: 1 }}>{playlistErr}</code>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => void fetchPlaylist()}
+          >
+            <Icon.retry width={11} height={11} /> Retry
+          </button>
+        </div>
+      )}
+
+      {playlist && (
+        <PlaylistPicker
+          playlist={playlist}
+          onEnqueue={(entries) => {
+            enqueuePlaylistEntries(entries);
+            // After enqueuing, dismiss the picker so the user can
+            // see / track the queue. The URL stays in the input in
+            // case they want to re-pick a different subset.
+            setPlaylist(null);
+          }}
+          onDismiss={() => setPlaylist(null)}
+        />
+      )}
 
       {err && (
         <div className="msg-row err">
@@ -635,9 +832,37 @@ function MetadataCard() {
             </div>
           </div>
 
-          <button className="meta-toggle" onClick={() => setShowFormats((s) => !s)}>
-            {showFormats ? "▾" : "▸"} {showFormats ? "Hide" : "Show"} format list ({meta.formats.length})
-          </button>
+          {/* 1.2.0 — Video | Audio mode tabs. Audio swaps the format
+              picker for three big format buttons and silences the
+              transcode row. */}
+          <div className="dl-mode-tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={downloadMode === "video"}
+              className={"dl-mode-tab" + (downloadMode === "video" ? " active" : "")}
+              onClick={() => setDownloadMode("video")}
+            >
+              <Icon.video width={12} height={12} />
+              Video
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={downloadMode === "audio"}
+              className={"dl-mode-tab" + (downloadMode === "audio" ? " active" : "")}
+              onClick={() => setDownloadMode("audio")}
+            >
+              <Icon.music width={12} height={12} />
+              Audio
+            </button>
+          </div>
+
+          {downloadMode === "video" && (
+            <button className="meta-toggle" onClick={() => setShowFormats((s) => !s)}>
+              {showFormats ? "▾" : "▸"} {showFormats ? "Hide" : "Show"} format list ({meta.formats.length})
+            </button>
+          )}
 
           {duplicate && (
             <div className="msg-row dupe">
@@ -654,7 +879,28 @@ function MetadataCard() {
             </div>
           )}
 
-          {showFormats && (
+          {downloadMode === "audio" && (
+            <div className="dl-audio-formats">
+              {(["mp3", "m4a", "flac"] as const).map((fmt) => {
+                const fmtMeta = AUDIO_FORMAT_META[fmt];
+                const sel = audioFormat === fmt;
+                return (
+                  <button
+                    key={fmt}
+                    type="button"
+                    className={"dl-audio-card" + (sel ? " active" : "")}
+                    onClick={() => setAudioFormat(fmt)}
+                  >
+                    <div className="dl-audio-name mono">{fmt.toUpperCase()}</div>
+                    <div className="dl-audio-hint">{fmtMeta.hint}</div>
+                    <div className="dl-audio-meta faint">{fmtMeta.specs}</div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {downloadMode === "video" && showFormats && (
             <div className="meta-formats">
               <table>
                 <thead>
@@ -742,27 +988,46 @@ function MetadataCard() {
             </div>
           )}
 
-          <div className="bar">
-            <span className="label">transcode</span>
-            <select
-              className="field-select"
-              value={transcodePreset}
-              onChange={(e) => setTranscodePreset(e.target.value as TranscodePreset)}
-            >
-              {TRANSCODE_PRESETS.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-            <span className="hint-text">
-              {TRANSCODE_PRESETS.find((p) => p.value === transcodePreset)?.hint}
-            </span>
-          </div>
+          {/* Transcode row hidden in audio mode — NLE intermediates
+              don't apply. Could grow audio-specific presets later
+              (normalize to -14 LUFS, convert to WAV, etc.). */}
+          {downloadMode === "video" && (
+            <div className="bar">
+              <span className="label">transcode</span>
+              <select
+                className="field-select"
+                value={transcodePreset}
+                onChange={(e) => setTranscodePreset(e.target.value as TranscodePreset)}
+              >
+                {TRANSCODE_PRESETS.map((p) => (
+                  <option key={p.value} value={p.value}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+              <span className="hint-text">
+                {TRANSCODE_PRESETS.find((p) => p.value === transcodePreset)?.hint}
+              </span>
+            </div>
+          )}
 
           <div className="dlbar">
             <div className="dlbar-info">
-              {selectedFormat ? (
+              {downloadMode === "audio" ? (
+                <>
+                  <span className="label">audio</span>
+                  <code>bestaudio → .{audioFormat}</code>
+                  <span className="hint-chip">{AUDIO_FORMAT_META[audioFormat].specs}</span>
+                  <span className="dlbar-dest">
+                    →{" "}
+                    {overrideLibrary
+                      ? "Library (override)"
+                      : scope.kind === "project"
+                        ? `Projects/${scope.name}/`
+                        : "Library/"}
+                  </span>
+                </>
+              ) : selectedFormat ? (
                 <>
                   <span className="label">spec</span>
                   <code>{composeFormatSpec(selectedFormat).spec}</code>
@@ -790,19 +1055,23 @@ function MetadataCard() {
             <button
               className={"btn" + (overrideLibrary ? " btn-override" : "")}
               onClick={download}
-              disabled={!selectedFormat || downloading}
+              disabled={(downloadMode === "video" && !selectedFormat) || downloading}
               title={overrideLibrary ? "Send to Library (Ctrl held)" : undefined}
             >
               <Icon.download width={13} height={13} />
               {downloading
                 ? "Downloading…"
-                : overrideLibrary
-                  ? segments.length > 1
-                    ? `Download ${segments.length} → Library`
-                    : "Download → Library"
-                  : segments.length > 1
-                    ? `Download ${segments.length} segments`
-                    : "Download"}
+                : downloadMode === "audio"
+                  ? overrideLibrary
+                    ? `Download ${audioFormat.toUpperCase()} → Library`
+                    : `Download ${audioFormat.toUpperCase()}`
+                  : overrideLibrary
+                    ? segments.length > 1
+                      ? `Download ${segments.length} → Library`
+                      : "Download → Library"
+                    : segments.length > 1
+                      ? `Download ${segments.length} segments`
+                      : "Download"}
             </button>
           </div>
 
@@ -906,6 +1175,243 @@ function MetadataCard() {
   );
 }
 
+// =====================================================================
+// 1.1 — Playlist picker
+// =====================================================================
+//
+// Renders below the URL input when MetadataCard has a PlaylistInfo to
+// show. Lets the user multi-select entries and enqueue them as
+// individual jobs in the batch queue. Defaults to "all selected" so
+// the common "give me everything" path is one click.
+//
+// Local state only (selectedIds set). On Enqueue, calls the parent's
+// onEnqueue with the filtered entry list; the parent owns the
+// dispatch to QueueCard and dismissing the picker.
+
+function PlaylistPicker({
+  playlist,
+  onEnqueue,
+  onDismiss,
+}: {
+  playlist: PlaylistInfo;
+  onEnqueue: (entries: PlaylistEntry[]) => void;
+  onDismiss: () => void;
+}) {
+  // Default selection: all available entries (skip unavailable —
+  // they'd just fail at queue time).
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(
+    () => new Set(playlist.entries.filter((e) => !e.unavailable).map((e) => e.id)),
+  );
+
+  const availableCount = playlist.entries.filter((e) => !e.unavailable).length;
+  const selectedAvailableEntries = playlist.entries.filter(
+    (e) => selectedIds.has(e.id) && !e.unavailable,
+  );
+
+  function toggle(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function selectAll() {
+    setSelectedIds(
+      new Set(playlist.entries.filter((e) => !e.unavailable).map((e) => e.id)),
+    );
+  }
+  function selectNone() {
+    setSelectedIds(new Set());
+  }
+  function selectFirst(n: number) {
+    setSelectedIds(
+      new Set(
+        playlist.entries
+          .filter((e) => !e.unavailable)
+          .slice(0, n)
+          .map((e) => e.id),
+      ),
+    );
+  }
+
+  return (
+    <section
+      className="card-box"
+      style={{ marginTop: 12, padding: 14 }}
+    >
+      <h3 style={{ marginTop: 0, marginBottom: 4 }}>
+        Playlist: {playlist.title}
+        <span className="chip" style={{ marginLeft: 8 }}>
+          {availableCount} of {playlist.entry_count}
+          {playlist.truncated ? " (truncated)" : ""}
+        </span>
+      </h3>
+      {playlist.uploader && (
+        <div className="hint" style={{ marginBottom: 8 }}>
+          by {playlist.uploader}
+        </div>
+      )}
+      {playlist.truncated && (
+        <div className="msg-row" style={{ background: "var(--bg-2)" }}>
+          <span className="label">truncated</span>
+          <span style={{ flex: 1, fontSize: 12 }}>
+            Showing first 500 entries. Larger playlists aren't supported
+            in 1.1 — slice the playlist on YouTube and re-paste if you
+            need more.
+          </span>
+        </div>
+      )}
+
+      <div
+        style={{
+          display: "flex",
+          gap: 6,
+          flexWrap: "wrap",
+          alignItems: "center",
+          margin: "8px 0",
+        }}
+      >
+        <button type="button" className="btn btn-secondary" onClick={selectAll}>
+          Select all
+        </button>
+        <button type="button" className="btn btn-secondary" onClick={selectNone}>
+          Select none
+        </button>
+        {availableCount > 5 && (
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => selectFirst(5)}
+          >
+            First 5
+          </button>
+        )}
+        {availableCount > 10 && (
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => selectFirst(10)}
+          >
+            First 10
+          </button>
+        )}
+        <span className="mono faint" style={{ fontSize: 11, marginLeft: "auto" }}>
+          {selectedAvailableEntries.length} selected
+        </span>
+      </div>
+
+      <ul
+        style={{
+          listStyle: "none",
+          margin: 0,
+          padding: 0,
+          maxHeight: 360,
+          overflowY: "auto",
+          border: "1px solid var(--border-1)",
+          borderRadius: 4,
+        }}
+      >
+        {playlist.entries.map((e, i) => {
+          const checked = selectedIds.has(e.id);
+          return (
+            <li
+              key={e.id || `idx-${i}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "8px 10px",
+                borderBottom: "1px solid var(--border-1)",
+                opacity: e.unavailable ? 0.5 : 1,
+                cursor: e.unavailable ? "not-allowed" : "pointer",
+              }}
+              onClick={() => !e.unavailable && toggle(e.id)}
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={e.unavailable}
+                onChange={() => toggle(e.id)}
+                onClick={(ev) => ev.stopPropagation()}
+              />
+              {e.thumbnail ? (
+                <img
+                  src={e.thumbnail}
+                  alt=""
+                  loading="lazy"
+                  style={{
+                    width: 80,
+                    height: 45,
+                    objectFit: "cover",
+                    borderRadius: 2,
+                    background: "var(--bg-2)",
+                  }}
+                />
+              ) : (
+                <div
+                  style={{
+                    width: 80,
+                    height: 45,
+                    background: "var(--bg-2)",
+                    borderRadius: 2,
+                  }}
+                />
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: 13,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {i + 1}. {e.title}
+                  {e.unavailable && (
+                    <span className="chip" style={{ marginLeft: 6 }}>
+                      unavailable
+                    </span>
+                  )}
+                </div>
+                <div className="mono faint" style={{ fontSize: 11 }}>
+                  {e.channel ?? "—"}
+                  {e.duration_sec ? ` · ${fmtDuration(e.duration_sec)}` : ""}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          marginTop: 10,
+          alignItems: "center",
+        }}
+      >
+        <button
+          type="button"
+          className="btn"
+          disabled={selectedAvailableEntries.length === 0}
+          onClick={() => onEnqueue(selectedAvailableEntries)}
+        >
+          <Icon.plus width={12} height={12} />
+          Add {selectedAvailableEntries.length} to queue
+        </button>
+        <button type="button" className="btn btn-secondary" onClick={onDismiss}>
+          Cancel
+        </button>
+        <span className="hint faint" style={{ fontSize: 11, marginLeft: "auto" }}>
+          Jobs land in the batch queue below.
+        </span>
+      </div>
+    </section>
+  );
+}
+
 function ProgressBar({
   percent,
   label,
@@ -937,86 +1443,36 @@ function ProgressBar({
 // =====================================================================
 // Batch queue
 // =====================================================================
-
-type QueueStatus = "queued" | "fetching" | "downloading" | "transcoding" | "done" | "failed" | "canceled";
-
-type QueueJob = {
-  id: string;
-  url: string;
-  status: QueueStatus;
-  transcodePreset: TranscodePreset;
-  /** Project id captured at enqueue time. NULL = Library. Locked at
-   *  enqueue so changing the active scope mid-batch doesn't reroute
-   *  already-queued jobs. */
-  projectId: string | null;
-  title?: string;
-  channel?: string;
-  thumbnail?: string | null;
-  duration_sec?: number | null;
-  progress?: ProgressEvent;
-  transcodeProgress?: TranscodeProgress;
-  resultPath?: string;
-  resultBytes?: number | null;
-  error?: string;
-};
-
-class Semaphore {
-  private permits: number;
-  private waiters: Array<() => void> = [];
-  constructor(permits: number) {
-    this.permits = permits;
-  }
-  async acquire(): Promise<void> {
-    if (this.permits > 0) {
-      this.permits--;
-      return;
-    }
-    return new Promise((resolve) => this.waiters.push(resolve));
-  }
-  release(): void {
-    const next = this.waiters.shift();
-    if (next) next();
-    else this.permits++;
-  }
-}
-
-const NVENC_PRESETS: Set<TranscodePreset> = new Set(["h264_nvenc_mp4"]);
-const isGpuPreset = (p: TranscodePreset): boolean => NVENC_PRESETS.has(p);
-
-function newJobId(): string {
-  return `job-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
-}
-
-const QUEUE_STORAGE_KEY = "mh.queue.v1";
-
-function loadQueueFromStorage(): QueueJob[] {
-  try {
-    const raw = localStorage.getItem(QUEUE_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as QueueJob[];
-    return parsed.map((j) => {
-      if (j.status === "fetching" || j.status === "downloading" || j.status === "transcoding") {
-        return { ...j, status: "queued" as QueueStatus, progress: undefined, transcodeProgress: undefined };
-      }
-      return { ...j, progress: undefined, transcodeProgress: undefined };
-    });
-  } catch {
-    return [];
-  }
-}
-
-const cpuTranscodeSem = new Semaphore(1);
-const gpuTranscodeSem = new Semaphore(1);
+// 1.1.3 — QueueJob, QueueStatus, Semaphore, cpuTranscodeSem, gpuTranscodeSem,
+// NVENC_PRESETS, isGpuPreset, newJobId, QUEUE_STORAGE_KEY, loadQueueFromStorage,
+// and the workerLoop itself all moved to lib/downloads.tsx (DownloadsProvider).
+// QueueCard below is now a presenter; it consumes useDownloads() and
+// dispatches actions.
 
 function QueueCard() {
   const { scope } = useActiveProject();
   const { settings } = useSettings();
   const overrideLibrary = useLibraryOverride();
   const [urlsInput, setUrlsInput] = useState("");
-  const [jobs, setJobs] = useState<QueueJob[]>(() => loadQueueFromStorage());
+  // 1.1.3 — queue state + workerLoop + event listeners moved to the
+  // app-level DownloadsProvider so they survive route navigation. This
+  // component is now a thin presenter that reads jobs and dispatches
+  // user-initiated actions (enqueue / cancel / clear / retry).
+  const {
+    queueJobs: jobs,
+    enqueueUrls,
+    cancelQueueJob,
+    clearCompletedJobs,
+    retryFailedJobs,
+  } = useDownloads();
   const [batchTranscode, setBatchTranscode] = useState<TranscodePreset>(
     () => (settings.default_transcode_preset as TranscodePreset) ?? "none",
   );
+  // 1.2.0 — batch audio mode. "off" = video pipeline (existing).
+  // mp3/m4a/flac = audio extraction, transcode ignored, every job
+  // becomes an audio asset. Local state — workflow choice, not a
+  // persistent setting.
+  const [batchAudio, setBatchAudio] = useState<"off" | AudioFormat>("off");
   const batchPresetInitialized = useRef(false);
   useEffect(() => {
     if (batchPresetInitialized.current) return;
@@ -1026,285 +1482,49 @@ function QueueCard() {
     }
   }, [settings.default_transcode_preset]);
 
-  // Worker count is settings-driven. When user bumps concurrency, the
-  // useEffect that spawns workers picks up the new ceiling and spins
-  // additional loops if there's queued work.
+  // Worker count is settings-driven (display only here — the actual
+  // ceiling is enforced inside DownloadsProvider).
   const downloadWorkers = Math.max(1, Math.min(6, settings.download_concurrency));
 
-  const jobsRef = useRef<QueueJob[]>([]);
-  jobsRef.current = jobs;
-  const claimedRef = useRef<Set<string>>(new Set());
-  const activeWorkersRef = useRef(0);
-
+  // 1.1 — listen for playlist-picker enqueue events. The picker
+  // dispatches a CustomEvent with the list of selected URLs + the
+  // captured project scope. Stays here because both the picker and
+  // this listener belong to the Download page surface.
   useEffect(() => {
-    let unlistenDl: UnlistenFn | null = null;
-    let unlistenTx: UnlistenFn | null = null;
-    listen<ProgressEvent>("download:progress", (e) => {
-      const id = e.payload.job_id;
-      if (!id) return;
-      setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, progress: e.payload } : j)));
-    }).then((fn) => {
-      unlistenDl = fn;
-    });
-    listen<TranscodeProgress>("transcode:progress", (e) => {
-      const id = e.payload.job_id;
-      if (!id) return;
-      setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, transcodeProgress: e.payload } : j)));
-    }).then((fn) => {
-      unlistenTx = fn;
-    });
-    return () => {
-      unlistenDl?.();
-      unlistenTx?.();
-    };
-  }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(jobs));
-    } catch {
-      // Quota exceeded — skip this tick.
-    }
-  }, [jobs]);
-
-  useEffect(() => {
-    const queuedUnclaimed = jobs.some(
-      (j) => j.status === "queued" && !claimedRef.current.has(j.id),
-    );
-    if (!queuedUnclaimed) return;
-    while (activeWorkersRef.current < downloadWorkers) {
-      activeWorkersRef.current++;
-      void workerLoop().finally(() => {
-        activeWorkersRef.current--;
+    function handler(ev: Event) {
+      const detail = (ev as CustomEvent<QueueEnqueueDetail>).detail;
+      if (!detail || !detail.urls || detail.urls.length === 0) return;
+      enqueueUrls(detail.urls, {
+        transcodePreset: batchTranscode,
+        projectId: detail.projectId,
+        audioFormat: batchAudio === "off" ? null : batchAudio,
       });
     }
-    // Re-runs when downloadWorkers changes too — bumping concurrency
-    // mid-session spawns more loops to consume the new headroom.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobs, downloadWorkers]);
+    window.addEventListener(QUEUE_ENQUEUE_EVENT, handler);
+    return () => window.removeEventListener(QUEUE_ENQUEUE_EVENT, handler);
+  });
 
-  function updateJob(id: string, patch: Partial<QueueJob>) {
-    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j)));
-  }
-
-  /**
-   * One worker. Pulls the next unclaimed queued job, processes it
-   * through download + (optional) transcode, then loops. Exits when
-   * no more queued work.
-   *
-   * Concurrency:
-   *   - N workers download in parallel (default 3)
-   *   - CPU transcodes serialize via cpuTranscodeSem
-   *   - GPU transcodes serialize separately via gpuTranscodeSem
-   *   - A CPU job and a GPU job CAN run simultaneously (disjoint HW)
-   */
-  async function workerLoop(): Promise<void> {
-    while (true) {
-      let next: QueueJob | undefined;
-      for (const j of jobsRef.current) {
-        if (j.status === "queued" && !claimedRef.current.has(j.id)) {
-          next = j;
-          claimedRef.current.add(j.id);
-          break;
-        }
-      }
-      if (!next) return;
-      try {
-        await processOne(next);
-      } catch (e) {
-        updateJob(next.id, { status: "failed", error: String(e) });
-      }
-    }
-  }
-
-  async function processOne(job: QueueJob): Promise<void> {
-    updateJob(job.id, { status: "fetching" });
-    let meta: VideoMetadata;
-    try {
-      meta = await invoke<VideoMetadata>("yt_fetch_metadata", { url: job.url });
-    } catch (e) {
-      updateJob(job.id, { status: "failed", error: String(e) });
-      return;
-    }
-
-    const bestVideo =
-      meta.formats
-        .filter((f) => f.has_video)
-        .reduce<FormatOption | null>(
-          (best, f) => ((f.filesize_bytes ?? 0) > (best?.filesize_bytes ?? 0) ? f : best),
-          null,
-        ) ?? null;
-
-    updateJob(job.id, {
-      status: "downloading",
-      title: meta.title,
-      channel: meta.channel,
-      thumbnail: meta.thumbnail,
-      duration_sec: meta.duration_sec,
-    });
-
-    let dlRes: DownloadResult;
-    try {
-      // Batch queue is always full-video (no segments) — multi-segment
-      // is a single-URL workflow. The 0.6.1 yt_download returns a Vec,
-      // so unwrap the single element. Empty/None segments triggers the
-      // full-video path on the Rust side.
-      const results = await invoke<DownloadResult[]>("yt_download", {
-        url: job.url,
-        formatSpec: "bv*+ba/b",
-        mergeContainer: "mp4",
-        totalBytesHint: bestVideo?.filesize_bytes ?? null,
-        videoId: meta.id,
-        segments: null,
-        jobId: job.id,
-        // Per-job projectId snapshot, locked at enqueue time. Phase B
-        // honors this when computing dest dir on the Rust side.
-        projectId: job.projectId,
-      });
-      dlRes = results[0];
-    } catch (e) {
-      // 1.0.1: if the user just hit Cancel, the invoke rejects with
-      // "__canceled__" and the row was already flipped to "canceled"
-      // by cancelJob(). Don't clobber that state with "failed".
-      const msg = String(e);
-      if (msg.includes("__canceled__") || jobsRef.current.find((j) => j.id === job.id)?.status === "canceled") {
-        updateJob(job.id, { status: "canceled", error: undefined });
-        return;
-      }
-      updateJob(job.id, { status: "failed", error: msg });
-      return;
-    }
-
-    const preset = job.transcodePreset;
-    let finalPath = dlRes.path;
-    let finalBytes = dlRes.bytes;
-    let usedPreset: TranscodePreset = "none";
-
-    if (preset !== "none") {
-      const sem = isGpuPreset(preset) ? gpuTranscodeSem : cpuTranscodeSem;
-      await sem.acquire();
-      try {
-        updateJob(job.id, { status: "transcoding", resultPath: dlRes.path });
-        const txRes = await invoke<TranscodeResult>("media_transcode", {
-          srcPath: dlRes.path,
-          preset,
-          totalSecHint: meta.duration_sec ?? null,
-          jobId: job.id,
-        });
-        finalPath = txRes.path;
-        finalBytes = txRes.bytes;
-        usedPreset = preset;
-        updateJob(job.id, { status: "done", resultPath: txRes.path, resultBytes: txRes.bytes });
-      } catch (e) {
-        updateJob(job.id, {
-          status: "failed",
-          resultPath: dlRes.path,
-          resultBytes: dlRes.bytes,
-          error: `transcode failed: ${String(e)} (source kept)`,
-        });
-      } finally {
-        sem.release();
-      }
-    } else {
-      updateJob(job.id, { status: "done", resultPath: dlRes.path, resultBytes: dlRes.bytes });
-    }
-
-    const assetId = await recordInLibrary({
-      source_url: job.url,
-      platform: "youtube",
-      video_id: meta.id,
-      channel: meta.channel,
-      title: meta.title,
-      duration_sec: meta.duration_sec,
-      in_sec: null,
-      out_sec: null,
-      file_path: finalPath,
-      file_size: finalBytes,
-      container: extFromPath(finalPath),
-      codec_video: videoCodecFor(usedPreset, bestVideo?.vcodec),
-      codec_audio: audioCodecFor(usedPreset, null),
-      width: bestVideo?.width ?? null,
-      height: bestVideo?.height ?? null,
-      fps: bestVideo?.fps ?? null,
-      transcoded_to: usedPreset === "none" ? null : usedPreset,
-      thumbnail_url: meta.thumbnail,
-      // Project assignment is captured at enqueue time below; we
-      // resolve it from the job, not the live `scope` ref.
-      project_id: job.projectId ?? null,
-    });
-    if (assetId) {
-      void attachLocalThumbnail(assetId, finalPath, meta.duration_sec ?? null);
-    }
-  }
-
+  // 1.1.3 — processOne / workerLoop / cancel / clear / retry all live
+  // in DownloadsProvider now. We just call into the context.
   function queueAll() {
     const urls = urlsInput
       .split(/\r?\n/)
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
     if (urls.length === 0) return;
-    const presetSnapshot = batchTranscode;
-    // Snapshot the project assignment too — same reasoning as the
-    // preset capture: the user's expectation is that what they
-    // pressed Queue with is what runs, even if they switch scope
-    // afterward. Ctrl+Space override applies to the whole batch.
     const projectSnapshot =
       !overrideLibrary && scope.kind === "project" ? scope.id : null;
-    const newJobs: QueueJob[] = urls.map((url) => ({
-      id: newJobId(),
-      url,
-      status: "queued",
-      transcodePreset: presetSnapshot,
+    enqueueUrls(urls, {
+      transcodePreset: batchTranscode,
       projectId: projectSnapshot,
-    }));
-    setJobs((prev) => [...prev, ...newJobs]);
+      audioFormat: batchAudio === "off" ? null : batchAudio,
+    });
     setUrlsInput("");
   }
-
-  function clearCompleted() {
-    setJobs((prev) => {
-      const terminal = (s: QueueStatus) =>
-        s === "done" || s === "failed" || s === "canceled";
-      const removed = prev.filter((j) => terminal(j.status));
-      for (const j of removed) claimedRef.current.delete(j.id);
-      return prev.filter((j) => !terminal(j.status));
-    });
-  }
-
-  // 1.0.1: cancel an in-flight download. Calls the Rust kill, then
-  // marks the row "canceled" so the worker loop's awaited invoke() —
-  // which will reject with the "__canceled__" sentinel — doesn't
-  // overwrite this state with "failed". processOne() checks the row's
-  // current status before patching to status:"failed" on catch.
-  async function cancelJob(id: string) {
-    updateJob(id, { status: "canceled" });
-    try {
-      await invoke<boolean>("yt_download_cancel", { jobId: id });
-    } catch (e) {
-      console.warn("[cancel] yt_download_cancel failed:", e);
-      // Even if the Rust side errored, the UI state stays "canceled"
-      // — the user's intent is clear. Worst case the download keeps
-      // going in the background and finishes; we'll just ignore it.
-    }
-  }
-
-  function retryFailed() {
-    setJobs((prev) =>
-      prev.map((j) => {
-        if (j.status !== "failed") return j;
-        claimedRef.current.delete(j.id);
-        return {
-          ...j,
-          status: "queued" as QueueStatus,
-          error: undefined,
-          progress: undefined,
-          transcodeProgress: undefined,
-          resultPath: undefined,
-          resultBytes: undefined,
-        };
-      }),
-    );
-  }
+  // Aliases for the JSX below — keeps render-side names stable.
+  const clearCompleted = clearCompletedJobs;
+  const cancelJob = cancelQueueJob;
+  const retryFailed = retryFailedJobs;
 
   const stats = (() => {
     if (jobs.length === 0) return "";
@@ -1351,22 +1571,43 @@ function QueueCard() {
       />
 
       <div className="bar" style={{ borderTop: 0, padding: "8px 0 4px" }}>
-        <span className="label">transcode all</span>
+        <span className="label">audio mode</span>
         <select
           className="field-select"
-          value={batchTranscode}
-          onChange={(e) => setBatchTranscode(e.target.value as TranscodePreset)}
+          value={batchAudio}
+          onChange={(e) => setBatchAudio(e.target.value as "off" | AudioFormat)}
         >
-          {TRANSCODE_PRESETS.map((p) => (
-            <option key={p.value} value={p.value}>
-              {p.label}
-            </option>
-          ))}
+          <option value="off">Off (video)</option>
+          <option value="mp3">MP3 · 320k</option>
+          <option value="m4a">M4A · AAC 256k</option>
+          <option value="flac">FLAC · lossless</option>
         </select>
         <span className="hint-text">
-          {TRANSCODE_PRESETS.find((p) => p.value === batchTranscode)?.hint}
+          {batchAudio === "off"
+            ? "video downloads — transcode below applies"
+            : `extract audio to .${batchAudio} (transcode ignored)`}
         </span>
       </div>
+
+      {batchAudio === "off" && (
+        <div className="bar" style={{ borderTop: 0, padding: "0 0 4px" }}>
+          <span className="label">transcode all</span>
+          <select
+            className="field-select"
+            value={batchTranscode}
+            onChange={(e) => setBatchTranscode(e.target.value as TranscodePreset)}
+          >
+            {TRANSCODE_PRESETS.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          <span className="hint-text">
+            {TRANSCODE_PRESETS.find((p) => p.value === batchTranscode)?.hint}
+          </span>
+        </div>
+      )}
 
       <div className="queue-actions">
         <button

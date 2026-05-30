@@ -748,6 +748,119 @@ Anything more speculative than this belongs in `docs/NOTES.md` under
 
 Newest first. Every entry: what we decided, when, and *why*.
 
+### 2026-05-27 — 1.2.0 → 1.2.15: Audio downloads + the browser-extension stack (SHIPPED to testers)
+
+Marathon session. Two arcs delivered end-to-end and shipped as 1.2.15
+(NSIS + MSI installers + sideloadable extension folder with idiot-proof
+EN + PT-BR READMEs).
+
+**Arc A — Audio (1.2.0 → 1.2.1):** MP3 / M4A / FLAC downloads. New
+asset `kind` column (migration 008), `yt_download` audio mode,
+`media_extract_waveform` (ffmpeg showwavespic → lime waveform thumb),
+Video|Audio tabs on the Download page, audio treatment in card +
+inspector, kind filter, queue-worker audio support.
+**Format decision:** no bitrate picker. Per-format sensible defaults
+(MP3 320 CBR / M4A AAC 256 / FLAC lossless) chosen server-side, because
+nobody downloads audio at *low* quality — the meaningful choice is
+container/workflow, not bitrate.
+
+**Arc B — Extension + bridge (1.2.2 → 1.2.15):** the "central hub /
+send-from-browser" vision. Followed the researched roadmap:
+1. **Localhost HTTP bridge** (axum on `127.0.0.1:47821`, bearer token).
+2. **`mediahub://` deep link** (launches app if closed).
+3. **Extension MVP** (popup + context menu + hotkeys, sideload-only).
+4. **Stream sniffer** (per-tab HLS/DASH/MP4 detection + badge).
+5. **In-page overlay buttons** — Twitter/X + Reddit shipped; Instagram
+   attempted then **pulled** (player click-locks pointer events; not
+   winnable from a content script — IG stays covered by popup+sniffer).
+
+**Decisions captured:**
+- **Extension distribution: sideload only** for now. Store publishing
+  (Chrome $5 + Firefox AMO) deferred until we want real reach.
+- **gallery-dl / image-host coverage (layer 4): parked.** yt-dlp +
+  sniffer cover the non-image long tail; images are a separate appetite.
+- **JDownloader: still off the table.** Owner doesn't want a second UI.
+- **Send the PLATFORM URL, not the raw CDN URL.** Content-script
+  buttons send the tweet/post permalink so yt-dlp's site extractor
+  keeps title/uploader metadata. Raw `redd.it`/`twimg.com` mp4 URLs
+  are worse (no metadata) and reddit's signed URLs even crash yt-dlp.
+
+**The dumb bug that ate ~40 min:** a tester left cookies on "File" mode
+with empty path → `--cookies ""` → yt-dlp PyInstaller crash. Lesson:
+read our own dev-console log before suspecting the spawn layer. Guarded.
+
+**Versioning rhythm:** this session churned 1.2.0 → 1.2.15 (lots of
+small extension iterations, each a `chrome://extensions` reload not an
+installer). Only ONE installer cut at the end (1.2.15). Extension
+iterates free; desktop installers stay batched.
+
+### 2026-05-25 — 1.1.3 → 1.1.6: state-survives-nav + the CloseGuard saga (SHIPPED to testers)
+
+Morning session, four installer bumps in one day.
+
+**Shipped (1.1.3 → 1.1.6, cumulative):**
+- `DownloadsProvider` at App.tsx level — single + queue downloads
+  survive route navigation. Listeners persist; workerLoop persists.
+- Topbar `ActivityBadge` — always-visible "N downloading" indicator,
+  pulsing lime dot, click-to-/download.
+- Keep-alive Shell — every page mounts on first visit, stays mounted
+  (hidden via `[hidden]` attr when inactive). Form/scrubber/library
+  state preserved across nav for free.
+- Rust `library_scan_orphans` + `library_clean_orphans` — boot-time
+  scan for `.part` / `.ytdl` / `.tmp` / `.f<id>.<ext>` files older
+  than 5 min in Library/raw + Projects/*/raw. UI shows confirm
+  banner ~3 sec after boot; clean goes through `trash` crate (Recycle
+  Bin recoverable).
+- Drag-feedback session gate (`dragSessionActiveRef`) — defends
+  against Windows OLE late-event re-setting `folderDropHover`. NOT
+  user-verified this session (testers were stuck on the close bug).
+
+**Bug: "X does nothing" — four iterations to root-cause.**
+1.1.3 confirm dialog, 1.1.4 dropped dialog + refs, 1.1.5 sync
+handler. Each had a plausible theory; none fixed it. **Root cause
+(1.1.6):** Tauri 2 bug [#7119](https://github.com/tauri-apps/tauri/issues/7119) —
+calling `unlisten()` on `onCloseRequested` permanently breaks
+window close. React.StrictMode + my `if (cancelled) fn()` race
+branch both could trigger it. Fix: removed `CloseGuard` entirely.
+OrphanScanner-on-boot is the safety net. Child processes self-
+terminate within minutes. User-verified 1.1.6 closes normally.
+
+**Versioning rhythm:** broke the user's "batch-version-at-session-end"
+preference because each iteration needed real-tester verification.
+Per-fix installer bumps are fine when debugging cross-platform issues
+remotely; back to batched versions once we're not hunting a live bug.
+
+### 2026-05-24 — 1.1 Eagle-style library refactor (3 phases, uncommitted)
+
+A single-session structural pass on the library. Three phases shipped
+end-to-end against the dev build; not yet versioned or installer-
+packaged (owner will tag 1.1.0 at session-end). Full breakdown in
+NOTES.md "BIG SESSION — Eagle-style library refactor."
+
+**Phase 1 — Multi-select + inspector**
+- Replaced modal AssetDrawer with always-on right-column
+  InspectorPanel (0/1/many states)
+- Unified selection model; Ctrl/Shift/double-click semantics;
+  box-drag marquee
+- `library_delete_many` Rust command, OS Recycle Bin via `trash`
+  crate, single confirm for the whole batch
+
+**Phase 2 — Folders sidebar**
+- Schema migration 007 (folders table + FK on assets.folder_id)
+- Folder CRUD + asset-set-folder (single + batch)
+- Eagle-style left sidebar: All clips / Uncategorized / user folders
+  with "+ instantly create + rename" UX
+- FolderContextMenu (Rename / Delete folder) mirrors CardContextMenu
+
+**Phase 3 — Filter popup**
+- Toolbar Filter button with active-count badge
+- Multi-category popup (Source / Tags / Added) with inline tag search
+- Old sidebar facets dropped; popup hosts them instead
+
+**Known regression** carried as 1.1.0 follow-up: tag editor didn't
+get ported from AssetDrawer to InspectorSingle. ~30 min to fix.
+`TagEditor` component preserved in tree for the port.
+
 ### 2026-05-22 evening — 1.0.0 → 1.0.1 → 1.0.2 shipped same day
 
 - **1.0.0** tagged + installer built (66 MB NSIS, bundled sidecars,
@@ -879,6 +992,45 @@ Newest first. Every entry: what we decided, when, and *why*.
   pairing is efficiency (don't redo the library page twice).
 - Effect: see updated milestone tree. Section headings below match
   the new numbers; backlinks across the doc updated.
+
+### 2026-05-24 PM — 1.1.2: tags-split + sort + press-T + drag-to-folder + drag-out (uncommitted)
+
+- **Shipped this session:**
+  - **Toolbar split** — `Filter` (Source + Added only) / new `Tags`
+    button with its own Eagle-style 2-column popup / new `Sort` button
+    (8 modes, client-side).
+  - **Press-T tag picker** — floats near cursor, search + Create
+    affordance, Recently Used + Others sections, tri-state per tag
+    for batch (✓ / – / blank). Persisted recent tags in localStorage.
+  - **Drawer tag editor restored** in `InspectorSingle` + new
+    `BatchTagEditor` in `InspectorBatch` (tags common to all selected).
+  - **`t tag selected` hint** added to status bar.
+  - **OS drag-out + internal drag-to-folder** via
+    `@crabnebula/tauri-plugin-drag@2.1.0` + `tauri-plugin-drag@2.1.1`.
+    Single unified gesture: drop on folder row → `asset_set_folder`;
+    drop outside window → OS hands files to Premiere/Resolve/Explorer.
+    `mode: "copy"` so the library file stays canonical.
+  - **T-popup ghost-reopen bug fixed** (user-diagnosed!) — render gate
+    is `tagPickerPos` alone, page Esc early-returns when popup is open,
+    popup self-closes on selection drop to 0.
+
+- **Open bug carrying into 2026-05-25:**
+  - Internal drag-to-folder **functionally works** (files DO move on
+    drop) but visual feedback (folder hover highlight + cleanup after
+    drop) is glitchy on Windows. Three rounds of fixes (coord conversion,
+    Cancelled-vs-Dropped, drop-event-race, drag-hint fallback) helped
+    but didn't fully resolve. **Tomorrow's plan: instrument all
+    `setFolderDropHover` call sites with console logs, repro once,
+    identify the rogue setter.**
+
+- **FCPXML / preview research done** — four-tier preview menu in NOTES
+  (Tier 0 HTML5 video, Tier 1 sprite-scrub, Tier 2 H.264 proxies, Tier
+  3 libmpv). Recommendation: ship Tier 1 (sprite scrub) before
+  considering FCPXML. Decision pending user input next session.
+
+- **No commit/version tag yet** — per user's batched-version rhythm,
+  changes accumulate in working tree until session-end ship. 1.1.2
+  will be tagged once the drag-feedback bug is resolved.
 
 ### 2026-05-20 — Download queue lives in the renderer, not Rust
 

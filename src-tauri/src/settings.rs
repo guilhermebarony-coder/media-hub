@@ -93,10 +93,47 @@ pub struct Settings {
     /// they're always exactly 1 frame.
     #[serde(default = "default_jog_sensitivity")]
     pub jog_sensitivity: f32,
+
+    // 1.2.2 — Browser-extension bridge.
+    /// Shared secret the extension presents in the
+    /// `Authorization: Bearer <token>` header. Empty = unconfigured;
+    /// `init()` generates one on first run if so. Regeneratable from
+    /// the Settings UI (invalidates the previously-paired extension).
+    #[serde(default)]
+    pub bridge_token: String,
+    /// TCP port the bridge HTTP server binds on (127.0.0.1 only).
+    /// 47821 by default — chosen out of the IANA-unassigned range
+    /// so it doesn't collide with common dev servers.
+    #[serde(default = "default_bridge_port")]
+    pub bridge_port: u16,
+    /// Master switch — false = don't start the server. Default true.
+    /// Power-user opt-out for users who don't want a listening socket
+    /// even on loopback.
+    #[serde(default = "default_bridge_enabled")]
+    pub bridge_enabled: bool,
 }
 
 fn default_jog_sensitivity() -> f32 {
     1.0
+}
+
+fn default_bridge_port() -> u16 {
+    47821
+}
+
+fn default_bridge_enabled() -> bool {
+    true
+}
+
+/// 1.2.2 — Generate a 32-byte hex token for browser-extension auth.
+/// Uses OS rng via `rand::random` so each call is independent and
+/// cryptographically suitable. 64 hex chars is overkill for a
+/// localhost-only secret but cheap and reads as "real auth" to anyone
+/// inspecting the settings file.
+pub fn generate_bridge_token() -> String {
+    use rand::Rng;
+    let bytes: [u8; 32] = rand::thread_rng().gen();
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 impl Default for Settings {
@@ -111,6 +148,9 @@ impl Default for Settings {
             onboarding_complete: false,
             last_formats: HashMap::new(),
             jog_sensitivity: 1.0,
+            bridge_token: String::new(),
+            bridge_port: default_bridge_port(),
+            bridge_enabled: default_bridge_enabled(),
         }
     }
 }
@@ -400,7 +440,7 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
 /// preferences. Log + use defaults.
 pub fn init(app: &AppHandle) -> Result<SettingsState, String> {
     let path = settings_path(app)?;
-    let settings = match std::fs::read_to_string(&path) {
+    let mut settings = match std::fs::read_to_string(&path) {
         Ok(s) => match serde_json::from_str::<Settings>(&s) {
             Ok(s) => s,
             Err(e) => {
@@ -417,6 +457,16 @@ pub fn init(app: &AppHandle) -> Result<SettingsState, String> {
             Settings::default()
         }
     };
+    // 1.2.2 — Generate the bridge token on first ever launch (and
+    // on launches after the user reset to defaults). Persist immediately
+    // so the same token survives across runs — the browser extension
+    // pairs once and remembers. Skipped if a token already exists.
+    if settings.bridge_token.trim().is_empty() {
+        settings.bridge_token = generate_bridge_token();
+        if let Err(e) = save_to_disk(&path, &settings) {
+            eprintln!("could not persist generated bridge_token: {e}");
+        }
+    }
     Ok(SettingsState {
         inner: Mutex::new(settings),
         path,
@@ -482,29 +532,31 @@ fn save_to_disk(path: &PathBuf, settings: &Settings) -> Result<(), String> {
 /// arbitrary string through could shell-quote-injection territory
 /// (yt-dlp uses argv so it's safer than a shell command line, but
 /// still: defense in depth).
-/// 1.0.3 / patched 1.0.4 — YouTube extractor args every yt-dlp call
-/// should carry.
+/// 1.0.3 (added) / 1.0.4 (revert) / 1.1 (dropped) — YouTube extractor args.
 ///
-/// `player_client=web,tv` keeps the default web client first (full
-/// format catalog, original behavior) and adds TV as a backup that
-/// kicks in when web can't extract — typically the age-gate case
-/// where the web client refuses but TV's looser enforcement returns
-/// formats anyway.
+/// **Now returns an empty Vec.** History of why, so future-us doesn't
+/// re-add the TV client thinking it's safe:
 ///
-/// **1.0.3 had `tv,web`** which broke metadata fetch for at least
-/// one hard-age-gated video: TV returned formats but in a shape that
-/// made yt-dlp report "Requested format is not available" on the
-/// `-j` dump, even though we don't pass `-f` to fetch. Putting web
-/// first restores the proven path and keeps TV as additive coverage
-/// rather than the primary.
+/// - 1.0.3 added `player_client=tv,web` to bypass age-gate via the TV
+///   InnerTube client (which historically enforces age-gate less
+///   strictly than web).
+/// - 1.0.4 reverted ordering to `web,tv` after TV-first broke metadata
+///   fetch on hard-age-gated videos ("Requested format is not available").
+/// - 1.1 dropped TV entirely after upstream issue #12563 confirmed
+///   YouTube is running an experiment where the TV (TVHTML5) client
+///   returns **all videos** as DRM-protected, not just actual DRM
+///   content. When the experiment is active on your account/IP, every
+///   yt-dlp call that includes `tv` in player_client fails with
+///   "This video is DRM protected." Even non-age-restricted public
+///   videos. We hit this on 2026-05-23 PM.
 ///
-/// Safe to apply unconditionally: the `youtube:` prefix means
-/// non-YouTube extractors silently ignore these args.
+/// The lesson: yt-dlp's default client list is the tested baseline.
+/// Forcing extractor-args defaults is fragile because YouTube can
+/// (and does) silently weaponize specific clients via A/B tests.
+/// If a future hard-age-gate workaround needs a non-default client,
+/// make it OPT-IN via a Settings toggle, never the default.
 pub fn youtube_extractor_args() -> Vec<String> {
-    vec![
-        "--extractor-args".to_string(),
-        "youtube:player_client=web,tv".to_string(),
-    ]
+    Vec::new()
 }
 
 /// 1.0.3 — diagnostic snapshot of a cookies.txt file.
@@ -662,13 +714,27 @@ pub fn cookies_args(state: &SettingsState) -> Vec<String> {
             }
         }
         CookiesSource::File { path } => {
+            // 1.2.14 — guard against empty / whitespace-only path.
+            // Was passing `--cookies ""` to yt-dlp, which crashes
+            // its PyInstaller bootloader with the cryptic
+            // `[PYI-...:ERROR] Failed to execute script '__main__'`
+            // (no Python traceback because the bootloader dies
+             // before Python init completes). Real-world cause:
+            // user picks "File" in the Settings cookies picker but
+            // hasn't selected a path yet. Treat as No cookies.
+            let trimmed = path.trim();
+            if trimmed.is_empty() {
+                eprintln!("[cookies] file mode with empty path — treating as None");
+                return Vec::new();
+            }
             // File-path sanity check — yt-dlp would also fail, but we
             // log here so the dev console shows the actual issue
             // (file missing? non-ASCII path the shell mangled?).
-            if !std::path::Path::new(path).exists() {
-                eprintln!("[cookies] WARN file mode but path doesn't exist: {path:?}");
+            if !std::path::Path::new(trimmed).exists() {
+                eprintln!("[cookies] WARN file mode but path doesn't exist: {trimmed:?} — treating as None");
+                return Vec::new();
             }
-            vec!["--cookies".to_string(), path.clone()]
+            vec!["--cookies".to_string(), trimmed.to_string()]
         }
     };
     // Diagnostic line — shows what we're actually passing to yt-dlp.

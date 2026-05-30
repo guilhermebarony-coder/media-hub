@@ -46,6 +46,10 @@ pub struct AssetInput {
     /// Download flow doesn't pass this yet (always Library); Phase B
     /// wires it to the active-project picker.
     pub project_id: Option<String>,
+    /// 1.2.0 — asset kind. None defaults to "video" server-side so
+    /// older renderers / callers don't need to know about kinds yet.
+    /// Recognized: "video", "audio". Future: "image", "archive".
+    pub kind: Option<String>,
 }
 
 /// 1:1 with the `assets` table — what sqlx::FromRow can directly decode.
@@ -72,6 +76,17 @@ struct AssetRow {
     pub thumbnail_url: Option<String>,
     pub thumbnail_path: Option<String>,
     pub project_id: Option<String>,
+    /// 1.1 Phase 2 — organizational folder, orthogonal to project.
+    /// NULL = "Uncategorized" (no folder assigned). Cascades to NULL
+    /// via FK on folder delete so dropping a folder never loses
+    /// asset rows.
+    #[sqlx(default)]
+    pub folder_id: Option<String>,
+    /// 1.2.0 — asset kind. `#[sqlx(default)]` keeps it safe for old
+    /// rows pre-migration where the column isn't set yet (decodes as
+    /// empty string → we coalesce to "video" in From<AssetRow>).
+    #[sqlx(default)]
+    pub kind: String,
     pub downloaded_at: i64,
     /// Count of OTHER assets sharing this asset's source_url. Computed
     /// per row in library_list via a sub-select — drives the "+N
@@ -79,6 +94,10 @@ struct AssetRow {
     /// Defaults to 0 when no other rows share the URL (typical case).
     #[sqlx(default)]
     pub sibling_count: i64,
+    /// 1.3.0 — in-app trash. NULL = live; Some(unix) = trashed at that
+    /// time. `#[sqlx(default)]` so old rows decode fine.
+    #[sqlx(default)]
+    pub deleted_at: Option<i64>,
 }
 
 /// What we serialize to the renderer — AssetRow + denormalized tag list
@@ -107,11 +126,24 @@ pub struct Asset {
     pub thumbnail_url: Option<String>,
     pub thumbnail_path: Option<String>,
     pub project_id: Option<String>,
+    /// 1.1 Phase 2 — organizational folder. See AssetRow.folder_id doc.
+    pub folder_id: Option<String>,
+    /// 1.2.0 — "video" | "audio" | future kinds. Always populated.
+    pub kind: String,
     pub downloaded_at: i64,
     pub tags: Vec<String>,
     /// Number of other assets that share this asset's source_url.
     /// Drives the "+N siblings" chip on library cards.
     pub sibling_count: i64,
+    /// 1.3.0 — true when `file_path` no longer exists on disk (deleted
+    /// out-of-band in Explorer/Finder, or its drive is offline). Computed
+    /// per-list in `library_list`, never stored. Drives the ⚠ MISSING
+    /// badge + the "Remove missing" cleanup. We never auto-delete on this
+    /// — an unplugged drive must not wipe the library.
+    pub missing: bool,
+    /// 1.3.0 — when this clip was moved to the in-app Trash (unix secs),
+    /// or null if it's live. Drives the Trash view's "deleted X ago".
+    pub deleted_at: Option<i64>,
 }
 
 impl From<AssetRow> for Asset {
@@ -138,9 +170,16 @@ impl From<AssetRow> for Asset {
             thumbnail_url: r.thumbnail_url,
             thumbnail_path: r.thumbnail_path,
             project_id: r.project_id,
+            folder_id: r.folder_id,
+            // Coerce empty (legacy rows pre-migration) → "video" so
+            // the renderer doesn't have to handle the empty case.
+            kind: if r.kind.is_empty() { "video".to_string() } else { r.kind },
             downloaded_at: r.downloaded_at,
             tags: Vec::new(),
             sibling_count: r.sibling_count,
+            // Set per-list in library_list (needs a filesystem stat).
+            missing: false,
+            deleted_at: r.deleted_at,
         }
     }
 }
@@ -161,6 +200,11 @@ pub struct Project {
     pub slug: String,
     pub created_at: i64,
     pub asset_count: i64,
+    /// 1.3.0 — custom on-disk folder. None = legacy managed path
+    /// (<content_root>/Projects/<slug>/raw/); Some = that exact folder,
+    /// clips land directly in it. Drives the "custom location" behavior
+    /// + the "never trash a user folder" safety rule.
+    pub root_path: Option<String>,
 }
 
 /// Scope filter for `library_list` and `library_count`. Tagged enum
@@ -260,6 +304,10 @@ pub async fn init(app: &AppHandle) -> Result<LibraryState, String> {
         include_str!("../migrations/004_projects.sql"),
         include_str!("../migrations/005_indexes.sql"),
         include_str!("../migrations/006_drop_dead_indexes.sql"),
+        include_str!("../migrations/007_folders.sql"),
+        include_str!("../migrations/008_asset_kind.sql"),
+        include_str!("../migrations/009_project_root.sql"),
+        include_str!("../migrations/010_trash.sql"),
     ] {
         for stmt in split_sql_statements(schema) {
             if let Err(e) = sqlx::query(&stmt).execute(&pool).await {
@@ -325,14 +373,23 @@ pub async fn library_insert(
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp();
 
+    // 1.2.0 — validate kind allowlist. Defends against arbitrary
+    // strings sneaking in from a misbehaving renderer; unknown values
+    // collapse to "video" so the worst case is a video-styled card.
+    let kind = match input.kind.as_deref() {
+        Some("audio") => "audio",
+        Some("video") | None => "video",
+        Some(_) => "video",
+    };
+
     sqlx::query(
         r#"INSERT INTO assets
            (id, source_url, platform, video_id, channel, title,
             duration_sec, in_sec, out_sec,
             file_path, file_size, container,
             codec_video, codec_audio, width, height, fps,
-            transcoded_to, thumbnail_url, project_id, downloaded_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            transcoded_to, thumbnail_url, project_id, kind, downloaded_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
     )
     .bind(&id)
     .bind(&input.source_url)
@@ -354,6 +411,7 @@ pub async fn library_insert(
     .bind(&input.transcoded_to)
     .bind(&input.thumbnail_url)
     .bind(&input.project_id)
+    .bind(kind)
     .bind(now)
     .execute(&state.pool)
     .await
@@ -375,7 +433,29 @@ pub struct LibraryFilters {
     pub tags: Option<Vec<String>>,
     /// Project scope filter. Defaults to Any (no filter) when omitted.
     pub scope: Option<LibraryScope>,
+    /// 1.1 Phase 2 — folder filter. Three-state semantics via the
+    /// tagged enum (similar to LibraryScope):
+    ///   - None / Any   → no filter (every folder + uncategorized)
+    ///   - Uncategorized → folder_id IS NULL only
+    ///   - Id(s)         → folder_id = s
+    /// Folders are orthogonal to projects: a clip can live in a
+    /// project AND be tagged with a folder; both filters apply if
+    /// set.
+    pub folder: Option<FolderFilter>,
     pub limit: Option<i64>,
+    /// 1.3.0 — in-app trash view. None/false → live clips only
+    /// (deleted_at IS NULL). true → ONLY trashed clips (deleted_at NOT
+    /// NULL), ignoring project/folder scope (trash is global).
+    pub trashed: Option<bool>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FolderFilter {
+    #[default]
+    Any,
+    Uncategorized,
+    Id { id: String },
 }
 
 #[tauri::command]
@@ -418,16 +498,38 @@ pub async fn library_list(
         }
     }
 
-    // Scope filter. `Any` adds no clause; `Library` and `Project` are
-    // mutually exclusive predicates on assets.project_id.
-    match filters.scope.unwrap_or_default() {
-        LibraryScope::Any => {}
-        LibraryScope::Library => {
-            where_clauses.push("a.project_id IS NULL".into());
+    // 1.3.0 — in-app trash. The live Library excludes trashed rows; the
+    // Trash view shows ONLY trashed rows and ignores project/folder scope
+    // (trash is global). Free-text search still applies in both.
+    let trashed = filters.trashed.unwrap_or(false);
+    if trashed {
+        where_clauses.push("a.deleted_at IS NOT NULL".into());
+    } else {
+        where_clauses.push("a.deleted_at IS NULL".into());
+
+        // Scope filter. `Any` adds no clause; `Library` and `Project`
+        // are mutually exclusive predicates on assets.project_id.
+        match filters.scope.unwrap_or_default() {
+            LibraryScope::Any => {}
+            LibraryScope::Library => {
+                where_clauses.push("a.project_id IS NULL".into());
+            }
+            LibraryScope::Project { id } => {
+                where_clauses.push("a.project_id = ?".into());
+                bindings.push(id);
+            }
         }
-        LibraryScope::Project { id } => {
-            where_clauses.push("a.project_id = ?".into());
-            bindings.push(id);
+
+        // 1.1 Phase 2 — folder filter. Orthogonal to scope above.
+        match filters.folder.unwrap_or_default() {
+            FolderFilter::Any => {}
+            FolderFilter::Uncategorized => {
+                where_clauses.push("a.folder_id IS NULL".into());
+            }
+            FolderFilter::Id { id } => {
+                where_clauses.push("a.folder_id = ?".into());
+                bindings.push(id);
+            }
         }
     }
 
@@ -449,8 +551,11 @@ pub async fn library_list(
                   (SELECT COUNT(*) FROM assets s
                    WHERE s.source_url = a.source_url AND s.id != a.id)
                    AS sibling_count
-           FROM assets a {} ORDER BY a.downloaded_at DESC LIMIT ?"#,
+           FROM assets a {} ORDER BY {} DESC LIMIT ?"#,
         where_sql,
+        // Trash sorts by when it was deleted; the live library by when it
+        // was downloaded.
+        if trashed { "a.deleted_at" } else { "a.downloaded_at" },
     );
 
     let mut q = sqlx::query_as::<_, AssetRow>(&sql);
@@ -477,6 +582,9 @@ pub async fn library_list(
             if let Some(tags) = tag_map.get(&a.id) {
                 a.tags = tags.clone();
             }
+            // 1.3.0 — flag rows whose file is gone. A cheap stat per row;
+            // fine for the default 500-row page. Drives the ⚠ MISSING UI.
+            a.missing = !std::path::Path::new(&a.file_path).exists();
             a
         })
         .collect();
@@ -491,14 +599,16 @@ pub async fn library_count(
     // Mirrors the scope semantics of library_list. Renderer uses this
     // for the "X clips" header counter, which should reflect the
     // current active project, not the global asset count.
+    // 1.3.0 — every count excludes trashed rows (deleted_at IS NULL) so
+    // the header/sidebar counters reflect only live clips.
     let (sql, bind_id): (&str, Option<String>) = match scope.unwrap_or_default() {
-        LibraryScope::Any => ("SELECT COUNT(*) FROM assets", None),
+        LibraryScope::Any => ("SELECT COUNT(*) FROM assets WHERE deleted_at IS NULL", None),
         LibraryScope::Library => (
-            "SELECT COUNT(*) FROM assets WHERE project_id IS NULL",
+            "SELECT COUNT(*) FROM assets WHERE project_id IS NULL AND deleted_at IS NULL",
             None,
         ),
         LibraryScope::Project { id } => (
-            "SELECT COUNT(*) FROM assets WHERE project_id = ?",
+            "SELECT COUNT(*) FROM assets WHERE project_id = ? AND deleted_at IS NULL",
             Some(id),
         ),
     };
@@ -513,59 +623,348 @@ pub async fn library_count(
     Ok(row.0)
 }
 
+// =====================================================================
+// In-app trash (soft-delete) — 1.3.0
+// =====================================================================
+//
+// Deleting a clip moves its file into <content_root>/_trash/ and marks
+// the row trashed (deleted_at set), rather than permanently removing it
+// or going through the OS Recycle Bin. The Trash view lists these,
+// Restore moves the file back to where it came from, and Empty performs
+// the real, permanent delete. Retention is manual (no auto-purge).
+
+/// Move one asset's file into the in-app trash and flag the row. Safe to
+/// call on an already-missing file (we still flag the row so the card
+/// moves to Trash). No-op if the asset is already trashed or gone.
+async fn trash_asset(
+    pool: &SqlitePool,
+    content_root: &Path,
+    id: &str,
+    now: i64,
+) -> Result<(), String> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT file_path FROM assets WHERE id = ? AND deleted_at IS NULL")
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("trash_asset fetch: {e}"))?;
+    let Some((current,)) = row else {
+        return Ok(()); // already trashed or row gone
+    };
+
+    let trash_dir = content_root.join("_trash");
+    let src = PathBuf::from(&current);
+    let file_name = src
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| format!("{id}.bin"));
+    // Prefix with the asset id so two clips with the same basename don't
+    // collide inside _trash.
+    let dest = trash_dir.join(format!("{id}__{file_name}"));
+
+    // Repoint file_path to the trash copy only if we actually moved a
+    // file. If the source was already gone, leave file_path pointing at
+    // its last-known location (the row still gets flagged trashed so the
+    // user can purge it).
+    let mut new_path = current.clone();
+    if src.exists() {
+        std::fs::create_dir_all(&trash_dir).map_err(|e| format!("create trash dir: {e}"))?;
+        if std::fs::rename(&src, &dest).is_err() {
+            std::fs::copy(&src, &dest).map_err(|e| format!("trash copy fallback: {e}"))?;
+            let _ = std::fs::remove_file(&src);
+        }
+        new_path = dest.to_string_lossy().to_string();
+    }
+
+    sqlx::query(
+        "UPDATE assets SET deleted_at = ?, trash_original_path = ?, file_path = ? WHERE id = ?",
+    )
+    .bind(now)
+    .bind(&current) // remember where it lived for Restore
+    .bind(&new_path)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("trash_asset update: {e}"))?;
+    Ok(())
+}
+
+/// Move one clip to the in-app Trash. The file is relocated to
+/// <content_root>/_trash/ and the row is flagged trashed; the user can
+/// restore it from the Trash view or empty the Trash to delete for good.
+///
+/// 1.3.0 — dropped the old `delete_file: Option<bool>` parameter together
+/// with the Forget code path. "Tracked but file invisible" was a leaky
+/// concept that confused users and added no value over actually moving
+/// the file to the Trash. There is exactly one delete intent now.
 #[tauri::command]
 pub async fn library_delete(
     app: AppHandle,
     state: State<'_, LibraryState>,
     settings_state: State<'_, crate::settings::SettingsState>,
     id: String,
-    delete_file: Option<bool>,
 ) -> Result<(), String> {
-    // Default behavior (delete_file = false / None): remove only the
-    // DB row. File on disk is left alone — the user can manually
-    // delete it from Explorer/Finder. asset_tags rows + project_id
-    // refs go via ON DELETE CASCADE / SET NULL.
-    //
-    // With delete_file = true: also remove the file. We grab the
-    // path BEFORE the DELETE so we still have it after the row is
-    // gone. Missing files are non-fatal (the row is gone anyway —
-    // arguably the file was already cleaned up out-of-band).
-    let should_delete_file = delete_file.unwrap_or(false);
-    let path: Option<(String,)> = if should_delete_file {
-        sqlx::query_as("SELECT file_path FROM assets WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(&state.pool)
-            .await
-            .map_err(|e| format!("library_delete fetch path: {e}"))?
-    } else {
-        None
-    };
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| format!("resolve home dir: {e}"))?;
+    let content_root = crate::settings::content_root(&settings_state, &home);
+    let now = chrono::Utc::now().timestamp();
+    trash_asset(&state.pool, &content_root, &id, now).await?;
 
-    sqlx::query("DELETE FROM assets WHERE id = ?")
-        .bind(&id)
+    let _ = app.emit("library:changed", ());
+    Ok(())
+}
+
+/// 1.3.0 — prune library rows whose underlying file is gone (deleted in
+/// Explorer/Finder). Paired with the ⚠ MISSING flag from `library_list`.
+///
+/// SAFETY: we re-verify each file is STILL missing at call time before
+/// deleting its row. So if an external/network drive came back online
+/// between the refresh that flagged the rows and the user clicking
+/// "Remove missing", nothing valid is removed. Only DB rows go (the file
+/// is already gone — nothing to delete on disk). Thumbnails are
+/// best-effort cleaned. Returns the count actually removed.
+#[tauri::command]
+pub async fn library_remove_missing(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    settings_state: State<'_, crate::settings::SettingsState>,
+    ids: Vec<String>,
+) -> Result<u32, String> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders = std::iter::repeat("?")
+        .take(ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!("SELECT id, file_path FROM assets WHERE id IN ({placeholders})");
+    let mut q = sqlx::query_as::<_, (String, String)>(&sql);
+    for id in &ids {
+        q = q.bind(id);
+    }
+    let rows = q
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| format!("remove_missing fetch: {e}"))?;
+
+    // Re-verify: keep only rows whose file really is gone right now.
+    let to_delete: Vec<String> = rows
+        .into_iter()
+        .filter(|(_, path)| !std::path::Path::new(path).exists())
+        .map(|(id, _)| id)
+        .collect();
+    if to_delete.is_empty() {
+        return Ok(0);
+    }
+
+    let del_ph = std::iter::repeat("?")
+        .take(to_delete.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let del_sql = format!("DELETE FROM assets WHERE id IN ({del_ph})");
+    let mut dq = sqlx::query(&del_sql);
+    for id in &to_delete {
+        dq = dq.bind(id);
+    }
+    let res = dq
         .execute(&state.pool)
         .await
-        .map_err(|e| format!("library_delete: {e}"))?;
+        .map_err(|e| format!("remove_missing delete: {e}"))?;
 
-    if let Some((file_path,)) = path {
-        if let Err(e) = std::fs::remove_file(&file_path) {
-            // Don't fail the whole op — DB row is gone, that's the
-            // primary user-visible action. Just warn in logs.
-            eprintln!("library_delete: removing {file_path}: {e}");
-        }
-        // Best-effort thumbnail cleanup too. Respects library_root
-        // override (0.8.C) so thumbnails for content stored under a
-        // custom root are still removed.
-        if let Ok(home) = app.path().home_dir() {
-            let thumb = crate::settings::content_root(&settings_state, &home)
-                .join("_thumbnails")
-                .join(format!("{id}.jpg"));
-            let _ = std::fs::remove_file(thumb);
+    // Best-effort thumbnail cleanup for the removed rows.
+    if let Ok(home) = app.path().home_dir() {
+        let thumbs = crate::settings::content_root(&settings_state, &home).join("_thumbnails");
+        for id in &to_delete {
+            let _ = std::fs::remove_file(thumbs.join(format!("{id}.jpg")));
         }
     }
 
     let _ = app.emit("library:changed", ());
-    Ok(())
+    Ok(res.rows_affected() as u32)
+}
+
+/// Bulk Move-to-Trash. The frontend's multi-select grid can hand us N
+/// asset ids at once; each one goes through `trash_asset` and the result
+/// reports both the count moved and any per-id errors so the UI can show
+/// a partial-success message ("3 moved, 2 couldn't — likely in use").
+///
+/// 1.3.0 — collapsed to a single intent. The old `delete_files: bool`
+/// parameter and its Forget branch (drop row, keep file) are gone; that
+/// concept confused users and the in-app Trash makes it redundant.
+#[derive(Serialize, Debug, Clone)]
+pub struct BulkDeleteResult {
+    pub rows_deleted: u32,
+    pub files_removed: u32,
+    pub file_errors: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn library_delete_many(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    settings_state: State<'_, crate::settings::SettingsState>,
+    ids: Vec<String>,
+) -> Result<BulkDeleteResult, String> {
+    if ids.is_empty() {
+        return Ok(BulkDeleteResult {
+            rows_deleted: 0,
+            files_removed: 0,
+            file_errors: Vec::new(),
+        });
+    }
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| format!("resolve home dir: {e}"))?;
+    let content_root = crate::settings::content_root(&settings_state, &home);
+    let now = chrono::Utc::now().timestamp();
+    let mut trashed = 0u32;
+    let mut file_errors: Vec<String> = Vec::new();
+    for id in &ids {
+        match trash_asset(&state.pool, &content_root, id, now).await {
+            Ok(()) => trashed += 1,
+            Err(e) => {
+                eprintln!("[delete_many] trash id={id}: {e}");
+                file_errors.push(format!("{id}: {e}"));
+            }
+        }
+    }
+    let _ = app.emit("library:changed", ());
+    Ok(BulkDeleteResult {
+        rows_deleted: trashed,
+        files_removed: trashed,
+        file_errors,
+    })
+}
+
+/// 1.3.0 — count of clips currently in the in-app Trash. Drives the
+/// sidebar "Trash (N)" badge.
+#[tauri::command]
+pub async fn library_trash_count(state: State<'_, LibraryState>) -> Result<i64, String> {
+    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM assets WHERE deleted_at IS NOT NULL")
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| format!("library_trash_count: {e}"))?;
+    Ok(row.0)
+}
+
+/// 1.3.0 — restore trashed clips: move each file back from _trash to its
+/// original location and clear the trashed flag. If the original folder
+/// is gone (e.g. project deleted), we recreate its parent; if a file now
+/// occupies the original name, we de-collide with " (N)". Returns count.
+#[tauri::command]
+pub async fn library_trash_restore(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    ids: Vec<String>,
+) -> Result<u32, String> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let mut restored = 0u32;
+    for id in &ids {
+        let row: Option<(String, Option<String>)> = sqlx::query_as(
+            "SELECT file_path, trash_original_path FROM assets WHERE id = ? AND deleted_at IS NOT NULL",
+        )
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| format!("trash_restore fetch id={id}: {e}"))?;
+        let Some((trash_path, original)) = row else {
+            continue;
+        };
+        let src = PathBuf::from(&trash_path);
+
+        // Where to put it back. Prefer the recorded original path,
+        // recreating its parent and de-colliding if needed.
+        let target = match original {
+            Some(orig) if !orig.trim().is_empty() => {
+                let op = PathBuf::from(&orig);
+                match op.parent() {
+                    Some(parent) => {
+                        let _ = std::fs::create_dir_all(parent);
+                        if op.exists() {
+                            unique_target_path(parent, &op)
+                        } else {
+                            op.clone()
+                        }
+                    }
+                    None => op.clone(),
+                }
+            }
+            // No original recorded — leave the file where it is.
+            _ => src.clone(),
+        };
+
+        let final_path = if src.exists() && src != target {
+            if std::fs::rename(&src, &target).is_err() {
+                std::fs::copy(&src, &target)
+                    .map_err(|e| format!("trash_restore copy id={id}: {e}"))?;
+                let _ = std::fs::remove_file(&src);
+            }
+            target.to_string_lossy().to_string()
+        } else {
+            target.to_string_lossy().to_string()
+        };
+
+        sqlx::query(
+            "UPDATE assets SET deleted_at = NULL, trash_original_path = NULL, file_path = ? WHERE id = ?",
+        )
+        .bind(&final_path)
+        .bind(id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("trash_restore update id={id}: {e}"))?;
+        restored += 1;
+    }
+    let _ = app.emit("library:changed", ());
+    Ok(restored)
+}
+
+/// 1.3.0 — permanently delete trashed clips (the real delete). Removes
+/// the _trash file + thumbnail + row. Only acts on rows that are
+/// actually trashed. Returns count removed.
+#[tauri::command]
+pub async fn library_trash_empty(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    settings_state: State<'_, crate::settings::SettingsState>,
+    ids: Vec<String>,
+) -> Result<u32, String> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let thumbs_dir = app
+        .path()
+        .home_dir()
+        .ok()
+        .map(|h| crate::settings::content_root(&settings_state, &h).join("_thumbnails"));
+    let mut removed = 0u32;
+    for id in &ids {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT file_path FROM assets WHERE id = ? AND deleted_at IS NOT NULL")
+                .bind(id)
+                .fetch_optional(&state.pool)
+                .await
+                .map_err(|e| format!("trash_empty fetch id={id}: {e}"))?;
+        let Some((path,)) = row else {
+            continue;
+        };
+        let _ = std::fs::remove_file(&path);
+        if let Some(ref td) = thumbs_dir {
+            let _ = std::fs::remove_file(td.join(format!("{id}.jpg")));
+        }
+        sqlx::query("DELETE FROM assets WHERE id = ?")
+            .bind(id)
+            .execute(&state.pool)
+            .await
+            .map_err(|e| format!("trash_empty delete id={id}: {e}"))?;
+        removed += 1;
+    }
+    let _ = app.emit("library:changed", ());
+    Ok(removed)
 }
 
 /// Replace an asset's full tag set in one atomic operation. The
@@ -764,14 +1163,19 @@ pub async fn library_find_by_url(
 // Filesystem layout helpers (0.6 Phase B)
 // =====================================================================
 
-/// Look up a project's slug from its id. Returns None if the project
-/// doesn't exist (caller decides whether to fail or fall back).
-async fn project_slug_for(pool: &SqlitePool, id: &str) -> Result<Option<String>, sqlx::Error> {
-    let row: Option<(String,)> = sqlx::query_as("SELECT slug FROM projects WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
-    Ok(row.map(|(s,)| s))
+/// 1.3.0 — look up a project's (slug, root_path). `root_path` is the
+/// custom user folder (None = legacy managed path). Returns None if the
+/// project doesn't exist.
+async fn project_paths_for(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<(String, Option<String>)>, sqlx::Error> {
+    let row: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT slug, root_path FROM projects WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row)
 }
 
 /// Compute the on-disk download directory for a given scope.
@@ -801,11 +1205,14 @@ pub async fn resolve_download_dir(
     match project_id {
         None => Ok(root.join("Library").join("raw")),
         Some(id) => {
-            let slug = project_slug_for(&state.pool, id)
+            let paths = project_paths_for(&state.pool, id)
                 .await
                 .map_err(|e| format!("resolve_download_dir lookup: {e}"))?;
-            match slug {
-                Some(s) => Ok(root.join("Projects").join(s).join("raw")),
+            match paths {
+                // 1.3.0 — custom folder: clips land directly in it (no raw/).
+                Some((_, Some(custom))) => Ok(PathBuf::from(custom)),
+                // Legacy managed project: <content_root>/Projects/<slug>/raw/
+                Some((slug, None)) => Ok(root.join("Projects").join(slug).join("raw")),
                 None => {
                     eprintln!(
                         "resolve_download_dir: project {id} not found; falling back to Library"
@@ -815,6 +1222,49 @@ pub async fn resolve_download_dir(
             }
         }
     }
+}
+
+/// 1.1 — heal a library whose thumbnail_path rows point at files
+/// that no longer exist. Built specifically to recover from the
+/// `library_migrate_root` bug shipped in 1.0.5: that command rewrote
+/// `assets.file_path` but forgot to rewrite `assets.thumbnail_path`,
+/// so post-migration libraries had every thumbnail path pointing at
+/// `<old_root>/_thumbnails/...` which is no longer there.
+///
+/// Strategy: for each row with a non-null thumbnail_path, check if
+/// the file exists. If not, set thumbnail_path = NULL. The Library
+/// page's mount-time backfill effect (`library_thumbnails_missing` →
+/// `attachLocalThumbnail`) will then regenerate them from the actual
+/// video files on next mount.
+///
+/// Safe to run anytime — it only nulls broken refs, never overwrites
+/// valid ones. Returns count repaired.
+#[tauri::command]
+pub async fn library_repair_thumbnails(
+    app: AppHandle,
+    state: tauri::State<'_, LibraryState>,
+) -> Result<u32, String> {
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, thumbnail_path FROM assets WHERE thumbnail_path IS NOT NULL")
+            .fetch_all(&state.pool)
+            .await
+            .map_err(|e| format!("repair_thumbnails select: {e}"))?;
+
+    let mut repaired = 0u32;
+    for (id, path) in rows {
+        if !std::path::Path::new(&path).exists() {
+            sqlx::query("UPDATE assets SET thumbnail_path = NULL WHERE id = ?")
+                .bind(&id)
+                .execute(&state.pool)
+                .await
+                .map_err(|e| format!("repair_thumbnails update id={id}: {e}"))?;
+            repaired += 1;
+        }
+    }
+    if repaired > 0 {
+        let _ = app.emit("library:changed", ());
+    }
+    Ok(repaired)
 }
 
 /// Build a non-colliding target path for moving a file into a new
@@ -1098,15 +1548,16 @@ pub async fn library_migrate_root(
         // We do this in Rust rather than `UPDATE ... WHERE file_path LIKE`
         // so we can warn about edge cases (paths that don't actually
         // start with the prefix, mid-string matches, etc.).
-        let rows: Vec<(String, String)> =
-            sqlx::query_as("SELECT id, file_path FROM assets WHERE file_path LIKE ?")
-                .bind(format!("{}%", old_prefix))
-                .fetch_all(&mut *tx)
-                .await
-                .map_err(|e| format!("db select: {e}"))?;
+        let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT id, file_path, thumbnail_path FROM assets WHERE file_path LIKE ?",
+        )
+        .bind(format!("{}%", old_prefix))
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| format!("db select: {e}"))?;
 
         let mut count = 0u32;
-        for (id, file_path) in &rows {
+        for (id, file_path, thumbnail_path) in &rows {
             // Defensive: ensure the prefix actually matches as a path
             // boundary (next char after prefix should be a separator).
             // Avoids accidentally rewriting a different folder that
@@ -1125,6 +1576,27 @@ pub async fn library_migrate_root(
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| format!("db update id={id}: {e}"))?;
+
+            // 1.1 — thumbnail_path patch. 1.0.5's migration forgot
+            // this column, leaving every thumbnail pointing at the
+            // old `<root>/_thumbnails/...` location after a move.
+            // Same prefix-boundary safety as file_path.
+            if let Some(tp) = thumbnail_path {
+                if tp.starts_with(&old_prefix) {
+                    let tp_after = &tp[old_prefix.len()..];
+                    if tp_after.starts_with(std::path::MAIN_SEPARATOR) || tp_after.is_empty() {
+                        let new_tp = format!("{new_prefix}{tp_after}");
+                        sqlx::query(
+                            "UPDATE assets SET thumbnail_path = ? WHERE id = ?",
+                        )
+                        .bind(&new_tp)
+                        .bind(id)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| format!("db update thumbnail id={id}: {e}"))?;
+                    }
+                }
+            }
             count += 1;
         }
 
@@ -1266,6 +1738,7 @@ pub async fn project_create(
     app: AppHandle,
     state: State<'_, LibraryState>,
     name: String,
+    root_path: Option<String>,
 ) -> Result<Project, String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -1274,6 +1747,27 @@ pub async fn project_create(
     if trimmed.len() > 80 {
         return Err("project name exceeds 80 chars".into());
     }
+
+    // 1.3.0 — optional custom folder. Normalize empty → None, then
+    // validate: must be creatable + a directory. We create it now so the
+    // folder exists immediately (an editor can point their NLE at it
+    // before the first download lands).
+    let root_path = match root_path.map(|p| p.trim().to_string()).filter(|p| !p.is_empty()) {
+        None => None,
+        Some(p) => {
+            let pb = PathBuf::from(&p);
+            std::fs::create_dir_all(&pb)
+                .map_err(|e| format!("create project folder {p}: {e}"))?;
+            if !pb.is_dir() {
+                return Err(format!("project folder is not a directory: {p}"));
+            }
+            // Store the path as the picker gave it (already absolute +
+            // clean). We deliberately DON'T canonicalize: on Windows that
+            // yields a `\\?\C:\...` extended-length prefix that both looks
+            // wrong in the UI and can trip yt-dlp's `-P` handling.
+            Some(p)
+        }
+    };
 
     // Pre-check display-name uniqueness (case-insensitive). The DB
     // UNIQUE COLLATE NOCASE will catch this too, but a user-facing
@@ -1295,14 +1789,17 @@ pub async fn project_create(
         .map_err(|e| format!("project_create slug: {e}"))?;
     let now = chrono::Utc::now().timestamp();
 
-    sqlx::query("INSERT INTO projects (id, name, slug, created_at) VALUES (?, ?, ?, ?)")
-        .bind(&id)
-        .bind(trimmed)
-        .bind(&slug)
-        .bind(now)
-        .execute(&state.pool)
-        .await
-        .map_err(|e| format!("project_create: {e}"))?;
+    sqlx::query(
+        "INSERT INTO projects (id, name, slug, created_at, root_path) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(trimmed)
+    .bind(&slug)
+    .bind(now)
+    .bind(&root_path)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| format!("project_create: {e}"))?;
 
     let _ = app.emit("library:changed", ());
 
@@ -1312,7 +1809,28 @@ pub async fn project_create(
         slug,
         created_at: now,
         asset_count: 0,
+        root_path,
     })
+}
+
+/// 1.3.0 — resolve a project's absolute on-disk folder (the same dir
+/// downloads land in). Used by the Projects UI "Open folder" button,
+/// which can't compute the managed path itself (it doesn't know
+/// content_root). Does NOT create the folder — just reports where it is.
+#[tauri::command]
+pub async fn project_dir(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    settings_state: State<'_, crate::settings::SettingsState>,
+    id: String,
+) -> Result<String, String> {
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| format!("resolve home dir: {e}"))?;
+    let content_root = crate::settings::content_root(&settings_state, &home);
+    let dir = resolve_download_dir(&state, &content_root, Some(&id)).await?;
+    Ok(dir.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -1320,9 +1838,10 @@ pub async fn project_list(state: State<'_, LibraryState>) -> Result<Vec<Project>
     // LEFT JOIN keeps zero-asset projects in the result. ORDER BY
     // created_at DESC so newest projects float up (matches the
     // "I just made this, where is it" expectation).
-    let rows = sqlx::query_as::<_, (String, String, String, i64, i64)>(
+    let rows = sqlx::query_as::<_, (String, String, String, i64, i64, Option<String>)>(
         r#"SELECT p.id, p.name, p.slug, p.created_at,
-                  COALESCE(COUNT(a.id), 0) AS asset_count
+                  COALESCE(COUNT(a.id), 0) AS asset_count,
+                  p.root_path
            FROM projects p
            LEFT JOIN assets a ON a.project_id = p.id
            GROUP BY p.id
@@ -1334,12 +1853,13 @@ pub async fn project_list(state: State<'_, LibraryState>) -> Result<Vec<Project>
 
     Ok(rows
         .into_iter()
-        .map(|(id, name, slug, created_at, asset_count)| Project {
+        .map(|(id, name, slug, created_at, asset_count, root_path)| Project {
             id,
             name,
             slug,
             created_at,
             asset_count,
+            root_path,
         })
         .collect())
 }
@@ -1512,9 +2032,9 @@ pub async fn project_finish(
     id: String,
     promote: bool,
 ) -> Result<(), String> {
-    // Resolve the slug first — needed for the folder path AND we
-    // want to bail clearly if the project doesn't exist.
-    let slug = project_slug_for(&state.pool, &id)
+    // Resolve slug + custom root first — needed for the folder path AND
+    // we want to bail clearly if the project doesn't exist.
+    let (slug, root_path) = project_paths_for(&state.pool, &id)
         .await
         .map_err(|e| format!("project_finish lookup: {e}"))?
         .ok_or_else(|| format!("project {id} not found"))?;
@@ -1524,7 +2044,12 @@ pub async fn project_finish(
         .home_dir()
         .map_err(|e| format!("resolve home dir: {e}"))?;
     let content_root = crate::settings::content_root(&settings_state, &home);
-    let project_dir = content_root.join("Projects").join(&slug);
+    // Only legacy managed projects have an app-owned folder we may trash.
+    // Custom-location projects point at the user's own folder — NEVER
+    // trash that (it may be the root of their real NLE project).
+    let managed_dir = root_path
+        .is_none()
+        .then(|| content_root.join("Projects").join(&slug));
 
     if promote {
         // Move each project asset back to Library (file + DB) via
@@ -1588,14 +2113,18 @@ pub async fn project_finish(
             .map_err(|e| format!("project_finish purge assets: {e}"))?;
     }
 
-    // Trash the project folder. Missing-folder is fine (user finished
-    // an empty project, or files were already cleaned up out-of-band).
-    if project_dir.exists() {
-        if let Err(e) = trash::delete(&project_dir) {
-            return Err(format!(
-                "could not move {} to trash: {e}",
-                project_dir.display()
-            ));
+    // Trash the project folder — ONLY for legacy managed projects.
+    // `managed_dir` is None for custom-location projects, so their
+    // user-owned folder is left completely untouched. Missing-folder is
+    // fine (empty project, or files cleaned up out-of-band).
+    if let Some(project_dir) = &managed_dir {
+        if project_dir.exists() {
+            if let Err(e) = trash::delete(project_dir) {
+                return Err(format!(
+                    "could not move {} to trash: {e}",
+                    project_dir.display()
+                ));
+            }
         }
     }
 
@@ -1633,6 +2162,221 @@ pub async fn project_delete(
 }
 
 // =====================================================================
+// 1.1 Phase 2 — Folder CRUD + asset assignment
+// =====================================================================
+//
+// Folders are user-named organizational buckets, orthogonal to
+// projects. See migrations/007_folders.sql for the schema rationale.
+//
+// Commands:
+//   folder_create(name) → Folder            (case-insensitive unique name)
+//   folder_list()       → Vec<Folder>       (sorted by created_at DESC,
+//                                            with asset_count per folder)
+//   folder_rename(id, name)                 (same uniqueness rule)
+//   folder_delete(id)                       (FK SET NULL → assets fall
+//                                            back to Uncategorized)
+//   asset_set_folder(asset_id, folder_id?)  (single-asset assignment)
+//   asset_set_folder_many(asset_ids, folder_id?) (batch from inspector)
+//
+// All mutators emit `library:changed` so the sidebar + grid refresh.
+
+#[derive(Serialize, Debug, Clone)]
+pub struct Folder {
+    pub id: String,
+    pub name: String,
+    pub created_at: i64,
+    /// Count of assets currently in this folder. Computed in
+    /// folder_list via LEFT JOIN; not stored on the row.
+    pub asset_count: i64,
+}
+
+#[tauri::command]
+pub async fn folder_create(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    name: String,
+) -> Result<Folder, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("folder name is empty".into());
+    }
+    if trimmed.len() > 80 {
+        return Err("folder name exceeds 80 chars".into());
+    }
+    // Case-insensitive dupe pre-check for a friendlier error.
+    let dupe: Option<(i64,)> =
+        sqlx::query_as("SELECT 1 FROM folders WHERE name = ? COLLATE NOCASE LIMIT 1")
+            .bind(trimmed)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|e| format!("folder_create dupe-check: {e}"))?;
+    if dupe.is_some() {
+        return Err(format!("folder named \"{trimmed}\" already exists"));
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query("INSERT INTO folders (id, name, created_at) VALUES (?, ?, ?)")
+        .bind(&id)
+        .bind(trimmed)
+        .bind(now)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("folder_create: {e}"))?;
+    let _ = app.emit("library:changed", ());
+    Ok(Folder {
+        id,
+        name: trimmed.to_string(),
+        created_at: now,
+        asset_count: 0,
+    })
+}
+
+#[tauri::command]
+pub async fn folder_list(state: State<'_, LibraryState>) -> Result<Vec<Folder>, String> {
+    // LEFT JOIN keeps zero-asset folders visible (you just made one,
+    // it should appear immediately even before you assign anything).
+    // ORDER BY name COLLATE NOCASE for predictable alphabetical
+    // sorting — matches Eagle's default and is easier to scan than
+    // creation order once you have more than a handful.
+    let rows = sqlx::query_as::<_, (String, String, i64, i64)>(
+        r#"SELECT f.id, f.name, f.created_at,
+                  COALESCE(COUNT(a.id), 0) AS asset_count
+           FROM folders f
+           LEFT JOIN assets a ON a.folder_id = f.id
+           GROUP BY f.id
+           ORDER BY f.name COLLATE NOCASE ASC"#,
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("folder_list: {e}"))?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, created_at, asset_count)| Folder {
+            id,
+            name,
+            created_at,
+            asset_count,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn folder_rename(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    id: String,
+    name: String,
+) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("folder name is empty".into());
+    }
+    if trimmed.len() > 80 {
+        return Err("folder name exceeds 80 chars".into());
+    }
+    let dupe: Option<(i64,)> =
+        sqlx::query_as("SELECT 1 FROM folders WHERE name = ? COLLATE NOCASE AND id != ? LIMIT 1")
+            .bind(trimmed)
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|e| format!("folder_rename dupe-check: {e}"))?;
+    if dupe.is_some() {
+        return Err(format!("folder named \"{trimmed}\" already exists"));
+    }
+    let res = sqlx::query("UPDATE folders SET name = ? WHERE id = ?")
+        .bind(trimmed)
+        .bind(&id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("folder_rename: {e}"))?;
+    if res.rows_affected() == 0 {
+        return Err(format!("folder {id} not found"));
+    }
+    let _ = app.emit("library:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn folder_delete(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    id: String,
+) -> Result<(), String> {
+    // Assets in this folder fall back to Uncategorized via the
+    // FK ON DELETE SET NULL declared in migration 007. No need to
+    // explicitly NULL them here.
+    let res = sqlx::query("DELETE FROM folders WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("folder_delete: {e}"))?;
+    if res.rows_affected() == 0 {
+        return Err(format!("folder {id} not found"));
+    }
+    let _ = app.emit("library:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn asset_set_folder(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    asset_id: String,
+    folder_id: Option<String>,
+) -> Result<(), String> {
+    // folder_id = None → move to Uncategorized.
+    // We don't validate the folder exists here — the FK constraint
+    // will reject invalid ids, and the user-facing flow only ever
+    // sends ids from folder_list output.
+    let res = sqlx::query("UPDATE assets SET folder_id = ? WHERE id = ?")
+        .bind(&folder_id)
+        .bind(&asset_id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("asset_set_folder: {e}"))?;
+    if res.rows_affected() == 0 {
+        return Err(format!("asset {asset_id} not found"));
+    }
+    let _ = app.emit("library:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn asset_set_folder_many(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    asset_ids: Vec<String>,
+    folder_id: Option<String>,
+) -> Result<u32, String> {
+    if asset_ids.is_empty() {
+        return Ok(0);
+    }
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|e| format!("asset_set_folder_many tx begin: {e}"))?;
+    let mut count = 0u32;
+    for id in &asset_ids {
+        let res = sqlx::query("UPDATE assets SET folder_id = ? WHERE id = ?")
+            .bind(&folder_id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("asset_set_folder_many id={id}: {e}"))?;
+        count += res.rows_affected() as u32;
+    }
+    tx.commit()
+        .await
+        .map_err(|e| format!("asset_set_folder_many tx commit: {e}"))?;
+    if count > 0 {
+        let _ = app.emit("library:changed", ());
+    }
+    Ok(count)
+}
+
+// =====================================================================
 // Thumbnail commands
 // =====================================================================
 
@@ -1653,4 +2397,164 @@ pub async fn library_set_thumbnail(
         let _ = app.emit("library:changed", ());
     }
     Ok(())
+}
+
+// =====================================================================
+// 1.1.3 — Orphan / partial-download scan
+// =====================================================================
+//
+// On app boot we scan the library + project roots for files that
+// shouldn't be there: leftover `*.part`, `*.ytdl`, `*.tmp` files from
+// yt-dlp / ffmpeg sessions that were killed mid-stream (PC sleep,
+// crash, user closing the app without confirming, etc.). These can
+// quietly fill the disk — a tester reported ffmpeg eating CPU after
+// "closing" the app, which left behind a 2 GB partial mp4 that the
+// user had no idea about.
+//
+// Two-step: `library_scan_orphans` returns the list (UI shows a banner
+// with size + count), then `library_clean_orphans` moves them to the
+// OS Recycle Bin via the `trash` crate (same code path Library delete
+// uses, so they're recoverable for a while).
+//
+// Safety knobs:
+//   - Only files older than `min_age_seconds` qualify (default 5 min).
+//     Prevents racing with in-flight downloads from another instance.
+//   - Only files matching whitelist extensions: .part, .ytdl, .tmp
+//     plus yt-dlp's intermediate `.f<id>.<ext>` pattern (rare;
+//     normally yt-dlp cleans these up but kill-mid-merge leaves them).
+//   - Walks only `Library/raw` + `Projects/*/raw` — never touches
+//     the user's wider filesystem.
+
+#[derive(Debug, Serialize)]
+pub struct OrphanFile {
+    pub path: String,
+    pub size: i64,
+    pub modified_unix: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OrphanScanResult {
+    pub files: Vec<OrphanFile>,
+    pub total_bytes: i64,
+}
+
+const ORPHAN_MIN_AGE_SECS: i64 = 300; // 5 minutes
+const ORPHAN_EXTENSIONS: &[&str] = &["part", "ytdl", "tmp"];
+
+fn is_orphan_filename(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    for ext in ORPHAN_EXTENSIONS {
+        if lower.ends_with(&format!(".{ext}")) {
+            return true;
+        }
+    }
+    // yt-dlp intermediate format-specific files: e.g. "vid.f137.mp4".
+    // These should be auto-merged then deleted; if they linger past the
+    // age threshold AND have no completed sibling in DB, treat as orphans.
+    // Match `.f` followed by digits then `.` (extension after).
+    if let Some(stem) = std::path::Path::new(&lower).file_stem().and_then(|s| s.to_str()) {
+        if let Some(dot) = stem.rfind('.') {
+            let after = &stem[dot + 1..];
+            if after.starts_with('f') && after[1..].chars().all(|c| c.is_ascii_digit()) && !after[1..].is_empty() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Walk a single `raw/` directory looking for orphan files older than
+/// the threshold. Pushes matches into `out`. Errors during the walk
+/// are logged + skipped (we never want orphan scan to fail boot).
+fn collect_orphans_in(root: &Path, now: i64, out: &mut Vec<OrphanFile>) {
+    let read = match std::fs::read_dir(root) {
+        Ok(r) => r,
+        Err(_) => return, // dir missing → nothing to scan
+    };
+    for entry in read.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        if !is_orphan_filename(name) {
+            continue;
+        }
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        if now - modified < ORPHAN_MIN_AGE_SECS {
+            continue; // probably in-flight; leave alone
+        }
+        out.push(OrphanFile {
+            path: path.to_string_lossy().to_string(),
+            size: meta.len() as i64,
+            modified_unix: modified,
+        });
+    }
+}
+
+#[tauri::command]
+pub async fn library_scan_orphans(
+    _app: AppHandle,
+    _state: tauri::State<'_, LibraryState>,
+    settings_state: tauri::State<'_, crate::settings::SettingsState>,
+) -> Result<OrphanScanResult, String> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let content_root = crate::settings::content_root(&settings_state, &home);
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let mut files: Vec<OrphanFile> = Vec::new();
+
+    // Library/raw
+    collect_orphans_in(&content_root.join("Library").join("raw"), now, &mut files);
+
+    // Projects/*/raw — iterate project dirs
+    if let Ok(read) = std::fs::read_dir(content_root.join("Projects")) {
+        for entry in read.flatten() {
+            let pdir = entry.path();
+            if pdir.is_dir() {
+                collect_orphans_in(&pdir.join("raw"), now, &mut files);
+            }
+        }
+    }
+
+    let total_bytes: i64 = files.iter().map(|f| f.size).sum();
+    Ok(OrphanScanResult { files, total_bytes })
+}
+
+#[tauri::command]
+pub async fn library_clean_orphans(paths: Vec<String>) -> Result<u32, String> {
+    let mut removed: u32 = 0;
+    let mut errors: Vec<String> = Vec::new();
+    for p in paths {
+        match trash::delete(&p) {
+            Ok(()) => removed += 1,
+            Err(e) => errors.push(format!("{p}: {e}")),
+        }
+    }
+    if !errors.is_empty() {
+        eprintln!("library_clean_orphans: {} failures:", errors.len());
+        for e in errors.iter().take(5) {
+            eprintln!("  {e}");
+        }
+    }
+    Ok(removed)
 }

@@ -1,0 +1,84 @@
+{
+  "manifest_version": 3,
+  "name": "Media Hub — Send to App",
+  "short_name": "Media Hub",
+  "version": "1.2.15",
+  "description": "Send the current tab (or any link/video) straight into Media Hub's download queue. Pairs with the desktop app via localhost.",
+
+  "permissions": [
+    "activeTab",
+    "contextMenus",
+    "storage",
+    "notifications",
+    "tabs",
+    "webRequest"
+  ],
+
+  "host_permissions": [
+    "http://127.0.0.1:*/*",
+    "<all_urls>"
+  ],
+
+  "action": {
+    "default_title": "Send to Media Hub",
+    "default_popup": "popup.html"
+  },
+
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["content-twitter.js"],
+      "css": ["content-overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.reddit.com/*",
+        "https://reddit.com/*"
+      ],
+      "js": ["content-reddit.js"],
+      "css": ["content-overlay.css"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "commands": {
+    "send-video": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Send current tab to Media Hub (video)"
+    },
+    "send-mp3": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+M",
+        "mac": "Command+Shift+M"
+      },
+      "description": "Send current tab to Media Hub as MP3"
+    }
+  },
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "media-hub-bridge@mediahub.local",
+      "strict_min_version": "109.0"
+    }
+  }
+}

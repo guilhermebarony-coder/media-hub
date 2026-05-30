@@ -1,10 +1,15 @@
 # Media Hub — Architecture
 
-Status: living doc, last refreshed 2026-05-21 (post 0.8.D — onboarding +
-settings polish). This document is the **map** of what's actually built
-and where it lives. As code lands, this doc updates to match. If it
-drifts, fix the doc. Detailed contracts live in per-module header
-comments.
+Status: living doc, last refreshed 2026-05-27 (post 1.2.15 — audio
+downloads + the browser-extension stack: localhost HTTP bridge,
+`mediahub://` deep link, sideloadable MV3 extension with stream
+sniffer + in-page buttons on Twitter/Reddit). Earlier baseline (1.1.6):
+DownloadsProvider lifted state above the router, keep-alive Shell,
+topbar ActivityBadge, OrphanScanner on boot, CloseGuard removed due to
+Tauri bug #7119. This document is the **map** of
+what's actually built and where it lives. As code lands, this doc
+updates to match. If it drifts, fix the doc. Detailed contracts
+live in per-module header comments.
 
 ✅ = shipped · 🟡 = planned · ❌ = decided against
 
@@ -149,8 +154,11 @@ Commands are registered in `src-tauri/src/lib.rs::run()` via
 | `library_list` | library.rs | Assets matching filters (query + tag-AND + scope + limit), each with its tag list + `sibling_count` |
 | `library_count` | library.rs | Total asset count matching filters |
 | `library_delete` | library.rs | Removes a row; optional `delete_file` also removes file + thumbnail. CASCADE drops asset_tags |
+| `library_delete_many` (1.1) | library.rs | Bulk version — single sqlx tx + per-file OS-trash via `trash` crate. Returns `BulkDeleteResult { rows_deleted, files_removed, file_errors }` |
 | `library_set_thumbnail` | library.rs | Records a local thumbnail path |
 | `library_thumbnails_missing` | library.rs | Lists assets with no `thumbnail_path` for backfill loop |
+| `library_repair_thumbnails` (1.1) | library.rs | Heals rows whose `thumbnail_path` points at a missing file (NULLs them so backfill regenerates). Auto-runs on Library mount |
+| `library_migrate_root` (1.0.5) | library.rs | Physically moves `Library/`, `Projects/`, `_thumbnails/` to a new root + rewrites every `assets.file_path` and `thumbnail_path` row in a single tx. Refuses self-moves / cycles / in-flight downloads |
 | `library_siblings` | library.rs | Returns peer assets sharing the same `source_url` (multi-segment relationships) |
 | `library_find_by_url` | library.rs | Duplicate-check helper used by the Download page before fetch |
 | `tag_set_for_asset` | library.rs | Replace-all tag set in one transaction |
@@ -158,6 +166,11 @@ Commands are registered in `src-tauri/src/lib.rs::run()` via
 | `project_create / list / rename / delete` | library.rs | CRUD for projects. Slug derived at create; never recomputed on rename |
 | `project_finish` | library.rs | Lifecycle endgame — optionally promote assets to Library, OS-trash the project folder, delete the row |
 | `asset_set_project` | library.rs | Physical move between Library ↔ project scope (rename + cross-volume copy/delete fallback + collision-safe naming) |
+| `folder_create / list / rename / delete` (1.1) | library.rs | Folder CRUD. Flat (no nesting yet); FK ON DELETE SET NULL so dropping a folder falls assets back to Uncategorized |
+| `asset_set_folder` / `asset_set_folder_many` (1.1) | library.rs | Single or batch folder assignment. Powers the inspector folder dropdown |
+| `yt_fetch_playlist` (1.1) | lib.rs | `yt-dlp --flat-playlist -J` — enumerates playlist entries (id/title/thumb/url) for the picker. Caps at 500 entries |
+| `yt_download_cancel` (1.0.1) | lib.rs | Looks up + kills the registered CommandChild for a job_id, marks canceled in JobRegistry |
+| `cookies_validate` (1.0.3) | settings.rs | Inspects a cookies.txt file, reports counts + whether it carries a real YouTube auth token (LOGIN_INFO / __Secure-*PSID) |
 | `settings_get / settings_set` | settings.rs | Read/write the user settings struct. Atomic disk write, emits `settings:changed` |
 
 ### Shipped events (renderer subscribes via `listen()`)
@@ -345,10 +358,12 @@ between extractions. Existing assets fill in over time without CPU
 thrashing.
 
 **Asset protocol serving:** `tauri.conf.json` has
-`app.security.assetProtocol = { enable: true, scope: ["$HOME/**"] }`.
+`app.security.assetProtocol = { enable: true, scope: ["$HOME/**", "**"] }`.
 The renderer uses `convertFileSrc(localPath)` to turn a Windows path
-into an `asset.localhost/...` URL the webview can load. Works
-identically in dev and packaged builds.
+into an `asset.localhost/...` URL the webview can load. The `**`
+fallback (added 1.1) lets the WebView load thumbnails from a custom
+`library_root` that lives outside `$HOME` (e.g. `E:\Media Hub Library\`).
+Works identically in dev and packaged builds.
 
 ---
 
@@ -360,7 +375,8 @@ identically in dev and packaged builds.
 ```
 /              → /library (redirect)
 /download      → DownloadPage   (MetadataCard + Scrubber + QueueCard)
-/library       → LibraryPage    (filter sidebar + grid + slide-over drawer)
+/library       → LibraryPage    (3-col: folders sidebar | grid w/ box-drag
+                                 + multi-select | always-on inspector)
 /projects      → ProjectsPage   (create / rename / delete / finish)
 /settings      → SettingsPage   (Sources / Library / Downloads /
                                  Transcode / Diagnostics / About)
@@ -414,6 +430,7 @@ media-hub/
 │       ├── library.ts                ← recordInLibrary, attachLocalThumbnail, thumbnailSrc
 │       ├── settings.tsx              ← SettingsProvider + useSettings hook
 │       ├── activeProject.tsx         ← ActiveProjectProvider + useActiveProject hook
+│       ├── downloads.tsx             ← 1.1.3: DownloadsProvider (queue + single-URL state, listeners, workerLoop) lifted above router
 │       └── icons.tsx                 ← Inline SVG icon set
 ├── src-tauri/                        ← Rust backend
 │   ├── src/
@@ -424,9 +441,10 @@ media-hub/
 │   │   ├── 001_initial.sql
 │   │   ├── 002_tags.sql
 │   │   ├── 003_thumbnails.sql
-│   │   └── 004_projects.sql
+│   │   ├── 004_projects.sql
+│   │   └── 007_folders.sql           ← 1.1 folders + assets.folder_id
 │   ├── capabilities/
-│   │   └── default.json              ← shell:execute (yt-dlp, ffmpeg) + opener + dialog scopes
+│   │   └── default.json              ← shell:execute (yt-dlp, ffmpeg) + opener + dialog + drag scopes
 │   ├── binaries/                     ← Bundled yt-dlp + ffmpeg (gitignored)
 │   ├── icons/
 │   ├── Cargo.toml
@@ -439,7 +457,7 @@ media-hub/
 ├── design-reference/                 ← Handoff JSX (design spec, not run)
 ├── scripts/
 │   └── fetch-sidecars.ps1            ← Grab latest yt-dlp / ffmpeg
-├── package.json                      ← @tauri-apps/{api, plugin-opener, plugin-shell, plugin-dialog}
+├── package.json                      ← @tauri-apps/{api, plugin-opener, plugin-shell, plugin-dialog} + @crabnebula/tauri-plugin-drag
 └── tsconfig.json
 ```
 
@@ -529,7 +547,216 @@ Deliberately deferred or never:
 - 🟡 Platform abstraction (Twitter/X/TikTok) — post-1.0 (was 0.7)
 - 🟡 FTS5 search — defer until LIKE perf hurts
 - 🟡 Eagle-style overhaul (folders, color labels, ratings) — 1.2
-- 🟡 Drag-to-NLE — 1.1 (front-runner post-1.0)
+- ✅ Drag-to-NLE — 1.1.2 (via `tauri-plugin-drag`, single-gesture for
+  both folder-drop and OS drag-out; live folder hover has a Windows-OLE
+  open bug — see 1.1.2 notes below)
+
+---
+
+## 11. 1.1.2 — Drag & drop wiring (Tauri + plugin-drag)
+
+**Plugin**: `@crabnebula/tauri-plugin-drag@2.1.0` (npm) + `tauri-plugin-drag@2.1.1`
+(Rust). Registered in `lib.rs` next to opener/shell/dialog. Permission
+`drag:default` added to `capabilities/default.json`.
+
+**Frontend wiring (Library.tsx):**
+- `<LibCard>` is `draggable type="button"`, fires `onCardDragStart`.
+- `onCardDragStart` calls `ev.preventDefault()` (kills the HTML5 drag)
+  then `startDrag({ item: filePaths, icon: thumbPath, mode: "copy" })`.
+- Selection rule: dragging a card already in selection drags the whole
+  selection; dragging a non-selected card swaps selection to just that
+  card. Finder/Eagle convention.
+- `mode: "copy"` so external apps (Premiere/Resolve/Explorer) get a
+  reference to the library file without "moving" it out.
+
+**Internal folder drop dispatch:**
+- We subscribe once to `getCurrentWebview().onDragDropEvent(...)` at
+  mount. The event payload contains `position` (window-relative
+  physical px) on enter/over/drop — we record it in `dragTrackedPosRef`
+  (logical px after `/dpr` divide).
+- Folder rows have `data-folder-key={f.id | "__uncategorized__" | "__all__"}`.
+  `folderAtPoint(x,y)` walks up from `elementFromPoint` and reads it.
+- On startDrag's own callback (Dropped OR Cancelled — Windows reports
+  own-window drops as Cancelled), we first try the tracked position;
+  on miss, we try four coordinate-space interpretations of the plugin's
+  own `cursorPos` as a fallback. Whichever finds a folder wins.
+- Successful hit → `asset_set_folder` / `asset_set_folder_many`.
+
+**Known open bug (carried into 2026-05-25):**
+- On Windows, `onDragDropEvent` doesn't reliably fire enter/over events
+  for **self-initiated drags** — only `drop`. Consequence: live folder
+  highlight during drag can't be driven from those events. Workaround
+  shipped: a static `lib-drag-hint` ("Drop on a folder to move N clips")
+  in the sidebar replaces the per-folder hover during drag.
+- **Even so, user reports stuck or weird highlight after drop.**
+  Multiple defensive fixes (don't set hover on `drop`, clear on cleanup,
+  drag-hint instead of per-folder outline) haven't fully resolved it.
+  Theory for tomorrow: maybe the `drop` event fires AGAIN as a delayed
+  re-event, OR React batches state in a way that pins the stale hover
+  through the library:changed refresh that follows the successful move.
+  Diagnostic plan: add transient console logs around all four state
+  setters that touch `folderDropHover`, repro the bug, see which one
+  fires last with what value. Then decide.
+
+---
+
+## 12. 1.1.3 → 1.1.6 — State lifted above the router + close-bug saga
+
+**`src/lib/downloads.tsx` (DownloadsProvider)** — mounted at App.tsx
+above `<HashRouter>`. Owns ALL active download/transcode state so
+component unmount on route nav can't lose it:
+  - `queueJobs[]` — multi-URL batch queue, persisted to localStorage
+  - `singleDownload` — at-most-one active single-URL DL with progress,
+    transcodeProgress, phase, error, result
+  - `download:progress` + `transcode:progress` listeners attached
+    ONCE; route-by-jobId to either queue rows or singleDownload
+  - `workerLoop()` + CPU/GPU transcode semaphores (concurrency)
+  - Single-URL `startSingleDownload(args)` runs the full
+    yt_download → media_transcode → recordInLibrary →
+    attachLocalThumbnail pipeline, captures all state in the
+    provider so the originating MetadataCard can unmount safely
+
+**Keep-alive `Shell` (1.1.3)** — replaces React Router's mount-on-
+match. Each page (`/library`, `/download`, `/projects`, `/settings`)
+mounts on first visit; non-active pages stay mounted but hidden via
+`hidden` attr (no display:none repaint cost; React state intact).
+Cost: ~50 MB worst-case (Library grid + Download scrubber). Win:
+form state, scrubber video, fetched metadata, library filters/scroll
+all survive nav for free. App.tsx routes only `/` → HomeRedirect;
+everything else goes to Shell.
+
+**Topbar `ActivityBadge`** — pulsing lime chip, "N downloading",
+always visible when `activeCount > 0`. Click → /download.
+
+**Boot-time orphan scan** — `OrphanScanner` (App.tsx) fires 3 sec
+after mount. Calls Rust `library_scan_orphans` which walks
+`Library/raw` + `Projects/*/raw` for `.part`, `.ytdl`, `.tmp`, and
+yt-dlp's `.f<id>.<ext>` intermediates older than 5 min. If found,
+shows confirm; on accept, `library_clean_orphans` moves them to
+Recycle Bin via the `trash` crate. Catches partials left by
+processes killed at shutdown.
+
+**CloseGuard: REMOVED (1.1.6).** Was supposed to kill child processes
+on window close. Symptom across 1.1.3–1.1.5: "clicking X did nothing."
+Root cause: [Tauri bug #7119](https://github.com/tauri-apps/tauri/issues/7119)
+— calling `unlisten()` on `onCloseRequested` permanently breaks
+window close. React.StrictMode's effect double-invoke in dev, plus
+the `if (cancelled) fn()` race branch in prod, both trigger the
+upstream bug. Workaround: don't register the listener at all. The
+orphan-scan-on-boot is the safety net for partial files; child
+processes self-terminate within minutes when their stdout pipes
+break. **Do not re-add a `onCloseRequested` listener until upstream
+is fixed.**
+
+---
+
+## 13. 1.2.0 — Audio downloads (✅ shipped)
+
+Audio is a first-class asset `kind` alongside video. Flow:
+
+- **DB:** migration `008_asset_kind.sql` adds `kind TEXT NOT NULL
+  DEFAULT 'video'` (+ `idx_assets_kind`). Old rows back-fill to video.
+  `AssetInput.kind` / `Asset.kind` plumbed through; `library_insert`
+  validates against a `"video"|"audio"` allowlist.
+- **Download:** `yt_download` takes `audio_format: Option<String>`.
+  When `Some("mp3"|"m4a"|"flac")` → `-x --audio-format <f>
+  --audio-quality 0`, skips the merge-output-format clause. Audio
+  jobs never transcode (video presets are meaningless for audio).
+- **Waveform thumbs:** `media_extract_waveform` Rust command — ffmpeg
+  `showwavespic` filter renders a slim lime PNG into
+  `_thumbnails/<id>.png`, stored via the same `library_set_thumbnail`
+  path as frame thumbnails. `attachLocalWaveform` (lib/library.ts) is
+  the JS wrapper.
+- **UI:** Download page has Video|Audio tabs; audio mode shows 3 format
+  cards (no bitrate picker — server defaults: MP3 320 / M4A AAC 256 /
+  FLAC lossless). Library card + InspectorSingle render audio variant
+  (waveform bg, music-note glyph, "Format" stat). Kind filter lives in
+  FilterPopup. Queue worker (`processOne`) also honors `audioFormat`.
+
+**`os_open_path` (1.2.0)** — double-click / "open in default app" no
+longer uses plugin-opener (its path scope `$HOME/**` silently rejected
+files on other drives). New Rust command shells out (`cmd /c start` on
+Windows, `open`/`xdg-open` elsewhere). Trust boundary = the library DB
+(path came from our own insert).
+
+## 14. 1.2.2 — Browser-extension bridge + deep link (✅ shipped)
+
+Three channels let outside-the-app contexts enqueue downloads. All
+converge on the SAME `bridge:enqueue` Tauri event, which a
+`BridgeListener` React component (inside DownloadsProvider) routes
+through the existing `enqueueUrls`. So Rust never touches the queue
+directly — it just emits.
+
+**`src-tauri/src/bridge.rs`** — axum HTTP server bound `127.0.0.1:<port>`
+(default 47821), spawned in `setup()` via `tauri::async_runtime::spawn`
+(NOT `tokio::spawn` — no reactor in setup). Routes:
+  - `GET /health` — no auth, returns app + version (extension probe)
+  - `POST /enqueue` — bearer-token auth, body `{ url, audio_format?,
+    project_id?, source? }`. Constant-time token compare. CORS allows
+    `chrome-extension://` / `moz-extension://` / `null` origins.
+  Bind failure logs + disables the bridge for the session (app still runs).
+
+**`mediahub://` deep link** — `tauri-plugin-deep-link` +
+`tauri-plugin-single-instance` (deep-link feature). `mediahub://enqueue
+?url=...&token=...&audio_format=...`. Token is required as a query param
+(deep links can't carry headers) and re-validated against settings.
+Handles three arrival paths (cold-launch argv, single-instance forward,
+`on_open_url`) with a 2-second dedupe window (Windows fires the URL
+through two channels). Parser + percent-decoder hand-rolled in lib.rs.
+
+**Settings:** `bridge_token` (auto-generated 64-hex on first launch),
+`bridge_port`, `bridge_enabled`. Surfaced in Settings → Browser bridge
+with copy/regenerate buttons + PowerShell/bash/`mediahub://` examples.
+
+**Cookies guard (1.2.14):** `settings::cookies_args` now returns no-args
+when File mode has an empty/missing path, instead of emitting
+`--cookies ""` (which crashes yt-dlp's PyInstaller bootloader before
+Python can print a traceback — the infamous
+`[PYI-...:ERROR] Failed to execute script '__main__'`).
+
+## 15. 1.2.3 — Browser extension (✅ shipped, sideload-only)
+
+Lives in **`extension/`** at repo root. Plain MV3 ES modules, NO build
+step. Talks to the bridge over loopback HTTP; token stored in
+`chrome.storage.local`. See `extension/README.md` (+ `.pt-br.md`).
+
+```
+extension/
+├─ manifest.json        ← MV3; background needs "type":"module" (SW uses import)
+├─ bridge.js            ← shared HTTP client (loadConfig/enqueue/pingHealth/buildDeepLink)
+├─ popup.*              ← toolbar popup: format picker, status pill, detected-streams list
+├─ options.*            ← token pairing + test-connection
+├─ background.js        ← service worker: context menu, hotkeys, msg router (send-to-hub)
+├─ sniffer.js           ← passive per-tab stream detector (webRequest)
+├─ content-twitter.js   ← in-page hover button on x.com / twitter.com
+├─ content-reddit.js    ← in-page hover button on reddit.com (handles shreddit-player)
+├─ content-overlay.css  ← shared overlay-button styling
+└─ icons/
+```
+
+**Four send paths:** toolbar popup (everywhere) · in-page hover pill
+(Twitter/Reddit) · right-click context menu · hotkeys (`Ctrl+Shift+Y`
+video / `Ctrl+Shift+M` mp3, the only path that survives YouTube/Twitter
+right-click hijacking).
+
+**Stream sniffer** — `webRequest.onBeforeRequest` + `<all_urls>`,
+per-tab in-memory `Map<tabId, streams>`, toolbar badge count. Matches
+`.m3u8/.mpd/.mp4/...` by URL suffix, drops HLS/DASH fragments.
+`SKIP_HOSTS` (googlevideo/youtube/vimeo/twitch/redd.it) prevents the
+observer from slowing high-frequency CDNs (early version tanked YouTube
+playback). Debounced badge writes. URLs in memory only, never persisted.
+
+**Content scripts** send the platform PERMALINK (tweet status URL /
+reddit post URL), not the raw CDN URL — keeps yt-dlp's site-extractor
+metadata. Hover-reveal via JS pointer events (CSS `:hover` doesn't
+propagate through these sites' player overlays).
+
+**Instagram: ❌ no in-page button.** Their video player click-locks
+pointer events and wins the capture-phase race even against a
+window-level guard + direct handler dispatch. IG is still covered by
+the popup + sniffer. Don't retry unless their DOM changes.
+
+---
 
 When in doubt, the per-module header comment is the contract; this
 doc just tells you which module to open.

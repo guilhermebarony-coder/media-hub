@@ -1,0 +1,98 @@
+/* Media Hub — Twitter overlay button styling.
+   Injected into x.com / twitter.com pages by content-twitter.js.
+   High specificity + !important on positioning so Twitter's own
+   styles can't accidentally hide us. */
+
+.mh-host {
+  position: relative !important;
+}
+
+.mh-overlay-btn {
+  position: absolute !important;
+  top: 8px;
+  right: 8px;
+  z-index: 9999;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: rgba(10, 10, 12, 0.72);
+  color: #f4f4f6;
+  border: 1px solid rgba(197, 255, 61, 0.35);
+  border-radius: 999px;
+  font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  /* 1.2.10 — fully invisible at rest, revealed via JS-toggled
+     `.mh-visible` class on hover (handlers bound on article + host
+     + video in content-twitter.js). Pointer events stay enabled
+     so the button still works even if a fast cursor doesn't fire
+     the enter event before clicking. */
+  opacity: 0;
+  pointer-events: auto;
+  transition:
+    opacity 0.15s ease,
+    background 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.1s ease;
+}
+/* Visibility ramp driven by JS-toggled `.mh-visible` class (the
+   content script binds pointerenter/leave on article + host + video
+   so the class flips whenever the cursor is over the tweet). */
+.mh-overlay-btn.mh-visible,
+.mh-overlay-btn:focus-visible {
+  opacity: 0.95;
+}
+.mh-overlay-btn:hover {
+  background: rgba(197, 255, 61, 0.95);
+  color: #0a0a0c;
+  border-color: #c5ff3d;
+  opacity: 1;
+  transform: scale(1.03);
+  pointer-events: auto !important;
+}
+/* While sending / sent / errored, stay visible regardless of hover
+   so the user can see the outcome of their click. */
+.mh-host .mh-overlay-btn.mh-sending,
+.mh-host .mh-overlay-btn.mh-sent,
+.mh-host .mh-overlay-btn.mh-err {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+.mh-overlay-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: #c5ff3d;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.mh-overlay-btn:hover .mh-overlay-dot {
+  background: #0a0a0c;
+}
+
+.mh-overlay-btn.mh-sending {
+  background: rgba(90, 122, 30, 0.85);
+  border-color: #5a7a1e;
+  cursor: wait;
+}
+.mh-overlay-btn.mh-sent {
+  background: rgba(197, 255, 61, 0.95);
+  color: #0a0a0c;
+  border-color: #c5ff3d;
+}
+.mh-overlay-btn.mh-err {
+  background: rgba(120, 30, 30, 0.85);
+  border-color: #ff6363;
+  color: #ffd6d6;
+}
+
+/* 1.2.14 — Instagram in-page button was attempted but pulled:
+   Instagram's video player click-locks all pointer events and
+   wins the capture-phase race no matter what we tried (window-
+   level guards, direct handler dispatch, etc.). Instagram is
+   still covered by the popup + stream sniffer; the in-page
+   overlay just doesn't work there. Override removed. */

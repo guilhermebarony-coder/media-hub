@@ -1,0 +1,179 @@
+/* Media Hub — options page styling. Same palette as the popup, but
+   roomier since this page opens in a full tab. */
+
+:root {
+  --bg-0: #0a0a0c;
+  --bg-1: #111114;
+  --bg-2: #1a1a1e;
+  --bg-3: #25252a;
+  --text-0: #f4f4f6;
+  --text-1: #c8c8cc;
+  --text-2: #8a8a90;
+  --text-3: #5a5a60;
+  --line: #2a2a30;
+  --accent: #c5ff3d;
+  --err: #ff6363;
+  --ok: #6cd66c;
+  --mono: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg-0);
+  color: var(--text-1);
+  font: 14px system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.mono { font-family: var(--mono); }
+
+.page {
+  max-width: 640px;
+  margin: 40px auto;
+  padding: 0 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+header {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.brand-mark {
+  width: 18px;
+  height: 18px;
+  background: var(--accent);
+  border-radius: 3px;
+}
+.brand-name {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--text-0);
+  letter-spacing: 0.02em;
+}
+header h1 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  font-weight: 500;
+  color: var(--text-0);
+}
+.hint {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.hint-sm {
+  margin: 4px 0 0;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.hint strong, .hint-sm strong { color: var(--text-1); font-weight: 500; }
+code {
+  font-family: var(--mono);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 12px;
+  color: var(--text-1);
+}
+
+.card {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 20px;
+}
+.card h2 {
+  margin: 0 0 14px;
+  font-size: 14px;
+  font-family: var(--mono);
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 500;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+.field label {
+  font-size: 11px;
+  color: var(--text-2);
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.field input {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px 10px;
+  color: var(--text-0);
+  font-size: 13px;
+  font-family: var(--mono);
+}
+.field input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.btn {
+  background: var(--bg-3);
+  color: var(--text-0);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.btn:hover { background: var(--line); }
+.btn-primary {
+  background: var(--accent);
+  color: var(--bg-0);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.btn-primary:hover {
+  background: color-mix(in srgb, var(--accent) 85%, white);
+}
+
+.status {
+  font-size: 11px;
+  color: var(--text-2);
+  padding: 4px 8px;
+}
+.status.ok { color: var(--ok); }
+.status.err { color: var(--err); }
+
+.howto {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-1);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.howto li + li { margin-top: 6px; }
+.howto em {
+  font-style: normal;
+  font-family: var(--mono);
+  color: var(--accent);
+}

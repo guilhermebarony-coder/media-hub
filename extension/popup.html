@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Media Hub</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="head">
+      <div class="brand">
+        <div class="brand-mark"></div>
+        <div class="brand-name">media·hub</div>
+      </div>
+      <div class="status" id="status" title="Connecting…">
+        <span class="dot" id="status-dot"></span>
+        <span class="status-text mono" id="status-text">…</span>
+      </div>
+    </header>
+
+    <main class="body">
+      <div class="tab-info">
+        <div class="tab-title" id="tab-title">(no tab)</div>
+        <div class="tab-url mono" id="tab-url"></div>
+      </div>
+
+      <div class="mode-row">
+        <span class="mode-label">Format</span>
+        <div class="mode-tabs" role="tablist">
+          <button class="mode-tab active" data-mode="video" role="tab">Video</button>
+          <button class="mode-tab" data-mode="mp3" role="tab">MP3</button>
+          <button class="mode-tab" data-mode="m4a" role="tab">M4A</button>
+          <button class="mode-tab" data-mode="flac" role="tab">FLAC</button>
+        </div>
+      </div>
+
+      <button class="send-btn" id="send-btn" disabled>
+        <span class="send-icon">⬇</span>
+        <span class="send-label">Send to Media Hub</span>
+      </button>
+
+      <section class="streams hidden" id="streams-section">
+        <div class="streams-head">
+          <span class="streams-title">Detected on this tab</span>
+          <span class="streams-count mono" id="streams-count">0</span>
+        </div>
+        <p class="streams-hint">
+          Click a row to send · click 👁 to preview in a new tab.
+          On single-tweet / single-video pages, the big Send button
+          above is usually the cleaner choice (it preserves title +
+          uploader metadata).
+        </p>
+        <ul class="streams-list" id="streams-list"></ul>
+      </section>
+
+      <div class="msg-row hidden" id="msg-row">
+        <span class="msg-label" id="msg-label">status</span>
+        <span class="msg-body" id="msg-body"></span>
+      </div>
+
+      <div class="actions">
+        <button class="link-btn" id="options-btn">Options</button>
+        <button class="link-btn" id="launch-btn" hidden>Try launching app</button>
+      </div>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

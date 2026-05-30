@@ -1,6 +1,7 @@
 # Media Hub — Working Notes
 
-Status: living doc, last refreshed 2026-05-20 (post 0.5.1). This is
+Status: living doc, last refreshed 2026-05-27 (post 1.2.15 — audio +
+browser extension shipped to testers). This is
 the parking lot for ideas, gotchas, and things-to-remember that don't
 belong in ROADMAP (too speculative or too small) or ARCHITECTURE (not
 a structural decision).
@@ -19,6 +20,267 @@ library" into 0.5 (SQLite + tags + UI overhaul, shipped) and 0.6
 (dual-root + projects + in-app scrubber). Downstream shifts by one.
 Some entries below pre-date the renumbering — check ROADMAP's
 decision log for the mapping if a milestone number reads weird.
+
+---
+
+## 2026-05-27 (BIG SESSION — Audio support + the whole browser-extension stack, 1.2.0 → 1.2.15)
+
+Marathon day. Two big arcs: (A) audio downloads, (B) the browser
+extension + everything it needed on the backend. Shipped to testers as
+**1.2.15** (NSIS + MSI built, extension folder zipped).
+
+### A. Audio support (1.2.0 → 1.2.1)
+
+- New asset `kind` column (migration 008). `"video"` | `"audio"`,
+  defaults to video so old rows back-fill. Indexed.
+- `yt_download` learned `audio_format: Option<"mp3"|"m4a"|"flac">` →
+  `-x --audio-format <f> --audio-quality 0`, skips merge.
+- New `media_extract_waveform` Rust command — ffmpeg `showwavespic`
+  renders a lime waveform PNG, wired through `library_set_thumbnail`
+  exactly like the frame-thumbnail path.
+- Download page: **Video | Audio tabs**. Audio mode = 3 format cards
+  (MP3 320 / M4A AAC 256 / FLAC lossless). No bitrate picker —
+  decided nobody downloads audio at LOW quality, so we pick sensible
+  per-format defaults server-side. Transcode row hidden in audio mode.
+- Library card + inspector get audio treatment (waveform bg, music-note
+  glyph, "Format" stat instead of "Dimensions"). Kind filter in the
+  FilterPopup. Queue worker also learned audio mode.
+- **Double-click to open**: was using plugin-opener's `openPath`, which
+  silently rejects paths outside the capability scope (`$HOME/**`).
+  Replaced with our own `os_open_path` Rust command that shells out
+  (`cmd /c start`) — works for any drive/path. See lesson below.
+
+### B. Browser extension + bridge (1.2.2 → 1.2.15)
+
+Roadmap we followed: localhost HTTP → deep-link → extension MVP →
+sniffer. (gallery-dl / images parked.)
+
+1. **Localhost HTTP bridge (1.2.2)** — `bridge.rs`, axum server bound
+   `127.0.0.1:47821`. `GET /health` (no auth) + `POST /enqueue`
+   (bearer-token). Emits `bridge:enqueue` Tauri event; a `BridgeListener`
+   React component routes it through the existing `enqueueUrls`. Token
+   auto-generated on first launch, stored in settings, shown in
+   Settings → Browser bridge with copy/regenerate + curl examples.
+   Spawn via `tauri::async_runtime::spawn` NOT `tokio::spawn` (no
+   reactor in `setup()` — that panic was the first gotcha).
+2. **Deep link (1.2.3)** — `mediahub://enqueue?url=...&token=...`.
+   `tauri-plugin-deep-link` + `tauri-plugin-single-instance` (deep-link
+   feature). Token required as query param (deep links can't carry
+   headers). Dedupe window needed: single-instance forward AND
+   on_open_url BOTH fire on Windows → was downloading twice.
+3. **Extension MVP (1.2.3)** — plain ES-module MV3 (no build step).
+   Popup (format picker + status pill), options (token pairing),
+   context menu, hotkeys (`Ctrl+Shift+Y` video / `Ctrl+Shift+M` mp3),
+   `mediahub://` cold-launch fallback. **`"type":"module"` in the
+   background manifest entry is mandatory** when the SW uses `import`
+   — without it the SW silently fails to register and context menus
+   never appear.
+4. **Stream sniffer (1.2.4 → 1.2.5)** — `webRequest` + `<all_urls>`,
+   per-tab in-memory detected-streams list, toolbar badge. **Tanked
+   YouTube playback** at first (every range-request hit our observer).
+   Fixed with SKIP_HOSTS (googlevideo/youtube/vimeo/twitch/reddit-CDN),
+   string-suffix fast-path before `new URL()`, debounced badge updates.
+5. **In-page overlay buttons** — content scripts inject a hover-reveal
+   "Media Hub" pill on each video. Twitter/X (1.2.6) + Reddit (1.2.12)
+   work great; **Instagram pulled (1.2.15)** — their player click-locks
+   pointer events and wins the capture-phase race no matter what
+   (window-level guards, direct handler dispatch — all lost). IG still
+   covered by popup + sniffer.
+
+### The cookies non-bug (the dumb one)
+
+Spent ~40 min convinced a `[PYI-...:ERROR] Failed to execute script
+'__main__'` crash was AV interference / Tauri spawn weirdness / yt-dlp
+version. PowerShell ran the EXACT same args fine. Turned out: the user
+had left Settings → cookies on "File" mode with an **empty path**, so
+we passed `--cookies ""` to yt-dlp, which crashes its PyInstaller
+bootloader before Python can even print a traceback. The dev console
+was literally logging `[cookies] passing to yt-dlp: ["--cookies", ""]`
+the whole time. Guarded it: empty/missing cookies path now falls back
+to no-cookies + logs a warning.
+
+### Lessons logged
+
+- **Check config + the dev console BEFORE blaming the spawn layer.**
+  The `["--cookies", ""]` line was right there. A 30-min rabbit hole
+  collapsed the second we read our own log. New rule: when a sidecar
+  crashes, FIRST run the exact command in a real shell, SECOND read
+  every line of our own stderr/stdout capture, THIRD suspect spawn env.
+- **`[PYI-...:ERROR] Failed to execute script '__main__'` ≈ "yt-dlp got
+  a bad CLI arg that broke pure-Python arg parsing before main()."**
+  Almost never AV, almost never the binary. Look at the args.
+- **Don't add process-spawn "stabilizer" env vars without re-testing
+  every download path.** I added PYTHONIOENCODING + PYTHONDONTWRITEBYTECODE
+  as a hail-mary and broke YouTube globally. Reverted. Spawn config is
+  load-bearing; treat changes like surgery.
+- **plugin-opener has a path SCOPE** (`$HOME/**` default). Files on
+  other drives silently fail to open. Our own `os_open_path` Rust
+  command (shell out) sidesteps it — same trust boundary as our other
+  commands since the path comes from our own DB.
+- **MV3 service worker + `import` needs `"type":"module"`.** Silent
+  failure otherwise. Cost ~15 min wondering why context menus vanished.
+- **Site player click-hijacking is real and sometimes unwinnable.**
+  Twitter/Reddit: stopPropagation on the button is enough. Instagram:
+  window-level capture-phase guard + direct handler dispatch STILL
+  lost. Know when to cut a platform and rely on the popup/sniffer.
+- **cargo clean fails with "Acesso negado" while the app is running.**
+  Obvious in hindsight — the running binary locks the target. If a
+  rebuild "doesn't take effect," the dev server is probably still up.
+
+### Open follow-ups
+
+- Auto-updater (tauri-plugin-updater) — still unbuilt, now MORE
+  worth it given how many installers we're cutting.
+- Extension: store publishing (Chrome Web Store $5 + Firefox AMO) when
+  ready for real reach. Sideload-only for now per owner's call.
+- gallery-dl sidecar (image hosts: Twitter media, IG carousels, Pixiv)
+  — parked layer-4 of the coverage plan.
+- Multi-video tweet: yt-dlp downloads ALL videos in a tweet by default.
+  Fine for now; could add `--playlist-items` selection later.
+- Instagram in-page button: revisit only if their DOM/player changes.
+
+---
+
+## 2026-05-24 (BIG SESSION — Eagle-style library refactor, Phases 1-3)
+
+A multi-hour build day that took the library from "modal drawer +
+inline filter chips" to "always-on inspector + folders sidebar +
+filter popup." Plus some battle scars: the YouTube TV-client DRM
+incident, the Brave/YT false alarm, and the asset-protocol scope bug
+that hid behind a migration regression.
+
+### What landed
+
+**Phase 1 — Multi-select + bulk delete (UNCOMMITTED, post-1.0.5)**
+- Unified `selection: Set<string>` replaces the old
+  `selectedId` + `multiSelected` split
+- Click handler: plain click = single select, Ctrl/Cmd = toggle,
+  Shift = range, double-click = open in default app
+- Box-drag selection (marquee) on empty grid area
+  with live hit-testing of card rects. Ctrl-drag = additive
+- New Rust `library_delete_many` command — single sqlx tx +
+  per-file OS-trash via the `trash` crate (already a dep). Returns
+  `BulkDeleteResult { rows_deleted, files_removed, file_errors }`
+- Dropped the modal AssetDrawer + the checkmark badges + the
+  floating bulk-action bar. The always-on inspector subsumes all three.
+- New `InspectorPanel` with 0/1/many states. Single shows asset
+  details + actions; batch shows count + size + platform breakdown
+  + items list + bulk actions
+- Keyboard: Ctrl+A select all, Delete bulk delete (to Recycle Bin),
+  Esc clears selection
+
+**Phase 2 — Folders sidebar (Eagle-style)**
+- Schema migration 007: `folders` table (id, name UNIQUE COLLATE
+  NOCASE, created_at) + nullable `assets.folder_id` with FK ON
+  DELETE SET NULL (deleting a folder falls assets back to
+  Uncategorized, doesn't lose rows)
+- CRUD: `folder_create/list/rename/delete` + `asset_set_folder` +
+  `asset_set_folder_many` (batch from inspector)
+- `LibraryFilters.folder: Option<FolderFilter>` with three-state
+  enum (Any / Uncategorized / Id { id })
+- Sidebar gets Folders section at top: "All clips" + "Uncategorized"
+  + user folders, alphabetical, with counts. Active row gets lime
+  fill. Click = filter; double-click = rename inline; right-click =
+  proper `FolderContextMenu` with Rename / Delete folder (mirrors
+  CardContextMenu visual style)
+- `+` button in section header → creates "Untitled" (or "Untitled
+  2"…) and drops straight into rename mode. Matches Eagle/Finder UX
+- Inspector folder dropdown (single + batch). Batch shows
+  "— mixed —" when selected assets have different folders
+- Old Source / Tags / Added sidebar facets DROPPED to make room.
+  State + count derivations kept (voided) for Phase 3 to reuse.
+- Recycle Bin: dropped the "Forget vs Delete" split — single
+  Delete action moves files via `trash::delete`, recoverable from
+  OS until a future virtual trash bin lands
+
+**Phase 3 — Filter popup**
+- New `Filter` button in the library toolbar with active-count
+  badge (lime, shows sum of tags + platforms + buckets)
+- Anchored popup component renders three sections: Source / Tags /
+  Added. Tag section has its own inline search. Each row is a
+  toggle with count; popup stays open during multi-select
+- Click-outside / Esc / scroll / resize → close (same pattern as
+  CardContextMenu)
+- Active filters STILL appear as removable chips in the toolbar
+  (kept the existing `lib-active-filters` row so users see active
+  state without opening the popup)
+
+**Other fixes shipped today (between phases)**
+- `library_repair_thumbnails` Rust command + auto-run on Library
+  mount. Heals the thumbnail breakage from 1.0.5's migration
+  command (which forgot to rewrite `thumbnail_path` rows) by
+  nulling broken refs so the existing backfill regenerates them
+- 1.0.5 migration command patched to also rewrite `thumbnail_path`
+  alongside `file_path` (so the next person who migrates doesn't
+  hit this)
+- `tauri.conf.json` asset protocol scope expanded from
+  `["$HOME/**"]` to `["$HOME/**", "**"]` — was blocking thumbnails
+  from being served when library_root pointed outside HOME (e.g.
+  `E:\Media Hub Library\`)
+- TV-client default DROPPED entirely (was added 1.0.3, ordering-
+  reverted 1.0.4, now removed). YouTube experiment makes the TV
+  InnerTube client return "DRM protected" on every video; bit us
+  for ~30 minutes of debugging today
+- Selected-card outline switched from CSS `outline:` → pseudo-
+  element with z-index. The CSS outline got clipped by the
+  thumbnail's stacking context on multi-select; pseudo-element
+  paints above EVERY descendant so it's bulletproof
+- Browser focus-visible ring suppressed on `.lib-card` (kept a
+  subtle dashed ring for keyboard-only when NOT selected)
+- Folder count column right-aligned with the `+` button via
+  width-matching (both 22px wide ending at the same X)
+- Folder context menu rebuilt to mirror CardContextMenu visual
+  style (`.ctx-item`, `.ctx-danger`, plus new `.ctx-label` for the
+  non-interactive folder name header)
+
+### Known regression (carried forward as 1.1 follow-up #1)
+
+**Tag editor not in the inspector yet.** When the InspectorPanel
+replaced the modal drawer, the tag editor (chips + add input) didn't
+get ported. Currently the single-asset inspector shows tags
+read-only. Owner caught this end-of-session.
+
+Source preserved: `_AssetDrawerLegacy` and `TagEditor` are still in
+Library.tsx (voided at module bottom to keep noUnusedLocals quiet)
+— a future port can copy-paste rather than fish through git history.
+
+Sizing: ~30 min of work. Drop into InspectorSingle below the Folder
+dropdown. Wire `tag_set_for_asset` from the existing TagEditor
+component.
+
+### Lessons logged
+
+1. **Asset protocol scope is config-bound — extend at install time,
+   not at use time.** We caught this only because the migration
+   moved the user's library outside `$HOME`. If we ever support
+   per-project external roots (parked NOTE) the same scope rule
+   applies: the WebView refuses to serve from any directory not
+   allowlisted at startup. Tauri 2 does have runtime scope APIs;
+   worth investigating if we hit it again.
+
+2. **Don't prepend new player_clients to yt-dlp defaults.** The TV
+   client looked like free coverage for age-gate; turns out YT
+   weaponizes specific clients via A/B tests. Defaults are tested
+   and battle-hardened. Future client experiments should be
+   opt-in via Settings, never default.
+
+3. **Browser DevTools-style "outline" CSS gets clipped by stacking
+   contexts.** Pseudo-elements with explicit z-index are the
+   bulletproof pattern for "outline on top of everything inside
+   this element."
+
+4. **Eagle's flat-list-of-checkboxes popup is way better than
+   sidebar facets.** Less vertical waste, doesn't compete with
+   folders, easier to add new filter categories later, and the
+   "search tags inline" experience feels natural inside a popup
+   in a way it never did as a permanent sidebar row.
+
+5. **The Brave-YT thing.** Spent 3+ hours treating a Brave ad-block
+   filter issue as if it were our app + a yt-dlp rate limit. Got
+   nerd-sniped by the symptom (Playback ID errors look exactly like
+   throttling). Lesson: when "everything is broken" suddenly, check
+   the browser console / a different browser / Twitter before
+   running any deeper diagnosis. Costs ~30 seconds to falsify.
 
 ---
 
@@ -2299,6 +2561,459 @@ Promoted from "? open" — items worth touching during the 0.9 sweep:
 
 (empty — drop new uncategorized ideas here as they surface)
 
+---
+
+## 2026-05-24 (PM) — 1.1.1: Tags split + Sort + press-T picker + drag-to-folder
+
+Continuation of the 1.1 Eagle pass. User came back next morning with four
+items; all shipped same session.
+
+### What landed
+
+1. **Toolbar split.** `Filter` button now shows only Source + Added (Tags
+   section removed from its popup). New `Tags` button beside it owns the
+   tag filter in its own popup. New `Sort` button beside that.
+
+2. **TagFilterPopup** — two-column Eagle-style chrome. Left rail with
+   virtual sections `Selected (N)` / `All Tags (N)`; right pane has a
+   search bar + checkbox-row list with counts. Anchored under the Tags
+   button. We chose flat tags (no `tag_categories` schema) — leaves
+   "Untagged" as a future filter dimension (needs backend query change).
+
+3. **SortPopup** — 8 modes (Most recent / Oldest / Name A→Z / Z→A /
+   Largest / Smallest / Longest / Shortest). Client-side `useMemo` on
+   the filtered list. Default = Most recent = matches the backend's
+   `downloaded_at DESC` so first paint already correct.
+
+4. **Press-T tag picker (TagPickerPopup)** — distinct from the filter
+   popup. Floats near cursor when T is pressed with selection ≥ 1.
+   - Search field. Enter on a no-match query → `+ Create "xyz"` row →
+     creates + applies the tag in one shot.
+   - Sections: `Recently used` (last 8, persisted in `localStorage` via
+     `bumpRecentTags`) + `Others`.
+   - Tri-state per tag for batch selection: ✓ (all have it), – (some,
+     partial), blank (none). Click toggles; partial resolves to add-to-all.
+   - Mutates via N parallel `tag_set_for_asset` calls (no batch Rust cmd
+     yet — fine for typical selection sizes; cheap follow-up).
+
+5. **Drawer tag editor restored.** `<TagEditor>` back in `InspectorSingle`
+   below Folder section. The legacy `_AssetDrawerLegacy` stays in the
+   tree (voided) as a future port source for the project-mover bit.
+
+6. **Batch tag editor** in `InspectorBatch`. Shows tags shared by ALL
+   selected as removable chips + `+ tag to all`. For partial-state add /
+   remove (some have / some don't), the inline hint nudges to press T.
+
+7. **Hint bar** — added `t tag selected` between `esc clear` and `⏎ open`.
+
+8. **Internal drag-to-folder.** HTML5 drag/drop. Cards are `draggable`
+   with a custom `application/x-media-hub-asset-ids` MIME payload.
+   Folder rows accept the drop and call `asset_set_folder_many`. Selection
+   rule mirrors Finder: dragging a card already in the selection drags
+   the whole selection; dragging a non-selected card swaps selection to
+   just that card. Lime dashed `drop-hover` outline highlights the target.
+   "All clips" is intentionally not a drop target (ambiguous).
+
+### Bugs hit + fixed
+
+- **Press-T popup reopening "by itself"** at the original cursor position
+  after closing via outside-click + clicking any card. Couldn't reproduce
+  remotely but defensive-fixed with three guards:
+  - 300ms reopen-debounce after close (`tagPickerClosedAtRef`)
+  - T while popup already open → no-op (was teleporting position)
+  - Explicit `document.activeElement?.blur()` on close (clears stale focus)
+  - LibCard `<button>` got `type="button"` (was defaulting to `submit`)
+
+- **TS6133 unused `addSet`** in `applyTagDelta` — caught by tsc, killed.
+
+### Tauri-plugin-drag research (the drag-out-to-NLE story)
+
+User asked for drag-to-folder AND drag-to-editor (Premiere/Resolve/etc.)
+in one gesture. Researched the plugin landscape:
+
+- **Plugin**: `@crabnebula/tauri-plugin-drag` v2.1.0 (npm) + matching
+  Rust crate `tauri-plugin-drag`. Tauri 2 compatible. Crab Nebula
+  maintained (commercial Tauri team), not official-`tauri-apps`.
+- **Cross-platform**: Windows + macOS + Linux (GTK).
+- **API** (from the actual unpacked TS types):
+  ```ts
+  startDrag(options: { item: string[] | {data, types}, icon: string, mode?: "copy"|"move" },
+            onEvent?: (p: { result: "Dropped"|"Cancelled", cursorPos: { x, y } }) => void)
+  ```
+- **Critical unlock**: `cursorPos` in the callback. Lets us hit-test the
+  drop position against folder DOM rects on the JS side. That means a
+  SINGLE drag gesture handles BOTH internal (folder drop) AND external
+  (drop on Premiere/Resolve) — no Alt-modifier needed.
+- **Custom payload door**: `item` accepts not just `string[]` of paths
+  but also `{ data, types }` for MIME payloads — e.g. `com.apple.finalcutpro.xml`
+  for FCPXML. Means a future feature can ship pre-cut timeline clips
+  (using our existing in/out segment data) instead of plain files. Big
+  future workflow win for NLE users; **not** shipped today.
+- **Mode**: use `"copy"` so drops to NLE don't try to move the source
+  file out of the library.
+
+### Wired-up design (the "Option α" we picked)
+
+- `onDragStart` on LibCard:
+  - Build list of file paths from selection (or just this card)
+  - Build preview icon path = first asset's `thumbnail_path`
+  - Call `startDrag({ item: paths, icon, mode: "copy" }, onDropCallback)`
+  - `ev.preventDefault()` the HTML5 drag (Tauri takes over)
+- `onDropCallback`:
+  - If `result === "Cancelled"` → no-op
+  - Else use `document.elementFromPoint(cursorPos.x, cursorPos.y)` to
+    walk up looking for `.lib-folder` (read `data-folder-id` attr)
+  - If found → call `asset_set_folder` / `_many` with that folder id
+  - If not found (dropped outside window or on empty grid) → OS already
+    handled the OS-level drop (Premiere etc. received the files)
+- Removed the prior HTML5 `onDrop` on folder rows (won't fire once Tauri
+  startDrag is in effect). Kept `data-folder-id` attr for hit-testing.
+
+### Lessons logged
+
+- **`type="button"` on `<button>` is non-optional.** Defaulting to
+  `submit` plus mysterious focus retention on Windows could be the
+  perfect storm for "ghost reopens" of context popups. Belt-and-
+  suspenders: always set it explicitly.
+
+- **Don't trust the abstract API — unpack the tarball.** I almost
+  shipped "single-gesture is too complex" advice based on README skims.
+  The real `index.d.ts` showed `cursorPos` in the callback, which made
+  the whole thing simple. Lesson: 5 minutes with `npm pack` + `tar tzf`
+  beats 30 minutes of docs grep.
+
+- **Custom MIME payloads in drag.** Tauri's drag plugin supports it.
+  This is the door to FCPXML / Premiere / DaVinci timeline-aware drops
+  in the future. Worth a roadmap entry.
+
+- **Mode = "copy" for library-as-source apps.** Anything where the
+  library file is canonical (and the editor is a downstream consumer)
+  wants copy mode. Move mode would let the editor steal the file.
+
+### Follow-up bugs caught after first test (same PM)
+
+- **`tagPickerPos` "ghost reopen" bug — actually diagnosed by the user.**
+  Render gate was `{tagPickerPos && selection.size > 0 && ...}`. When
+  the user pressed Esc, the page-level Esc handler cleared selection,
+  which made `selection.size > 0` flip false BEFORE the popup's own
+  Esc handler (which calls onClose → clears tagPickerPos) ran. Result:
+  popup unmounts without onClose, `tagPickerPos` stuck non-null. Next
+  card-click → selection > 0 again → BOTH gates true → popup re-renders
+  at the cached cursor position. Fixes:
+  1. Render gate is now `{tagPickerPos && ...}` only (no selection check)
+  2. Page-level Esc EARLY-RETURNS when `tagPickerPos` is non-null, so
+     the popup handles Esc and the selection is preserved through close
+  3. Popup self-closes via a `useEffect([selection.length])` if selection
+     drops to 0 from another path (e.g. bulk delete), guaranteeing
+     onClose runs and tagPickerPos is cleared
+  Lesson: **never gate a popup's render on two independent states.**
+  If you must, ensure the SAME action that flips one ALSO clears the
+  other.
+
+- **Internal drag-to-folder did nothing while external worked.**
+  Root cause: `cursorPos` from `tauri-plugin-drag`'s callback is the
+  OS screen position (logical pixels), but `document.elementFromPoint`
+  wants VIEWPORT (client) coords. They differ by the window's frame +
+  title bar offset. External drops worked because we skipped hit-test
+  in that branch. Fix: convert at drop time —
+  ```ts
+  const innerPos = await getCurrentWindow().innerPosition(); // physical px
+  const dpr = window.devicePixelRatio || 1;
+  const viewportX = cursorPos.x - innerPos.x / dpr;
+  const viewportY = cursorPos.y - innerPos.y / dpr;
+  ```
+  Lesson: any time a Tauri plugin returns "position" without saying
+  WHICH coordinate space, assume OS-screen and convert before passing
+  to DOM APIs. Single sentence in docs.rs would've saved a round trip.
+
+- **Drag fix v3 — Windows OLE doesn't surface live enter/over events
+  for self-initiated drags.** Switched the primary signal to Tauri's
+  own `webview.onDragDropEvent` (gives window-relative physical
+  pixels, handles the own-window-drop-reports-as-Cancelled case
+  naturally), with the plugin's `cursorPos` as a multi-coord fallback.
+  But on Windows, only the `drop` event fires reliably for self-drags
+  — enter/over don't. Two consequences:
+  1. **Can't show live folder-hover highlight during drag on Windows.**
+     Tried it; no events fire to drive the state. Replaced with a
+     static `lib-drag-hint` in the sidebar ("Drop on a folder to move
+     N clips") that shows while drag is active. More honest UX than
+     a flickering or absent outline.
+  2. **`drop` event arrives AFTER the plugin callback in race-y
+     fashion.** Setting `folderDropHover` on `drop` left the dashed
+     outline STUCK because the callback's prior cleanup already ran.
+     Fix: on `drop`, ONLY record position for hit-test; explicitly
+     clear hover. Highlight is now exclusively driven by enter/over
+     (which only fire on non-Windows / on external drags coming in).
+  Lesson: **never let a delayed event set "active" state.** Delayed
+  events should only clear state or perform terminal actions — never
+  reinitialize a UI mode the user is no longer in.
+
+---
+
+## 2026-05-24 (PM) — preview/playback + FCPXML research
+
+User asked: is FCPXML worth shipping? Only if we have an *in-app
+preview good enough to trim against*. Below is the menu of preview
+approaches researched, ranked by effort.
+
+### The four-tier menu
+
+**Tier 0 — HTML5 `<video>` (free, ship today).**
+- WebView2 ships a hardware-accelerated H.264/AAC decoder. So does
+  WebKit (macOS) and WebKitGTK.
+- For every clip whose container is mp4/m4v with h264+aac: just
+  `<video src={convertFileSrc(file_path)} controls />` works out of the
+  box. Frame-accurate seek, paint quality on par with the source.
+- Codec landmine: HEVC (h265), AV1, VP9 (without IVF/WebM container),
+  ProRes, DNxHR — none are decoded by WebView2 reliably. Tauri uses
+  the system's WebView, so support varies by Windows version + codec
+  pack install state.
+- For 80%+ of YouTube downloads, this is fine — yt-dlp's default
+  format selection prefers h264 wherever it can. The other 20%
+  (HDR, HEVC, AV1 modern formats) will show "format not supported"
+  in the player.
+- **Effort: 1 hour. Reward: probably 80% of users get great preview.**
+
+**Tier 1 — Sprite-sheet hover scrub (cheap, ffmpeg-only, the Eagle move).**
+- Pre-generate a horizontal strip of N thumbnails per clip via ffmpeg:
+  ```
+  ffmpeg -i input.mp4 -vf "fps=1/<duration/40>,scale=240:-1,tile=40x1" sprite.jpg
+  ```
+  → one 40-tile sprite, ~80 KB per clip.
+- On hover over a card, map cursor X across the card → which tile to
+  show via CSS `background-position-x`. Pure CSS, no JS animation.
+- Eagle, Bridge, Premiere's media bin, Resolve's media pool — all
+  use this exact trick.
+- I-frame-anchored (`-skip_frame nokey`) sampling makes it fast even
+  on long clips. ~1–3 sec per clip to generate; runnable in the same
+  background pass as the thumbnail backfill we already have.
+- **Effort: 4–6 hours (ffmpeg cmd + storage + card hover + CSS).**
+- **Reward: feels magical. Already trusted by every pro DAM tool.**
+- **Doesn't enable trimming yet** — no in-point/out-point UI here,
+  just scrub-to-preview. But it's the GATEWAY UX for "yes, I can
+  trust this enough to cut blind."
+
+**Tier 2 — H.264 proxy files (medium, ffmpeg-only).**
+- For every clip, generate a low-bitrate H.264/AAC mp4 sidecar:
+  ```
+  ffmpeg -i input.mov -c:v libx264 -crf 28 -preset fast -vf scale=640:-2 \
+         -c:a aac -b:a 96k -movflags +faststart proxy.mp4
+  ```
+- ~30 MB per minute of source. ~10–60s to encode per clip (one CPU
+  core; can parallel with our concurrency limit).
+- Plays in `<video>` for ALL clips regardless of source codec — fixes
+  the Tier 0 codec landmine.
+- Trim UI then becomes free (we already built the scrubber for
+  download-time segment selection — same component, reused).
+- **Storage cost:** noticeable. 1000 clips × 60 sec avg × 30 MB =
+  ~30 GB. Make it opt-in via Settings ("Generate proxies for editor
+  preview"), with a setting for proxy resolution (480p/720p) +
+  proxy CRF.
+- **Effort: ~1 day** (background job system, settings UI, retry on
+  failure, GC when source goes missing).
+- **Reward: full in-app editing feasible. FCPXML is now justified.**
+
+**Tier 3 — embedded libmpv (heavy, decode anything).**
+- Plugins exist: [tauri-plugin-mpv](https://github.com/nini22P/tauri-plugin-mpv),
+  [tauri-plugin-libmpv](https://github.com/nini22P/tauri-plugin-libmpv),
+  [tauri-plugin-videoplayer](https://github.com/yeonv/tauri-plugin-videoplayer).
+- libmpv ≈ 70 MB DLL on Windows. Major installer size hit.
+- Plays everything: HEVC, ProRes, DNxHR, AV1, VP9 — full ffmpeg
+  decoder set.
+- Renders to a NATIVE window layer (not WebView), so it floats above
+  / below our React UI rather than being embedded inline. Doable
+  with frame-position tracking but fiddly.
+- **Effort: 2–3 days, plus ongoing maintenance burden.**
+- **Reward: zero-codec-friction preview. Pro NLE-level fidelity.**
+- **Recommendation: defer until a user can articulate "I keep
+  downloading HEVC and can't preview it."** Not today.
+
+### FCPXML feasibility, viewed from the preview question
+
+FCPXML payload (via `tauri-plugin-drag`'s `item: { data, types }`):
+- DaVinci Resolve: accepts FCPXML v1.10 (full clip + timeline + marker
+  support).
+- Final Cut Pro: native, of course.
+- Premiere: does NOT accept FCPXML directly. Would need PPRO XML
+  generation OR convert via DaVinci → XML round trip. Skip Premiere
+  for v1.
+- After Effects: doesn't ingest XML at all.
+
+Generating FCPXML for our model:
+- We already have everything: file_path, in/out segments (sibling
+  asset rows from multi-segment downloads), title, duration, FPS,
+  resolution. The XML is ~30 lines per clip, templatable.
+- The hard part isn't the XML — it's getting the user to TRUST the
+  in-app trim. That's the preview question.
+
+### Recommendation (decision delivered to user)
+
+**Skip FCPXML for now. Ship Tier 1 (sprite-sheet hover scrub) next
+month as a low-risk crowd-pleaser.**
+
+Reasons:
+- Tier 1 already solves 90% of the "which clip is this?" problem
+  users actually hit. Hovering a 40-thumbnail strip is faster than
+  any video preview anyway.
+- It builds confidence in the library as a *visual* index. That's
+  the prerequisite for asking users to cut inside.
+- The path forward is now: **Tier 1 → Tier 2 (proxies) → FCPXML drag**.
+  Each step is independently valuable; if we stop at Tier 1, users
+  still got a big upgrade.
+- Tier 0 is so cheap (HTML5 `<video>` in the inspector) we can ship
+  it alongside Tier 1 with no extra cost. Compatible clips get
+  full playback; incompatible ones still get the sprite scrub.
+
+### Storage budget reality check
+
+A 1000-clip library:
+- Tier 0: zero added storage
+- Tier 1: 1000 × 80 KB = ~80 MB sprites. Negligible.
+- Tier 2: 1000 × 30 MB proxies = ~30 GB. Real cost — opt-in setting.
+- Tier 3: + libmpv DLL ~70 MB per installer; no per-clip cost.
+
+### Lessons logged
+
+- **Don't build the trim UI without preview confidence.** FCPXML is
+  the *output format*; preview is the *trust input*. Order matters.
+  We'd have spent a week on FCPXML for users who can't tell which
+  clip they're looking at without opening it in their editor first.
+
+- **Sprite sheets > video for hover-scrub UX.** Industry has converged
+  here for a reason — load-once, no decode, no buffer, no ffmpeg-on-
+  demand. The "preview that feels instant" is always a precomputed
+  image, never a real-time decode.
+
+- **WebView2 codec support is a moving target.** It improves with
+  every Windows Edge update but is never the full ffmpeg set. Plan
+  for "most clips work, some don't" — never assume H.265/AV1 will
+  decode in production.
+
+Sources:
+- [Sprite-sheet generation with ffmpeg](https://steelcm.com/blog/generating-video-sprites-using-ffmpeg/)
+- [Mux: extract thumbnails with ffmpeg](https://www.mux.com/articles/extract-thumbnails-from-a-video-with-ffmpeg)
+- [tauri-plugin-mpv (nini22P)](https://github.com/nini22P/tauri-plugin-mpv)
+- [tauri-plugin-libmpv (nini22P)](https://github.com/nini22P/tauri-plugin-libmpv)
+- [tauri-plugin-videoplayer (YeonV)](https://github.com/yeonv/tauri-plugin-videoplayer)
+
+
 ### Cut (decided no)
 
 - Dark mode toggle — we're dark, OS-inherit, no work needed
+
+---
+
+## 2026-05-25 — 1.1.3 → 1.1.6: state-survives-nav + the CloseGuard saga
+
+Big morning. Tester report: "downloads disappear when I switch pages,
+then ffmpeg eats CPU after closing." Two structural fixes + one
+upstream Tauri bug that ate four version bumps.
+
+### What landed (the structural wins)
+
+**`src/lib/downloads.tsx` — DownloadsProvider** (mounted at App.tsx
+level, above the Router). Owns:
+  - `queueJobs[]` (was QueueCard local)
+  - `singleDownload` (was MetadataCard local)
+  - The download:progress + transcode:progress event listeners
+    (attached ONCE at mount, survive every route nav)
+  - The workerLoop + concurrency semaphores
+  - The single-URL download/transcode/library-record pipeline
+  - `activeCount`, `enqueueUrls`, `startSingleDownload`,
+    `cancelQueueJob`, `cancelSingleDownload`, etc.
+QueueCard + MetadataCard became thin presenters. Unmount no longer
+loses anything.
+
+**Keep-alive page Shell.** Switched from React Router's mount-on-match
+to a "render all visited pages, hide non-active via `hidden` attr"
+pattern. Pages mount on first visit, stay mounted forever. Form state,
+scrubber video, library scroll + filters all persist across nav.
+RAM cost: ~50 MB worst case (Library grid + Download scrubber); free
+on any desktop. App.tsx routes only `/` → HomeRedirect; everything
+else goes to Shell which owns visibility via useLocation.
+
+**Topbar `ActivityBadge`.** Shows a pulsing lime chip with
+"N downloading" whenever `activeCount > 0`. Always visible, always
+truthful. Click → jumps to /download.
+
+**`OrphanScanner`** + Rust `library_scan_orphans` /
+`library_clean_orphans`. On boot (3s after mount), scan
+`Library/raw` + `Projects/*/raw` for `.part`, `.ytdl`, `.tmp`, and
+yt-dlp `.f<id>.<ext>` intermediates older than 5 min. If found, show
+a confirm: "Found N partials (X MB). Move to Recycle Bin?" Uses the
+`trash` crate — recoverable.
+
+**Drag-feedback session gate (1.1.3 retry).** Added
+`dragSessionActiveRef`. Open on drag start, close in the plugin
+callback (synchronously, before any setState). The
+`onDragDropEvent` handler bails on any event arriving when the
+session is dead — defends against Windows OLE firing a late `over`
+after `drop` that was re-setting `folderDropHover` and leaving the
+dashed outline stuck. **Not user-verified yet — testers were busy
+with the close bug.**
+
+### The CloseGuard saga (1.1.3 → 1.1.6, four installer bumps)
+
+Designed: intercept window close, kill child processes cleanly so
+no orphan ffmpeg eats CPU. Symptom across all four versions:
+**clicking X did nothing.** Bounced through:
+
+- **1.1.3:** confirm dialog before quit. User missed it (focus stolen
+  / behind window). Plus listener re-bound on every progress tick
+  from deps array, accumulating stale closures.
+- **1.1.4:** dropped dialog, used `stateRef` for fresh state,
+  subscribed once. Still broken. Theory: `async` handler returns a
+  Promise that Tauri holds pending.
+- **1.1.5:** switched to sync handler with fire-and-forget cleanup.
+  Still broken. Clean release build, no HMR ghosts. Out of theories.
+- **1.1.6:** searched upstream → found [Tauri bug #7119](https://github.com/tauri-apps/tauri/issues/7119) —
+  **calling `unlisten()` on an `onCloseRequested` handler permanently
+  breaks window closing.** React.StrictMode double-invokes effects
+  in dev (cleanup → re-register); my `if (cancelled) fn()` race
+  branch could fire even in prod. **Either path triggers the
+  upstream bug.** Fix: don't register the listener at all. CloseGuard
+  fully removed. OrphanScanner-on-boot is the safety net for partial
+  files; child processes self-terminate within minutes when their
+  stdout pipes break. User-verified: close works.
+
+### Lessons logged
+
+- **`unlisten()` on `onCloseRequested` is a Tauri 2 trap.** Even one
+  unlisten call (cleanup, race branch, anything) permanently breaks
+  window close. Workaround: don't register the listener. If you
+  MUST register, never unsubscribe — even on unmount.
+
+- **Search upstream issues BEFORE iterating on handler shape.** I
+  spent 3 version bumps + 3 build cycles trying different ways to
+  shape the handler (dialog/no-dialog, async/sync, refs/no-refs).
+  All wrong. 5 minutes of `WebSearch "tauri v2 onCloseRequested
+  handler does nothing"` would have surfaced bug #7119 immediately.
+  New rule: **before fix attempt #2, grep the upstream tracker.**
+
+- **React.StrictMode + native event listeners = trap.** StrictMode
+  intentionally double-invokes useEffect in dev to catch leaks. For
+  pure React state that's fine; for native listeners registered
+  through async-await with a cleanup that calls unlisten, the
+  cleanup-then-re-register cycle can trip platform-specific bugs.
+  Either suppress StrictMode for affected effects, or use
+  register-once-never-cleanup patterns.
+
+- **Keep-alive Pages is a huge UX win + small RAM cost.** Should
+  have done this from day one. Form state preservation is something
+  users only notice when it BREAKS (which our tester did, brutally).
+
+- **State-in-context vs state-in-component is a structural decision,
+  not a refactor.** Single-URL download had been local-state since
+  0.2. Moving it to context took ~3 hours. Worth every minute.
+  Rule: **if it survives navigation in the user's mental model, it
+  must live above the router.**
+
+### Open follow-ups
+
+- Drag-feedback session-gate fix is in code but user hasn't verified
+  (the close bug ate their entire test window). Re-test next session.
+- Auto-updater (tauri-plugin-updater) is a natural follow-up now
+  that we're cutting installer-per-fix. ~half day to wire.
+- JDownloader-as-secondary-source via MyJDownloader API (~1 day)
+  was discussed but not committed — user wants to "sit on it." Pin
+  for later.

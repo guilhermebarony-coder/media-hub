@@ -43,6 +43,7 @@ export default function SettingsPage() {
           <LibrarySection />
           <DownloadsSection />
           <TranscodeSection />
+          <BridgeSection />
           <DiagnosticsSection />
           <AboutSection />
         </div>
@@ -783,13 +784,213 @@ function TranscodeSection() {
 }
 
 // =====================================================================
+// Bridge (1.2.2)
+// =====================================================================
+//
+// Surfaces the localhost HTTP bridge: shows the token + port so the
+// user can paste them into the browser-extension settings, plus an
+// enable/disable toggle and a regenerate-token button. All changes
+// require an app restart to take effect (the server is spawned once
+// at startup with a snapshot of these values).
+
+function BridgeSection() {
+  const { settings, save } = useSettings();
+  const [copied, setCopied] = useState<"" | "token" | "port" | "url">("");
+
+  async function copy(kind: "token" | "port" | "url", value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(kind);
+      setTimeout(() => setCopied(""), 1200);
+    } catch {
+      /* user can still select+copy manually */
+    }
+  }
+
+  async function regenerate() {
+    const ok = await confirmDialog(
+      "Generate a new bridge token?\n\nThe previously paired browser extension will stop working until you paste the new token into its settings.",
+      { title: "Regenerate bridge token?", kind: "warning" },
+    );
+    if (!ok) return;
+    // 64 hex chars to match the Rust generator. We do it client-side
+    // here for the instant-feedback feel; the value gets persisted
+    // through normal settings save.
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    const token = Array.from(bytes)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    await save((s) => ({ ...s, bridge_token: token }));
+    await alertDialog(
+      "New token saved. Restart Media Hub for the bridge server to pick it up.",
+      { title: "Restart required", kind: "info" },
+    );
+  }
+
+  const enabled = settings.bridge_enabled;
+  const token = settings.bridge_token;
+  const port = settings.bridge_port;
+  const url = `http://127.0.0.1:${port}`;
+
+  return (
+    <section className="card-box">
+      <h2>
+        Browser bridge <span className="chip">extension + scripts</span>
+      </h2>
+      <p className="hint">
+        Media Hub runs a tiny HTTP server on <code>127.0.0.1</code> so the
+        browser extension (or any local script) can send URLs straight
+        into the download queue. Loopback only — never exposed to the
+        network. Paste the token + URL below into the extension's
+        settings to pair it once.
+      </p>
+
+      <div className="bar">
+        <span className="settings-label">Enabled</span>
+        <label className="switch">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) =>
+              void save((s) => ({ ...s, bridge_enabled: e.target.checked }))
+            }
+          />
+          <span className="switch-slider" />
+        </label>
+        <span className="hint-text">
+          {enabled
+            ? "server starts on next launch"
+            : "server is off — extension can't reach the app"}
+        </span>
+      </div>
+
+      <div className="bar">
+        <span className="settings-label">URL</span>
+        <code className="settings-mono settings-grow">{url}</code>
+        <button
+          className="btn btn-secondary"
+          onClick={() => void copy("url", url)}
+          title="Copy URL"
+        >
+          {copied === "url" ? "✓ Copied" : "Copy"}
+        </button>
+      </div>
+
+      <div className="bar">
+        <span className="settings-label">Port</span>
+        <input
+          type="number"
+          className="field-input"
+          style={{ width: 100 }}
+          min={1024}
+          max={65535}
+          value={port}
+          onChange={(e) => {
+            const n = parseInt(e.target.value, 10);
+            if (!Number.isFinite(n) || n < 1024 || n > 65535) return;
+            void save((s) => ({ ...s, bridge_port: n }));
+          }}
+        />
+        <span className="hint-text">change requires app restart</span>
+      </div>
+
+      <div className="bar">
+        <span className="settings-label">Token</span>
+        <code
+          className="settings-mono settings-grow"
+          style={{ fontSize: 11, wordBreak: "break-all" }}
+        >
+          {token || "(no token yet — restart the app to generate one)"}
+        </code>
+        <button
+          className="btn btn-secondary"
+          onClick={() => void copy("token", token)}
+          disabled={!token}
+          title="Copy token"
+        >
+          {copied === "token" ? "✓ Copied" : "Copy"}
+        </button>
+        <button
+          className="btn btn-secondary"
+          onClick={() => void regenerate()}
+          title="Generate a new token (invalidates the current pairing)"
+        >
+          Regenerate
+        </button>
+      </div>
+
+      <details className="settings-details">
+        <summary>Test it from a terminal</summary>
+
+        <p className="hint" style={{ fontSize: 11, margin: "8px 0 4px" }}>
+          <strong>PowerShell</strong> (Windows — use <code>curl.exe</code> not{" "}
+          <code>curl</code>; the bare alias maps to Invoke-WebRequest with
+          incompatible flags):
+        </p>
+        <pre className="settings-pre">
+          {`curl.exe -X POST ${url}/enqueue -H "Authorization: Bearer ${token || "<TOKEN>"}" -H "Content-Type: application/json" -d '{"url":"https://youtu.be/dQw4w9WgXcQ"}'`}
+        </pre>
+
+        <p className="hint" style={{ fontSize: 11, margin: "8px 0 4px" }}>
+          <strong>PowerShell native</strong> (no curl needed):
+        </p>
+        <pre className="settings-pre">
+          {`Invoke-RestMethod -Uri ${url}/enqueue -Method POST \`
+  -Headers @{Authorization="Bearer ${token || "<TOKEN>"}"} \`
+  -ContentType "application/json" \`
+  -Body '{"url":"https://youtu.be/dQw4w9WgXcQ"}'`}
+        </pre>
+
+        <p className="hint" style={{ fontSize: 11, margin: "8px 0 4px" }}>
+          <strong>bash / zsh</strong> (macOS / Linux / Git Bash):
+        </p>
+        <pre className="settings-pre">
+          {`curl -X POST ${url}/enqueue \\
+  -H "Authorization: Bearer ${token || "<TOKEN>"}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"url":"https://youtu.be/dQw4w9WgXcQ"}'`}
+        </pre>
+
+        <p className="hint" style={{ fontSize: 11 }}>
+          Add <code>"audio_format": "mp3"</code> to download as audio.
+          Add <code>"project_id": "&lt;id&gt;"</code> to route to a specific
+          project.
+        </p>
+
+        <p className="hint" style={{ fontSize: 11, margin: "12px 0 4px" }}>
+          <strong>Deep link</strong> (works even when the app isn't running
+          — the OS will launch Media Hub):
+        </p>
+        <pre className="settings-pre">
+          {`mediahub://enqueue?url=${encodeURIComponent("https://youtu.be/dQw4w9WgXcQ")}&token=${token || "<TOKEN>"}`}
+        </pre>
+        <p className="hint" style={{ fontSize: 11 }}>
+          Paste that into your browser's address bar (or click an{" "}
+          <code>&lt;a&gt;</code> tag with that href). Same token + same
+          query-param shape as the POST endpoint.
+        </p>
+      </details>
+    </section>
+  );
+}
+
+// =====================================================================
 // Diagnostics (B)
 // =====================================================================
+
+interface EngineInfo {
+  version: string | null;
+  managed: boolean;
+}
 
 function DiagnosticsSection() {
   const [versions, setVersions] = useState<SidecarVersion[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [engine, setEngine] = useState<EngineInfo | null>(null);
+  const [updating, setUpdating] = useState(false);
+  const [updateMsg, setUpdateMsg] = useState<string | null>(null);
 
   async function refresh() {
     setLoading(true);
@@ -797,10 +998,27 @@ function DiagnosticsSection() {
     try {
       const out = await invoke<SidecarVersion[]>("binaries_version");
       setVersions(out);
+      setEngine(await invoke<EngineInfo>("yt_dlp_engine_info"));
     } catch (e) {
       setErr(String(e));
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Manual "update now" — bypasses the silent 24h throttle. The app
+  // already auto-updates the yt-dlp engine on launch; this is for when a
+  // site breaks mid-session and the user wants the freshest build now.
+  async function updateEngine() {
+    setUpdating(true);
+    setUpdateMsg(null);
+    try {
+      setUpdateMsg(await invoke<string>("yt_dlp_update_now"));
+      await refresh();
+    } catch (e) {
+      setUpdateMsg(`Update failed: ${String(e)}`);
+    } finally {
+      setUpdating(false);
     }
   }
 
@@ -833,6 +1051,31 @@ function DiagnosticsSection() {
           {loading ? "Checking…" : "Re-check versions"}
         </button>
       </div>
+
+      <div className="settings-row">
+        <span className="settings-label">
+          yt-dlp engine
+          {engine && (
+            <span className="chip" style={{ marginLeft: 8 }}>
+              {engine.managed ? "auto-updated" : "bundled"}
+            </span>
+          )}
+        </span>
+        <button className="btn btn-secondary" onClick={() => void updateEngine()} disabled={updating}>
+          {updating ? "Updating…" : "Update engine now"}
+        </button>
+      </div>
+      <p className="hint">
+        The download engine (yt-dlp) auto-updates silently on launch so
+        sites that change frequently keep working. Use this if something
+        breaks mid-session and you want the latest build immediately.
+      </p>
+      {updateMsg && (
+        <div className="msg-row">
+          <span className="label">engine</span>
+          <code>{updateMsg}</code>
+        </div>
+      )}
 
       {err && (
         <div className="msg-row err">

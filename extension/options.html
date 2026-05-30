@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Media Hub — Options</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header>
+        <div class="brand">
+          <div class="brand-mark"></div>
+          <div class="brand-name">media·hub</div>
+        </div>
+        <h1>Extension options</h1>
+        <p class="hint">
+          Pair this extension with the Media Hub desktop app. Find the
+          token in Media Hub: <strong>Settings → Browser bridge → Token</strong>.
+        </p>
+      </header>
+
+      <section class="card">
+        <h2>Connection</h2>
+
+        <div class="field">
+          <label for="url">Bridge URL</label>
+          <input
+            type="text"
+            id="url"
+            placeholder="http://127.0.0.1:47821"
+            spellcheck="false"
+            autocomplete="off"
+          />
+          <p class="hint-sm">
+            Default is <code>http://127.0.0.1:47821</code>. Change only if you
+            set a custom port in Media Hub's Settings.
+          </p>
+        </div>
+
+        <div class="field">
+          <label for="token">Bridge token</label>
+          <input
+            type="text"
+            id="token"
+            placeholder="paste 64-character hex token here"
+            spellcheck="false"
+            autocomplete="off"
+          />
+          <p class="hint-sm">
+            64 hex characters. Copy it from Media Hub's Settings page.
+          </p>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary" id="save-btn">Save</button>
+          <button class="btn" id="test-btn">Test connection</button>
+          <span class="status mono" id="status"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>How to use</h2>
+        <ul class="howto">
+          <li>
+            Click the extension icon → <strong>Send to Media Hub</strong>.
+            Pick <em>Video / MP3 / M4A / FLAC</em>, hit send.
+          </li>
+          <li>
+            Right-click any link, video, or page → <strong>Send to Media Hub</strong>
+            (with format submenu).
+          </li>
+          <li>
+            App not running? The popup will show a "Try launching app" button
+            that uses the <code>mediahub://</code> deep-link to cold-start
+            Media Hub with your URL already queued.
+          </li>
+        </ul>
+      </section>
+    </main>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

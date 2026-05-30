@@ -45,6 +45,28 @@ export async function attachLocalThumbnail(
 }
 
 /**
+ * 1.2.0 — generate a waveform PNG for an audio-only asset and store
+ * it as the asset's thumbnail. Same shape as attachLocalThumbnail
+ * above (fire-and-forget post-download), just calls the waveform
+ * extractor instead of the frame extractor. Library card treats the
+ * resulting path as a normal thumbnail.
+ */
+export async function attachLocalWaveform(
+  assetId: string,
+  srcPath: string,
+): Promise<void> {
+  try {
+    const res = await invoke<{ path: string }>("media_extract_waveform", {
+      srcPath,
+      assetId,
+    });
+    await invoke("library_set_thumbnail", { assetId, path: res.path });
+  } catch (e) {
+    console.warn("waveform extract/set failed (non-fatal):", e);
+  }
+}
+
+/**
  * Resolve an asset's thumbnail to a renderable URL. Prefers the local
  * extracted frame (correct for segment downloads), falls back to the
  * remote YouTube/X CDN URL, then null. Local paths go through
@@ -115,13 +137,20 @@ export async function revealFile(filePath: string): Promise<void> {
 }
 
 /**
- * Open the file in the OS's default application (e.g. Premiere will
- * import it if registered for .mp4, otherwise system default media
- * player). Used by the library context menu (0.9 UX win #6).
+ * Open the file in the OS's default application (e.g. mpv for .mp3,
+ * Premiere for .mp4 if registered). Used by the library card's
+ * double-click + the right-click context menu.
+ *
+ * 1.2.0 — switched from `openPath` (plugin-opener) to our own
+ * `os_open_path` Rust command. plugin-opener enforces a path scope
+ * via capabilities (default `$HOME/**`), so files in a relocated
+ * library root on E:/ or D:/ failed silently. Our command spawns
+ * the OS shell directly — same trust boundary as our other Rust
+ * commands.
  */
 export async function openFileInDefaultApp(filePath: string): Promise<void> {
   try {
-    await openPath(filePath);
+    await invoke("os_open_path", { path: filePath });
   } catch (e) {
     console.warn("openFileInDefaultApp failed:", e);
   }

@@ -30,6 +30,8 @@ src-tauri/binaries/ffmpeg*
 
 # Rust build artifacts
 src-tauri/target/
+# Convenience shortcut to the build target dir (per-developer)
+src-tauri/target.lnk
 
 # Library data (per-user, never committed)
 *.db

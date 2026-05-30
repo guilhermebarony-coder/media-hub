@@ -277,6 +277,43 @@ button { font-family: inherit; }
 }
 .topbar-search:hover { background: var(--bg-3); color: var(--text-1); }
 .topbar-search .kbd { margin-left: auto; }
+
+/* 1.1.3 — global download-activity badge in the topbar. Visible
+   whenever a single-URL OR queue job is in flight, regardless of
+   route. Pulsing dot + count + label. Clicking jumps to /download. */
+.topbar-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  height: 26px;
+  margin-right: 8px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-2));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line-hi));
+  border-radius: 13px;
+  color: var(--text-0);
+  font-size: 11px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.topbar-activity:hover {
+  background: color-mix(in srgb, var(--accent) 24%, var(--bg-2));
+}
+.topbar-activity-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent);
+  animation: dlPulse 1.6s ease-in-out infinite;
+}
+@keyframes dlPulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 0%, transparent); }
+}
+.topbar-activity-count { font-weight: 700; color: var(--accent); }
+.topbar-activity-label { color: var(--text-2); text-transform: uppercase; letter-spacing: 0.06em; font-size: 10px; }
 .topbar-icons { display: flex; gap: 2px; }
 
 .ic-btn {
@@ -297,6 +334,24 @@ button { font-family: inherit; }
   display: flex;
   min-height: 0;
 }
+
+/* 1.1.3 — keep-alive page host. The active page renders normally;
+   non-active pages stay mounted but are hidden via the [hidden]
+   attribute. `display: contents` makes the wrapper transparent to
+   layout when active so the page's own .content fills the host. */
+.content-host {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.keep-page {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.keep-page[hidden] { display: none; }
 
 .nav {
   width: 216px;
@@ -781,6 +836,80 @@ textarea.field-input {
 }
 .meta-toggle:hover { color: var(--text-0); }
 
+/* 1.2.0 — Download page: Video | Audio mode tabs. Sits above the
+   format picker. Eagle-tabs look — pill row with lime underline on
+   active. */
+.dl-mode-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  align-self: flex-start;
+}
+.dl-mode-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.dl-mode-tab:hover { color: var(--text-0); }
+.dl-mode-tab.active {
+  background: var(--accent);
+  color: var(--bg-0);
+  font-weight: 600;
+}
+.dl-mode-tab.active svg { color: var(--bg-0); }
+
+/* 1.2.0 — Audio format picker. Three cards side-by-side, big enough
+   that the format name reads at a glance. Selected card lights up
+   with the lime accent matching the Video|Audio tab style. */
+.dl-audio-formats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.dl-audio-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 14px 14px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text-1);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+}
+.dl-audio-card:hover {
+  background: var(--bg-3);
+  color: var(--text-0);
+}
+.dl-audio-card.active {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-2));
+  border-color: var(--accent);
+  color: var(--text-0);
+}
+.dl-audio-card.active .dl-audio-name { color: var(--accent); }
+.dl-audio-name {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+.dl-audio-hint { font-size: 12px; }
+.dl-audio-meta { font-size: 11px; }
+
 .meta-formats {
   background: var(--bg-2);
   border: 1px solid var(--line);
@@ -990,6 +1119,23 @@ textarea.field-input {
   letter-spacing: 0.08em;
   border-bottom: 1px solid var(--line);
 }
+/* 1.1.7 — Vault-style section header for inline section dividers
+   inside the sidebar (VIEWS / FOLDERS). No bottom border (the gap
+   between sections does the separation), tighter top spacing so the
+   sections feel grouped instead of like full panel headers. */
+.lib-side-head.lib-section-head {
+  height: auto;
+  padding: 14px 14px 6px;
+  border-bottom: none;
+  justify-content: space-between;
+}
+.lib-side-head.lib-section-head:first-child {
+  padding-top: 10px;
+}
+.lib-views {
+  border-bottom: none !important;
+  padding-bottom: 6px !important;
+}
 .lib-side-search { padding: 10px; border-bottom: 1px solid var(--line); }
 .lib-group { padding: 10px 8px 6px; }
 .lib-group-title {
@@ -1120,7 +1266,51 @@ textarea.field-input {
   padding: 0;
 }
 .lib-card:hover { border-color: var(--line-hi); background: var(--bg-2); }
-.lib-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+
+/* 1.1 — selected outline.
+   - Original: `box-shadow: inset` (clipped by thumbnail covering top edges).
+   - Attempt 2: CSS `outline: 2px solid` (still partially clipped on multi-
+     select because the thumbnail's stacking context paints over it in spots).
+   - Final: pseudo-element overlay with high z-index. Absolutely positioned
+     to inset:0 (sits exactly on the card's edges), border-radius:inherit
+     to follow the card's corner radius, pointer-events:none so clicks
+     pass through to the underlying card. Guaranteed to render on top of
+     EVERY child element including the thumbnail and its badges. */
+.lib-card.selected {
+  border-color: var(--accent);
+}
+.lib-card.selected::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--accent);
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 5;
+}
+/* Required for the pseudo-element to position against the card. The
+   card likely already has position:relative for badge anchoring;
+   reasserting it here makes the rule self-contained. */
+.lib-card { position: relative; }
+
+/* 1.1 — suppress the browser's native focus-visible ring. The
+   selected-state outline above already tells the user which card is
+   "active" — the extra white outline that the browser draws on
+   keyboard focus was sticking around after click+arrow-key sequences
+   and reading as a bug. Accessibility note: focus is still
+   reachable; we're just dropping the visual styling. */
+.lib-card:focus,
+.lib-card:focus-visible {
+  outline: none;
+}
+/* Restore an outline ONLY when the card is keyboard-focused but NOT
+   selected — preserves the a11y path for users who can't see the
+   selected style for whatever reason, without bothering the common
+   click-then-type case. */
+.lib-card:focus-visible:not(.selected) {
+  outline: 1px dashed var(--text-3);
+  outline-offset: -3px;
+}
 
 /* "Just downloaded" highlight (0.9 UX win #7) — subtle lime left
    border + glow on cards whose downloaded_at is within the last
@@ -1133,6 +1323,362 @@ textarea.field-input {
 .lib-card.just-now.selected {
   /* "selected" wins on the right + glow combo; left accent stays. */
   border-left-color: var(--accent);
+}
+
+/* 1.1 Phase 2 — folders list in the left sidebar. Sits above the
+   filter sections. Eagle-like: each folder is a row with icon +
+   name + count, active row gets a lime fill. Rename input takes
+   over the name slot inline. */
+.lib-folders {
+  list-style: none;
+  margin: 0;
+  padding: 4px 6px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-bottom: 1px solid var(--line);
+}
+.lib-folder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: var(--text-1);
+  cursor: pointer;
+  user-select: none;
+}
+.lib-folder:hover {
+  background: var(--bg-2);
+}
+.lib-folder.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text-0);
+}
+/* 1.1.7 — drop hover. Lime tint + dashed border so the user reads
+   "I can release here" before the drop completes. Icon + count are
+   explicitly pinned to a readable dark tone here — without this the
+   default text-3 (gray) washed into the lime background and made
+   them invisible. */
+.lib-folder.drop-hover {
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+  color: var(--bg-0);
+  outline: 1px dashed var(--accent);
+  outline-offset: -2px;
+}
+.lib-folder.drop-hover svg,
+.lib-folder.drop-hover .lib-folder-count {
+  color: var(--bg-0);
+}
+.lib-folder.drop-hover .lib-folder-count {
+  opacity: 0.7; /* count slightly recessed so it doesn't fight the name */
+}
+
+/* 1.1.7 — screen-dim overlay during drag. Vault-style: the whole
+   library area dims so the active drop targets visually pop. Only
+   the sidebar stays at full brightness (it's the target surface). */
+.lib-wrap.dragging .lib-main,
+.lib-wrap.dragging .lib-inspector {
+  filter: brightness(0.55);
+  transition: filter 0.12s ease;
+  pointer-events: none; /* discourage releasing on the grid mid-drag */
+}
+.lib-wrap .lib-main,
+.lib-wrap .lib-inspector {
+  transition: filter 0.18s ease;
+}
+
+.lib-folder svg {
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.lib-folder.active svg {
+  color: var(--accent);
+}
+.lib-folder-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib-folder-count {
+  font-size: 10px;
+  color: var(--text-3);
+  flex-shrink: 0;
+  min-width: 22px;
+  text-align: right;
+  /* 1.1 Phase 2 — small right padding so the bare digit doesn't hug
+     the sidebar wall the way the bordered "+" button does. The
+     button's border claims visual space; the count text reads as
+     further right without an equivalent offset. 6px lands the digit
+     roughly under the button's icon center. */
+  padding-right: 6px;
+}
+.lib-folder.active .lib-folder-count {
+  color: var(--text-1);
+}
+.lib-folder-rename {
+  flex: 1;
+  background: var(--bg-0);
+  color: var(--text-0);
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  padding: 1px 4px;
+  font-size: 12px;
+  font-family: inherit;
+  min-width: 0;
+}
+
+/* 1.1 Phase 2 — Folders sidebar header. Holds the section title +
+   the small "+" button that creates a new folder. */
+.lib-folders-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.lib-folder-add-btn {
+  background: transparent;
+  color: var(--text-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  /* Width-matched to .lib-folder-count so the header "+" and row
+     counts sit in the same right column. The padding shapes the
+     button; the count uses min-width to occupy the same X. */
+  width: 22px;
+  height: 18px;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.lib-folder-add-btn:hover:not(:disabled) {
+  background: var(--bg-2);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.lib-folder-add-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Inspector folder dropdown (single + batch) */
+.insp-folder .field-select {
+  width: 100%;
+  font-size: 12px;
+}
+
+/* 1.1 — Eagle-style always-on inspector panel. Right column inside
+   .lib-wrap, complements the .lib-side filter column on the left. */
+.lib-inspector {
+  width: 280px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--line);
+  background: var(--bg-1);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  font-size: 12px;
+}
+.insp-empty {
+  padding: 24px 16px;
+  color: var(--text-2);
+  text-align: center;
+}
+.insp-empty-title {
+  font-size: 13px;
+  color: var(--text-1);
+  margin-bottom: 8px;
+}
+.insp-empty-hint {
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-3);
+}
+
+.insp-single, .insp-batch {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.insp-thumb {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: var(--bg-2);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+.insp-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+/* 1.2.0 — audio inspector thumb. Waveform PNG is transparent on top
+   of a darker backdrop so the lime trace pops, music-note glyph
+   anchors the corner like on the grid card. */
+.insp-thumb.audio {
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--accent) 7%, #0e0e10) 0%,
+      #0a0a0c 100%);
+}
+.insp-thumb.audio img {
+  object-fit: contain;
+  padding: 10px;
+}
+.insp-thumb-empty {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.insp-title {
+  font-size: 13px;
+  color: var(--text-0);
+  font-weight: 600;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.insp-channel {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.insp-stats {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+}
+.insp-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.insp-stats dt {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+}
+.insp-stats dd {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.insp-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.insp-actions .btn {
+  flex: 1;
+  min-width: 0;
+  justify-content: center;
+}
+
+.insp-section-head {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  margin-bottom: 6px;
+}
+.insp-tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.insp-source {
+  margin-top: 8px;
+}
+.insp-url {
+  font-size: 10px;
+  color: var(--text-2);
+  word-break: break-all;
+  text-decoration: none;
+}
+.insp-url:hover {
+  color: var(--accent);
+}
+
+.insp-batch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.insp-batch-count {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  font-family: var(--mono);
+}
+.insp-batch-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.insp-batch-list li {
+  padding: 6px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.insp-batch-list li:hover {
+  background: var(--bg-2);
+}
+.insp-bl-title {
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.insp-bl-meta {
+  font-size: 10px;
+  color: var(--text-3);
+  margin-top: 1px;
+}
+.insp-bl-more {
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--text-3);
+  text-align: center;
+  font-style: italic;
+}
+
+/* 1.1 — marquee drag rectangle. Fixed positioning in viewport
+   coords (mouse events use clientX/Y so this matches naturally).
+   Semi-transparent lime fill + lime border = readable on any card
+   background it overlaps. pointer-events: none so it never blocks
+   the underlying cards or the mouseup that ends the drag. */
+.lib-drag-rect {
+  position: fixed;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 1px solid var(--accent);
+  z-index: 100;
 }
 
 /* =====================================================================
@@ -1182,6 +1728,297 @@ textarea.field-input {
 .ctx-warn:hover { background: color-mix(in srgb, #e0a93a 12%, var(--bg-3)); color: #e0a93a; }
 .ctx-danger { color: var(--err); }
 .ctx-danger:hover { background: color-mix(in srgb, var(--err) 14%, var(--bg-3)); color: var(--err); }
+
+/* 1.1 Phase 3 — Filter button in the library toolbar + the popup
+   it anchors. Button styling layers on top of .btn .btn-secondary;
+   the open-state class flips it to lime so the popup's parentage
+   reads at a glance. */
+.lib-filter-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.lib-filter-btn.open {
+  background: color-mix(in srgb, var(--accent) 20%, var(--bg-2));
+  border-color: var(--accent);
+  color: var(--text-0);
+}
+.lib-filter-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  margin-left: 2px;
+  background: var(--accent);
+  color: var(--bg-0);
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.filter-popup {
+  position: fixed;
+  background: var(--bg-1);
+  border: 1px solid var(--line-hi);
+  border-radius: 6px;
+  box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.6);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  max-height: 70vh;
+  overflow: hidden;
+  font-size: 12px;
+}
+.filter-popup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.filter-popup-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-2);
+}
+.filter-popup-clear {
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.filter-popup-clear:hover {
+  color: var(--accent);
+}
+
+.filter-section {
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.filter-section:last-child {
+  border-bottom: none;
+}
+.filter-section-head {
+  padding: 6px 12px 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.filter-section-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0 6px 6px;
+  overflow-y: auto;
+  max-height: 240px;
+}
+
+.filter-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  margin: 0 4px 4px;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+.filter-search input {
+  flex: 1;
+  background: transparent;
+  color: var(--text-1);
+  border: none;
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+  padding: 0;
+  min-width: 0;
+}
+.filter-search input::placeholder {
+  color: var(--text-3);
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--text-1);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+.filter-row:hover {
+  background: var(--bg-2);
+}
+.filter-row.active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text-0);
+}
+.filter-row-check {
+  width: 12px;
+  text-align: center;
+  color: var(--accent);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.filter-row-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filter-row-count {
+  font-size: 10px;
+  color: var(--text-3);
+  flex-shrink: 0;
+  min-width: 22px;
+  text-align: right;
+}
+.filter-row.active .filter-row-count {
+  color: var(--text-1);
+}
+.filter-empty {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-3);
+  font-style: italic;
+}
+
+/* 1.1.1 — Tag filter popup (two-column Eagle layout) + Tag picker
+   popup (press-T floating). Both reuse .filter-popup chrome (border,
+   bg, shadow) and add their own search + list internals. */
+.tag-filter-popup,
+.tag-picker-popup {
+  /* Forces overflow so the inner list scrolls independently. */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.tagf-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  margin: 6px 8px;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.tagf-search input {
+  flex: 1;
+  background: transparent;
+  color: var(--text-0);
+  border: none;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  padding: 0;
+  min-width: 0;
+}
+.tagf-search input::placeholder { color: var(--text-3); }
+
+.tagf-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  border-top: 1px solid var(--line);
+}
+.tagf-rail {
+  width: 130px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--line);
+  padding: 6px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+.tagf-rail-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  color: var(--text-1);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  border-radius: 3px;
+  text-align: left;
+  width: 100%;
+}
+.tagf-rail-item:hover { background: var(--bg-2); }
+.tagf-rail-item.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text-0);
+}
+.tagf-rail-item .mono { font-size: 10px; }
+
+.tagf-list {
+  flex: 1;
+  padding: 6px;
+  overflow-y: auto;
+  min-width: 0;
+}
+
+/* Press-T popup variant: no rail; the list fills the popup. */
+.tag-picker-popup .tagf-list {
+  padding: 4px 6px 6px;
+}
+
+/* "Create new tag" affordance — accent tint to distinguish from
+   existing tag rows. */
+.filter-row.tag-picker-create {
+  color: var(--accent);
+}
+.filter-row.tag-picker-create:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.filter-row.tag-picker-create .filter-row-check {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* Partial-state row in the press-T picker: shown when only some of
+   the selected assets have the tag. The check is a dash (–). */
+.filter-row.partial {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.filter-row.partial .filter-row-check {
+  color: var(--text-2);
+}
+
+/* 1.1 Phase 2 — non-interactive label row in a context menu
+   (e.g. the folder name at the top of FolderContextMenu). Reads
+   as a dimmed title that mirrors .ctx-item geometry so the divider
+   below aligns visually. */
+.ctx-label {
+  padding: 6px 12px 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+}
 .lib-card .thumb {
   aspect-ratio: 16/9;
   background: repeating-linear-gradient(135deg, #1a1a1e 0 10px, #16161a 10px 20px);
@@ -1198,6 +2035,70 @@ textarea.field-input {
   height: 100%;
   object-fit: cover;
 }
+/* 1.2.0 — audio card treatment. Waveform PNG is transparent on top of
+   a darker backdrop so the lime trace pops, and a music-note overlay
+   sits where the resolution chip would on a video card. */
+.lib-card.audio .thumb {
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--accent) 7%, #0e0e10) 0%,
+      #0a0a0c 100%);
+}
+.lib-card.audio .thumb img {
+  object-fit: contain;
+  padding: 8px;
+}
+.lib-card-audio-glyph {
+  position: absolute;
+  top: 6px; right: 6px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 50%;
+  color: var(--accent);
+}
+/* 1.3.0 — missing-file affordances. Card dims + shows a ⚠ chip when the
+   underlying file is gone (deleted/moved out-of-band or drive offline). */
+.lib-card.is-missing {
+  opacity: 0.55;
+}
+.lib-card.is-missing:hover {
+  opacity: 0.8;
+}
+.lib-card-missing {
+  position: absolute;
+  bottom: 6px; left: 6px;
+  z-index: 1;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(190, 40, 40, 0.92);
+  color: #fff;
+  text-transform: uppercase;
+}
+/* Banner above the grid when any clip is missing. */
+.lib-missing-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 9px 14px;
+  border: 1px solid rgba(190, 40, 40, 0.5);
+  border-radius: 8px;
+  background: rgba(190, 40, 40, 0.12);
+}
+.lib-missing-banner-text {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-1);
+}
+
 .lib-card .thumb .badge {
   position: absolute;
   top: 6px; left: 6px;
@@ -1584,6 +2485,94 @@ textarea.field-input {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   font-family: var(--mono);
+}
+
+/* 1.2.2 — Bridge section additions. Pill-style toggle that scans
+   nicely next to the URL/Port/Token rows. */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 18px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.switch-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.switch-slider::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  background: var(--text-2);
+  border-radius: 50%;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.switch input:checked + .switch-slider {
+  background: color-mix(in srgb, var(--accent) 35%, var(--bg-2));
+  border-color: var(--accent);
+}
+.switch input:checked + .switch-slider::before {
+  transform: translateX(18px);
+  background: var(--bg-0);
+}
+
+.settings-mono {
+  font-family: var(--mono);
+  color: var(--text-1);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.settings-grow {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-details {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.settings-details summary {
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 4px 0;
+}
+.settings-details summary:hover { color: var(--text-0); }
+.settings-pre {
+  margin: 8px 0 4px;
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-1);
+  overflow-x: auto;
+  white-space: pre;
 }
 .settings-radio-group {
   display: flex;
@@ -2032,6 +3021,7 @@ textarea.field-input {
   border-radius: 6px;
 }
 .proj-row.active { border-color: var(--accent-line); background: color-mix(in oklab, var(--accent), transparent 92%); }
+.proj-row.selected { border-color: var(--text-3); background: color-mix(in oklab, var(--text-1), transparent 94%); }
 .proj-row-dot {
   width: 8px;
   height: 8px;

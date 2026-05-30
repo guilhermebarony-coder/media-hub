@@ -1,6 +1,6 @@
 [package]
 name = "media-hub"
-version = "1.0.5"
+version = "1.2.16"
 description = "Media Hub — download manager + media library for video editors"
 authors = ["Guilherme"]
 edition = "2021"
@@ -20,9 +20,28 @@ tauri-plugin-opener = "2"
 tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["time", "rt", "macros"] }
+tokio = { version = "1", features = ["time", "rt", "macros", "net", "io-util", "sync"] }
+# 1.2.2 — Browser-extension bridge (localhost HTTP). axum gives us
+# clean routing + JSON extractor + CORS via tower-http with minimal
+# ceremony. tower-http provides the CORS layer the extension needs
+# (chrome-extension://* origin doesn't match default CORS rules).
+axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio"] }
+tower-http = { version = "0.5", features = ["cors"] }
+# 32-byte hex token generation for the bridge auth.
+rand = "0.8"
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "chrono", "macros"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 trash = "5.2.6"
 tauri-plugin-dialog = "2.7.1"
+tauri-plugin-drag = "2.1.1"
+# 1.2.3 — Deep linking (mediahub://). The single-instance plugin's
+# `deep-link` feature must be enabled on Windows/Linux so a second
+# launch (when the browser opens mediahub://...) forwards the URL
+# to the running app instead of spawning a duplicate window.
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+# 1.2.16 — yt-dlp engine auto-updater. reqwest fetches the nightly
+# release tag (GitHub API) + downloads the binary. rustls-tls avoids a
+# system OpenSSL dependency on Windows/macOS build machines.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

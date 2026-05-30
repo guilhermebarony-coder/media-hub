@@ -1,0 +1,336 @@
+/* Media Hub extension — popup styling.
+   Matches the desktop app's dark / lime accent so the two surfaces
+   feel like one product. Compact for the 360px popup canvas. */
+
+:root {
+  --bg-0: #0a0a0c;
+  --bg-1: #111114;
+  --bg-2: #1a1a1e;
+  --bg-3: #25252a;
+  --text-0: #f4f4f6;
+  --text-1: #c8c8cc;
+  --text-2: #8a8a90;
+  --text-3: #5a5a60;
+  --line: #2a2a30;
+  --accent: #c5ff3d;
+  --accent-dim: #5a7a1e;
+  --err: #ff6363;
+  --mono: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  width: 360px;
+  background: var(--bg-0);
+  color: var(--text-1);
+  font: 13px system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.mono { font-family: var(--mono); }
+.hidden { display: none !important; }
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+.brand-mark {
+  width: 14px;
+  height: 14px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.brand-name {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-0);
+  letter-spacing: 0.02em;
+}
+.status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-2);
+}
+.status .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+  transition: background 0.15s ease;
+}
+.status.ok .dot { background: var(--accent); }
+.status.err .dot { background: var(--err); }
+
+.body {
+  padding: 12px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tab-info {
+  padding: 8px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.tab-title {
+  font-size: 12px;
+  color: var(--text-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tab-url {
+  font-size: 10px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+.mode-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.mode-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  width: 50px;
+}
+.mode-tabs {
+  flex: 1;
+  display: flex;
+  gap: 2px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px;
+}
+.mode-tab {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-2);
+  font-size: 11px;
+  padding: 4px 6px;
+  border-radius: 2px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.mode-tab:hover { color: var(--text-0); }
+.mode-tab.active {
+  background: var(--accent);
+  color: var(--bg-0);
+  font-weight: 600;
+}
+
+.send-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px;
+  background: var(--accent);
+  color: var(--bg-0);
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.1s ease, opacity 0.1s ease;
+}
+.send-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 85%, white);
+}
+.send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.send-btn.sending {
+  background: var(--accent-dim);
+  color: var(--text-0);
+}
+.send-icon { font-size: 14px; }
+
+.msg-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 11px;
+}
+.msg-row.ok {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-2));
+  border-color: var(--accent);
+}
+.msg-row.err {
+  background: color-mix(in srgb, var(--err) 12%, var(--bg-2));
+  border-color: var(--err);
+}
+.msg-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.msg-body {
+  color: var(--text-0);
+  word-break: break-word;
+}
+
+/* 1.2.4 — detected-streams list. Sits between the send button and
+   the messages row. Only renders when the sniffer found something
+   on the current tab. */
+.streams {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  margin-top: 2px;
+}
+.streams-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.streams-title {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex: 1;
+}
+.streams-count {
+  font-size: 10px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-2));
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+.streams-hint {
+  margin: 0 0 6px;
+  font-size: 10px;
+  color: var(--text-3);
+  line-height: 1.4;
+}
+.streams-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.streams-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.1s ease, border-color 0.1s ease;
+}
+.streams-list li:hover {
+  background: var(--bg-3);
+  border-color: var(--accent-dim);
+}
+.streams-list li.sending {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-2));
+}
+.stream-type {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+  min-width: 32px;
+  text-align: center;
+}
+.stream-type.hls { background: #c5ff3d; color: #0a0a0c; }
+.stream-type.dash { background: #6cd6ff; color: #0a0a0c; }
+.stream-type.video { background: #ffb56c; color: #0a0a0c; }
+.stream-type.audio { background: #c8c8cc; color: #0a0a0c; }
+.stream-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stream-host {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.stream-preview {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text-2);
+  font-size: 12px;
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+}
+.stream-preview:hover {
+  background: var(--bg-3);
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--text-2);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 4px 0;
+  text-decoration: underline;
+}
+.link-btn:hover { color: var(--accent); }

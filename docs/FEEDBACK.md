@@ -9,6 +9,95 @@ preserved as-is — they're still accurate.
 
 ---
 
+## 2026-05-24 — the Eagle refactor day (and the Brave incident)
+
+Today went the long way around. Started with "fix the cookies thing,"
+ended with a structural refactor of the entire Library page.
+
+### The shape of the day
+
+1. Cookies research / 1.0.3 / 1.0.4 (TV-client failed attempt + revert)
+2. 1.0.5 — library-root migration, the silent-data-loss footgun fix
+3. **The Brave incident**: 3+ hours treating a YouTube-wide adblock
+   issue as if it were our app or our IP. We were never throttled,
+   never DNS-broken, never blacklisted. Brave just hadn't pushed
+   their filter update yet.
+4. Pivoted to library refactor while YT was "down"
+5. Phase 1 (inspector + multi-select + box-drag)
+6. Phase 2 (folders sidebar + Eagle-style UX)
+7. Phase 3 (filter popup)
+8. The DRM-on-every-video discovery → final yt-dlp config cleanup
+9. Tag-editor regression caught at the bell
+
+### What you did right
+
+**Decisive scope-cutting.** "Skip ratings, color labels, notes —
+folders + tags + multi-select." That instinct saved the day's pace.
+Eagle has six dimensions; you correctly identified that two of them
+(folders + filter popup) cover 90% of the real value. The four
+deferred ones can land later if they earn their way in.
+
+**Eagle screenshots as the design source.** Easier than describing.
+The folder distribution + `+` button + right-click rename/delete
+pattern were all clearer in one screenshot than 200 words of spec.
+Keep using those.
+
+**Catching my regressions in real-time.** The outline-clipping at
+multi-select, the inspector breaking tag editing, the folder count
+alignment, the menu styling not matching CardContextMenu — every one
+of these was your eyes catching what TS+cargo wouldn't. None of them
+cost more than 10 minutes to fix because you caught them at the
+moment they shipped, not three sessions later. **This is the single
+most valuable thing you contribute to the project.** I cannot
+replace it.
+
+**"Don't compile until session end."** Big productivity unlock. The
+`1.0.1 → 1.0.2 → 1.0.3 → 1.0.4 → 1.0.5` churn from yesterday was
+real. Today we landed ~5× more code under a single version. That's
+a much healthier rhythm for iterating.
+
+### What I want to flag (gently)
+
+**My tag-editor miss.** When I built the new InspectorSingle, I
+focused on layout/state and forgot the most-used interaction (tag
+chips + add input). The legacy `TagEditor` component is right there
+in the file. I should have done a "feature parity sweep" against
+AssetDrawer before declaring Phase 1 done. Logged the component as
+preserved-for-port, but the right discipline would have been
+catching it in scope-definition not at end-of-session.
+
+**My YouTube TV-client overreach.** I added that extractor-args
+default in 1.0.3 without thinking about the implications of YT
+weaponizing specific clients. Took until today's "every video is
+DRM" symptom to undo it. The lesson is in NOTES: clever
+"workarounds" that touch yt-dlp defaults should be opt-in, never
+shipped as silent defaults.
+
+### Open threads for next time
+
+1. **First thing to ship in 1.1.0**: tag editor in InspectorSingle.
+   ~30 min. Port from `_AssetDrawerLegacy` + `TagEditor`.
+2. **Then**: tag the 1.1.0 release + cut a fresh installer for
+   testers. Lots of meaty changes since 1.0.5 worth handing them.
+3. **After that**: pivot decision time again. The big remaining
+   items are still on the parking lot — multi-root library
+   (Steam-style you keep mentioning), playlist downloading,
+   audio-only download, drag-to-NLE.
+
+### Wrapping today
+
+You said this is being a fun project. From my end too — the rhythm
+when we're shipping is genuinely satisfying. Eagle-style library is
+real now. The footgun is closed. The cookies story is documented to
+hell and back. Most of the things testers will see when they install
+1.1.0 didn't exist 8 hours ago. That's a real day.
+
+Get a Resident Evil run in, hand 1.1.0 to testers tomorrow when you
+feel like building the installer, and we'll do the tag-editor port
++ whatever's next. 👑
+
+---
+
 ## 2026-05-22 evening — 1.0 ships, the cancel patch, and the regression
 
 We crossed the line today. **1.0.0 tagged**, NSIS installer in your
@@ -423,3 +512,142 @@ be writing it yourself for the easy stuff, which frees me up for the
 hard stuff.
 
 That's it. No more notes. 👑
+
+---
+
+## 2026-05-24 (PM) — the day Eagle got tags + the drag fight
+
+Long second session of the same day. Started with a list of four
+items from you ("Tags as a separate popup, Sort, T context, hint")
+and ended grappling with one stubborn drag-feedback bug we didn't
+fully kill. Five-ish hours, two release-worthy features (Tags split +
+press-T picker + drawer tag editor restored + Sort), one big
+external-facing capability (OS drag-out to NLEs via plugin), one
+narrower internal feature (drag-to-folder) that *functions* but has
+a UI-feedback regression we'll attack tomorrow.
+
+### What you did right today
+
+- **Diagnosed the T-popup ghost bug yourself.** I'd shipped a render
+  gate `{tagPickerPos && selection.size > 0 && ...}` and convinced
+  myself the issue was elsewhere — defensive debouncing, focus blur,
+  button-type fixes. You wrote: *"i feel like the window still
+  open, but not showing unless a card is selected"* — and that was
+  EXACTLY the bug. The popup unmounted via the selection-clear path
+  without ever running its `onClose`, leaving `tagPickerPos` stuck
+  non-null. Your instinct beat my code-reading. Don't undersell that.
+
+- **Knew when to research vs. when to commit.** With FCPXML you
+  asked me to research instead of just commit. That's the right
+  move — there's a real "is this worth the complexity" question
+  embedded in it, and a 5-minute spike beats a 5-day investment in
+  the wrong feature. We've now got a four-tier preview menu in NOTES
+  with concrete effort/reward estimates, which lets future-you make
+  the call quickly.
+
+- **Refused to wave away weird symptoms.** Your screenshots of the
+  stuck folder highlight + your description ("cursor changes inside,
+  thumbnail outside") fed straight into the Windows-OLE diagnosis.
+  Without the visual breadcrumbs I'd have stayed in coordinate-conversion
+  hell. Photos > prose for UI bugs.
+
+- **Comfort with shipping incomplete.** "Let's wrap it up here for
+  today, we'll figure it tomorrow" — that's the right call for a UI
+  bug at end-of-session. Tired debugging multiplies tired bugs. The
+  internal-drag feedback issue isn't blocking; the functional move
+  works. It's a polish bug; polish bugs don't ship at 11pm.
+
+### What I missed (the honest part)
+
+- **I shipped three rounds of drag fixes without actually reproducing
+  the bug.** Each one was a plausible-sounding theory — coordinate
+  conversion, Cancelled-vs-Dropped, drop-event race, drag-hint
+  fallback — and each made the symptom slightly different but
+  didn't fully kill it. By round three I should have stopped patching
+  and added a debug overlay (console-log every state setter that
+  touches `folderDropHover` with the value and a tag). Theory-driven
+  fixes work fast when the theory is right; when wrong, they're a
+  yak-shave. Tomorrow: instrument first, fix second.
+
+- **My initial drag-out advice was lazy.** I said "Option α might be
+  complex" based on a quick README skim. The actual TypeScript types
+  (which took 90 seconds to unpack from the npm tarball) immediately
+  showed `cursorPos` in the callback — exactly the unlock I'd
+  said wasn't there. The lesson I logged in NOTES applies here too:
+  "5 minutes with `npm pack` + `tar tzf` beats 30 minutes of docs
+  grep." I'll do the unpack BEFORE handicapping the user's options
+  next time.
+
+- **I didn't pre-flight the FCPXML question with the preview tier
+  framing.** You instinctively went there ("unless we have a good
+  way to preview the video, idk if it's worth it") and you were
+  right — but I should have led with that framing rather than waiting
+  for you to figure it out. Whenever someone asks "should we build
+  feature X?", the first question is "what's the prerequisite
+  capability that makes X worth shipping?" For FCPXML, it's
+  preview-good-enough-to-trim. Lead with the prerequisite, then
+  the feature.
+
+### What you taught me about your workflow today
+
+- You think in **multi-item agendas** ("here are four things") and
+  expect them addressed together, not as a sequence of single-item
+  conversations. The cleanest path for me: one read-the-list-back
+  with a plan, one batched implementation, one short summary at the
+  end. Avoid the "let me ask you about item 2 before doing item 3"
+  trap.
+
+- You **trust your instincts on UX symptoms** more than my code
+  explanations. Multiple times today you pushed back on "I think
+  it's fixed" because something still felt wrong, and you were
+  right every time. I should treat "feels weird" as a real signal
+  rather than waiting for a precise repro.
+
+- You **like the visible artifact** — actual screenshots, working
+  builds, real cards moving to real folders. Even when the underlying
+  code is what changed, you want to see the result. Keep providing
+  visible proof, not just "should work now."
+
+### Open threads waiting for tomorrow
+
+1. **The drag-feedback regression** — functional drop works, visual
+   highlight still doing weird things. Plan: instrument all four
+   `setFolderDropHover` call sites with `console.log(value, callerTag)`,
+   repro once, identify which one fires last with what value. Fix
+   the actual cause, not another theory.
+
+2. **The drag fix needs a fresh `cargo tauri build`** to be testable
+   in the real installer. Today's tests have been against `tauri dev`
+   which works the same way functionally.
+
+3. **The 1.1.x meta-question**: at what point do we tag a release and
+   hand to testers? We have a lot of meaty changes since 1.0.5 sitting
+   unreleased: folders, Eagle inspector, tags-split, Sort, T picker,
+   drawer tag editor restored, OS drag-out. Worth deciding tomorrow
+   whether 1.1 should ship after the drag-feedback fix, or whether to
+   batch in Tier 1 preview (sprite-scrub) first.
+
+4. **The preview/FCPXML decision is teed up** in NOTES with four
+   concrete tiers + effort/reward. Tomorrow we can either pull Tier
+   0 + Tier 1 forward into 1.1 (would make this release feel huge)
+   or save them for 1.2 (keeps the 1.1 → testers loop fast).
+
+5. **The tag editor still doesn't surface partial-tag state in the
+   batch inspector** — only the press-T popup does. That's by design
+   (partial-state UI is harder to read in a column than in a popup
+   row), but worth confirming the press-T workflow feels right when
+   you do it more.
+
+### Tomorrow's recommended opener
+
+"Yesterday we ended with the drag-feedback bug still happening.
+Let's instrument first, then fix." Then I add the console-logging
+defensively, you repro once, we look at the output together, and
+the fix becomes obvious. Should be a 30-minute thing. Then we
+decide on Tier 0/1 preview vs. tagging 1.1.
+
+Sleep well, king. Enjoy your night. The library is a real tool
+now — folders, multi-select, tag picker, dragging clips to your
+editor. Even with one polish bug open, today shipped a lot. 👑
+
+🇧🇷

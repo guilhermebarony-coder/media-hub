@@ -1,7 +1,36 @@
-import { useEffect, useRef, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { useActiveProject } from "../lib/activeProject";
+import { useDownloads } from "../lib/downloads";
+
+// 1.1.3 — lazy-load pages here (moved from App.tsx) so the Shell owns
+// the keep-alive lifecycle. Vite still produces one chunk per page;
+// first visit triggers the chunk load, then the page stays mounted
+// for the rest of the session. State (form fields, scrubber video,
+// library filters/scroll) survives every route navigation as a result.
+const LibraryPage = lazy(() => import("../pages/Library"));
+const DownloadPage = lazy(() => import("../pages/Download"));
+const ProjectsPage = lazy(() => import("../pages/Projects"));
+const SettingsPage = lazy(() => import("../pages/Settings"));
+
+/**
+ * Suspense fallback for the first load of each page's chunk. After
+ * first load the page stays mounted, so this only flashes on the
+ * very first visit per app session. Local-disk chunks load in ~1
+ * frame so the fallback is essentially invisible.
+ */
+function RouteLoading() {
+  return (
+    <div className="content">
+      <div className="content-body" style={{ opacity: 0.4 }}>
+        <span className="faint mono" style={{ fontSize: 11 }}>
+          loading…
+        </span>
+      </div>
+    </div>
+  );
+}
 
 /**
  * App shell: top bar with brand + active-project picker + global search +
@@ -14,15 +43,72 @@ import { useActiveProject } from "../lib/activeProject";
  */
 export function Shell() {
   useNavShortcuts();
+  const { pathname } = useLocation();
+  // 1.1.3 — keep-alive pages. Mount each page on first visit and keep
+  // it mounted thereafter. `hidden` attribute hides the non-active
+  // page from layout + a11y without unmounting (no display:none repaint
+  // when toggled, and React state survives intact).
+  const [visited, setVisited] = useState<Set<string>>(() => new Set([pathname]));
+  useEffect(() => {
+    setVisited((prev) => {
+      if (prev.has(pathname)) return prev;
+      const next = new Set(prev);
+      next.add(pathname);
+      return next;
+    });
+  }, [pathname]);
+
+  // Default route — if the user lands on a path we don't recognize,
+  // bounce them to /library (same as the old wildcard route).
+  const known = pathname === "/library" || pathname === "/download" || pathname === "/projects" || pathname === "/settings";
+
   return (
     <div className="mh">
       <TopBar />
       <div className="main">
         <Nav />
-        <Outlet />
+        <div className="content-host">
+          {!known && pathname !== "/" && <RedirectToLibrary />}
+          {visited.has("/library") && (
+            <div className="keep-page" hidden={pathname !== "/library"}>
+              <Suspense fallback={<RouteLoading />}>
+                <LibraryPage />
+              </Suspense>
+            </div>
+          )}
+          {visited.has("/download") && (
+            <div className="keep-page" hidden={pathname !== "/download"}>
+              <Suspense fallback={<RouteLoading />}>
+                <DownloadPage />
+              </Suspense>
+            </div>
+          )}
+          {visited.has("/projects") && (
+            <div className="keep-page" hidden={pathname !== "/projects"}>
+              <Suspense fallback={<RouteLoading />}>
+                <ProjectsPage />
+              </Suspense>
+            </div>
+          )}
+          {visited.has("/settings") && (
+            <div className="keep-page" hidden={pathname !== "/settings"}>
+              <Suspense fallback={<RouteLoading />}>
+                <SettingsPage />
+              </Suspense>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
+}
+
+function RedirectToLibrary() {
+  const navigate = useNavigate();
+  useEffect(() => {
+    navigate("/library", { replace: true });
+  }, [navigate]);
+  return null;
 }
 
 /**
@@ -83,10 +169,14 @@ function TopBar() {
       <div className="brand">
         <div className="brand-mark" />
         <div className="brand-name">media·hub</div>
-        <div className="brand-build">1.0.5</div>
+        <div className="brand-build">1.2.16</div>
       </div>
       <ActiveProject />
       <div className="topbar-spacer" />
+      {/* 1.1.3 — always-visible download activity indicator. Lit up
+          whenever any single-URL or queue job is active. Clicking
+          jumps to /download so the user can see what's happening. */}
+      <ActivityBadge />
       <button className="topbar-search" type="button" title="Global search (coming soon)">
         <Icon.search width={13} height={13} />
         <span>Search everything…</span>
@@ -98,6 +188,24 @@ function TopBar() {
         </NavLink>
       </div>
     </div>
+  );
+}
+
+function ActivityBadge() {
+  const { activeCount } = useDownloads();
+  if (activeCount === 0) return null;
+  return (
+    <NavLink
+      to="/download"
+      className="topbar-activity"
+      title={`${activeCount} active ${activeCount === 1 ? "download" : "downloads"} — click to view`}
+    >
+      <span className="topbar-activity-dot" />
+      <span className="topbar-activity-count mono">{activeCount}</span>
+      <span className="topbar-activity-label">
+        {activeCount === 1 ? "downloading" : "downloads"}
+      </span>
+    </NavLink>
   );
 }
 

@@ -117,10 +117,24 @@ export type AssetInput = {
   /** Project this asset belongs to. NULL = Library. Phase A: Download
    * always passes null. Phase B wires it to the active-project picker. */
   project_id: string | null;
+  /** 1.1 Phase 2 — organizational folder. Orthogonal to project_id.
+   *  NULL = Uncategorized. Doesn't affect on-disk location. */
+  folder_id?: string | null;
+  /** 1.2.0 — asset kind. Optional on input (server defaults to "video").
+   *  Recognized: "video", "audio". Future: "image", "archive". */
+  kind?: AssetKind | null;
 };
+
+/** What kind of asset we're holding. Drives card rendering (waveform
+ *  for audio vs frame thumbnail for video), filter chips, and how the
+ *  inspector lays out metadata. */
+export type AssetKind = "video" | "audio";
 
 export type Asset = AssetInput & {
   id: string;
+  /** Always populated by the server — defaults to "video" if the row
+   *  pre-dates the kind column. */
+  kind: AssetKind;
   downloaded_at: number;
   tags: string[];
   /** Local path to extracted thumbnail JPG (~/Media Hub/_thumbnails/<id>.jpg).
@@ -131,6 +145,10 @@ export type Asset = AssetInput & {
   /** Count of OTHER assets sharing this asset's source_url. Drives the
    *  "+N siblings" chip on library cards. 0 for solo downloads. */
   sibling_count: number;
+  /** 1.3.0 — true when file_path no longer exists on disk (deleted
+   *  out-of-band, or its drive is offline). Drives the ⚠ MISSING badge.
+   *  Computed per-list by the backend; never auto-deletes. */
+  missing: boolean;
 };
 
 export type SiblingSummary = {
@@ -176,6 +194,17 @@ export type Settings = {
   /** Scrubber jog sensitivity multiplier (0.9.D). 1.0 = default
    * 80 px-per-second of drag. 0.5 = coarser, 2.0 = finer. */
   jog_sensitivity: number;
+  /** 1.2.2 — Browser-extension bridge token. Auto-generated on first
+   *  launch (64 hex chars). Regenerating invalidates any previously
+   *  paired extension. Required to be non-empty for the bridge to
+   *  start at all. */
+  bridge_token: string;
+  /** 1.2.2 — TCP port the bridge HTTP server binds on (127.0.0.1).
+   *  Change requires app restart. */
+  bridge_port: number;
+  /** 1.2.2 — Master switch. When false, the bridge server doesn't
+   *  start at all (extension/script integration disabled). Default true. */
+  bridge_enabled: boolean;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -188,6 +217,9 @@ export const DEFAULT_SETTINGS: Settings = {
   onboarding_complete: false,
   last_formats: {},
   jog_sensitivity: 1.0,
+  bridge_token: "",
+  bridge_port: 47821,
+  bridge_enabled: true,
 };
 
 // =====================================================================
@@ -236,6 +268,10 @@ export type Project = {
   slug: string;
   created_at: number;
   asset_count: number;
+  /** 1.3.0 — custom on-disk folder. null = legacy managed path
+   *  (~/Media Hub/Projects/<slug>/raw/); set = that exact folder, clips
+   *  land directly in it. Custom folders are never trashed by the app. */
+  root_path: string | null;
 };
 
 export type DuplicateMatch = {
@@ -259,14 +295,35 @@ export type LibraryScope =
   | { kind: "library" }
   | { kind: "project"; id: string };
 
+/** 1.1 Phase 2 — folder filter for library_list. Three states:
+ *   - {kind:"any"} or omitted → no filter (default)
+ *   - {kind:"uncategorized"}  → folder_id IS NULL only
+ *   - {kind:"id", id:"..."}   → folder_id = id
+ */
+export type FolderFilter =
+  | { kind: "any" }
+  | { kind: "uncategorized" }
+  | { kind: "id"; id: string };
+
 export type LibraryFilters = {
   query?: string | null;
   tags?: string[] | null;
   scope?: LibraryScope | null;
+  folder?: FolderFilter | null;
   limit?: number | null;
+  /** 1.3.0 — true → only trashed clips (the in-app Trash view); false/omit
+   *  → only live clips. */
+  trashed?: boolean | null;
 };
 
 export type TagCount = {
   name: string;
   count: number;
+};
+
+export type Folder = {
+  id: string;
+  name: string;
+  created_at: number;
+  asset_count: number;
 };

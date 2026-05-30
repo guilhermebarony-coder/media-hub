@@ -5,9 +5,13 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-cursor-position",
+    "core:window:allow-inner-position",
     "opener:default",
     "dialog:default",
     "dialog:allow-open",
+    "drag:default",
+    "deep-link:default",
     {
       "identifier": "opener:allow-open-path",
       "allow": [

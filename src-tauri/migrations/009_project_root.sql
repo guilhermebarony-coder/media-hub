@@ -1,0 +1,15 @@
+-- 1.3.0 — custom project folder location.
+--
+-- Until now every project's files lived at the app-managed path
+-- <content_root>/Projects/<slug>/raw/. `root_path` lets a project point
+-- at a folder the user chose (e.g. D:\Edits\ClientX\BrandSpot_001\B-rolls)
+-- so downloads land right beside their NLE project.
+--
+--   root_path IS NULL  → legacy managed path (<content_root>/Projects/<slug>/raw/)
+--   root_path = '...'   → that exact folder; clips land directly in it (no raw/)
+--
+-- Because the folder may be user-owned (and possibly the root of a real
+-- editing project), custom-path projects are NEVER folder-trashed by
+-- Close/Delete — only the files we track are touched, and only on
+-- explicit request.
+ALTER TABLE projects ADD COLUMN root_path TEXT;
