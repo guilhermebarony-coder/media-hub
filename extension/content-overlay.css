@@ -107,29 +107,47 @@
   pointer-events: auto !important;
 }
 
-/* Lime dot — always shown. Acts as the icon at rest. */
+/* Lime dot — always shown. Acts as the icon at rest. All
+   geometry locked with !important because sites (Reddit
+   especially) reset <span> widths / margins / displays. */
 .mh-overlay-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  background: #c5ff3d;
-  border-radius: 2px;
-  flex-shrink: 0;
+  display: inline-block !important;
+  width: 8px !important;
+  height: 8px !important;
+  min-width: 8px !important;
+  min-height: 8px !important;
+  max-width: 8px !important;
+  max-height: 8px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: #c5ff3d !important;
+  border: 0 !important;
+  border-radius: 2px !important;
+  flex-shrink: 0 !important;
+  vertical-align: middle !important;
 }
-.mh-overlay-btn:hover .mh-overlay-dot {
-  background: #0a0a0c;
+.mh-overlay-btn:hover .mh-overlay-dot,
+.mh-overlay-btn.mh-sent .mh-overlay-dot {
+  background: #0a0a0c !important;
 }
 
 /* Label — hidden at rest (max-width 0), expanded on button hover
    (or when sending/sent/error so feedback stays readable). Width
-   transition gives the pill its smooth expand. */
+   transition gives the pill its smooth expand. !important on the
+   sizing for the same site-reset reason as the dot. */
 .mh-overlay-label {
-  display: inline-block;
+  display: inline-block !important;
   max-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
+  overflow: hidden !important;
+  white-space: nowrap !important;
   opacity: 0;
-  margin-left: 0;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: inherit !important;
+  font: inherit !important;
+  vertical-align: middle !important;
   transition:
     max-width 0.18s ease,
     opacity 0.12s ease 0.04s,
@@ -139,9 +157,9 @@
 .mh-overlay-btn.mh-sending .mh-overlay-label,
 .mh-overlay-btn.mh-sent .mh-overlay-label,
 .mh-overlay-btn.mh-err .mh-overlay-label {
-  max-width: 120px;
-  opacity: 1;
-  margin-left: 6px;
+  max-width: 120px !important;
+  opacity: 1 !important;
+  margin-left: 6px !important;
 }
 
 /* Status colors. */

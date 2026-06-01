@@ -72,6 +72,16 @@
       "js": ["content-portal.js", "content-instagram.js"],
       "css": ["content-overlay.css"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://youtube.com/*",
+        "https://m.youtube.com/*"
+      ],
+      "js": ["content-portal.js", "content-youtube.js"],
+      "css": ["content-overlay.css"],
+      "run_at": "document_idle"
     }
   ],
 
