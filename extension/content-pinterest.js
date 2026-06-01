@@ -176,18 +176,32 @@ function processVideo(video) {
   if (!host) return;
   video.classList.add(MARKER_CLASS);
   const btn = makeButton(pinUrl);
-  // Pinterest variant flag — keeps the button always visible (no
-  // hover gate) so the user can mash-click on it without the
-  // overlay flickering it in/out, and bumps z-index above
-  // Pinterest's hover layer. See content-overlay.css.
-  host.classList.add("mh-host", "mh-host--pinterest");
-  // Pre-mark visible since we skip the pointer-enter dance on
-  // Pinterest (the platform's overlays fight us if we hide it).
-  btn.classList.add("mh-visible");
+  host.classList.add("mh-host");
   host.appendChild(btn);
 
+  // Hover-reveal: same pattern as twitter/reddit. The 1.3.x button
+  // redesign sits HALF ABOVE the video's top edge, which puts the
+  // click hitbox outside Pinterest's player layer — so the
+  // capture-phase mousedown + half-above geometry combined keeps
+  // clicks safe even on Pinterest's overlay-happy DOM.
+  const show = () => btn.classList.add("mh-visible");
+  const hide = () => btn.classList.remove("mh-visible");
+  const pin =
+    video.closest("[data-test-id='pin']") ||
+    video.closest("[data-test-id='pinrep']") ||
+    video.closest("article");
+  const targets = [pin, host, video].filter(Boolean);
+  for (const t of targets) {
+    t.addEventListener("pointerenter", show);
+    t.addEventListener("pointerleave", hide);
+    t.addEventListener("mouseenter", show);
+    t.addEventListener("mouseleave", hide);
+  }
+  btn.addEventListener("pointerenter", show);
+  btn.addEventListener("mouseenter", show);
+
   console.log(
-    `[mh] pinterest: attached button (host: ${host.tagName}.${host.className.slice(0, 30)}, pin: ${pinUrl})`,
+    `[mh] pinterest: attached button (host: ${host.tagName}.${host.className.slice(0, 30)}, targets: ${targets.length}, pin: ${pinUrl})`,
   );
 }
 

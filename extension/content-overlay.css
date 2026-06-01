@@ -1,67 +1,97 @@
-/* Media Hub — Twitter overlay button styling.
-   Injected into x.com / twitter.com pages by content-twitter.js.
-   High specificity + !important on positioning so Twitter's own
-   styles can't accidentally hide us. */
+/* Media Hub — Overlay button styling (1.3.x redesign).
+   Universal across Twitter / Reddit / Pinterest content scripts.
+
+   Design goals (vs. the 1.2.x button):
+   - Smaller resting state — icon-only pill so it doesn't compete
+     with platform UI when the video has its own action bar.
+   - Expands on hover to show the "Media Hub" label, so the user
+     still knows what they're clicking.
+   - Sits HALF ABOVE the video's top edge. The half-out trick
+     places the click target physically outside the video player's
+     hitbox, which is what saves us on Pinterest/Instagram-style
+     players that capture pointerdown on their entire hitbox.
+   - High z-index + pointer-events forced so platform overlays
+     can't visually or interactively cover us. */
 
 .mh-host {
   position: relative !important;
+  /* The button is positioned with negative top to sit half above
+     the video. If the host has overflow:hidden, the upper half
+     would clip — force visible. Doesn't break platform layouts
+     in practice because the host is usually just a positioning
+     wrapper, not a content-clipping container. */
+  overflow: visible !important;
 }
 
 .mh-overlay-btn {
   position: absolute !important;
+  /* -50% translateY pulls the button up so half of it sits ABOVE
+     the host's top edge — outside the player's pointer hitbox.
+     Pinterest / Instagram can intercept pointerdown anywhere
+     inside the video player's bbox; the top edge is the seam
+     where their handler stops applying. */
   top: 8px;
   right: 8px;
-  z-index: 9999;
+  transform: translateY(-50%);
+  z-index: 2147483647; /* signed 32-bit max — beats every platform overlay */
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  background: rgba(10, 10, 12, 0.72);
+  gap: 0; /* label has its own margin when expanded */
+  /* Compact pill at rest. Padding tuned so the icon dot sits in
+     a 22x22-ish square. */
+  padding: 5px 7px;
+  background: rgba(10, 10, 12, 0.78);
   color: #f4f4f6;
-  border: 1px solid rgba(197, 255, 61, 0.35);
+  border: 1px solid rgba(197, 255, 61, 0.4);
   border-radius: 999px;
   font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
   font-size: 11px;
   font-weight: 600;
+  line-height: 1;
   cursor: pointer;
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  /* 1.2.10 — fully invisible at rest, revealed via JS-toggled
-     `.mh-visible` class on hover (handlers bound on article + host
-     + video in content-twitter.js). Pointer events stay enabled
-     so the button still works even if a fast cursor doesn't fire
-     the enter event before clicking. */
+  /* Resting opacity — fully invisible until the user hovers the
+     pin/video. Hover-reveal handled by JS-toggled .mh-visible. */
   opacity: 0;
   pointer-events: auto;
   transition:
     opacity 0.15s ease,
+    padding 0.15s ease,
     background 0.15s ease,
     border-color 0.15s ease,
     transform 0.1s ease;
 }
-/* Visibility ramp driven by JS-toggled `.mh-visible` class (the
-   content script binds pointerenter/leave on article + host + video
-   so the class flips whenever the cursor is over the tweet). */
+
+/* Hover-reveal: cursor enters the pin/video → JS adds .mh-visible. */
 .mh-overlay-btn.mh-visible,
 .mh-overlay-btn:focus-visible {
   opacity: 0.95;
 }
+
+/* Hover on the button itself — flip to lime fill, grow the pill
+   horizontally to expose the label. */
 .mh-overlay-btn:hover {
-  background: rgba(197, 255, 61, 0.95);
+  background: rgba(197, 255, 61, 0.97);
   color: #0a0a0c;
   border-color: #c5ff3d;
   opacity: 1;
-  transform: scale(1.03);
+  padding: 5px 12px 5px 9px;
+  transform: translateY(-50%) scale(1.04);
   pointer-events: auto !important;
 }
-/* While sending / sent / errored, stay visible regardless of hover
-   so the user can see the outcome of their click. */
+
+/* While sending / sent / errored, stay expanded + visible so the
+   user can see the outcome of their click. */
 .mh-host .mh-overlay-btn.mh-sending,
 .mh-host .mh-overlay-btn.mh-sent,
 .mh-host .mh-overlay-btn.mh-err {
   opacity: 1 !important;
+  padding: 5px 12px 5px 9px !important;
   pointer-events: auto !important;
 }
+
+/* Lime dot — always shown. Acts as the icon at rest. */
 .mh-overlay-dot {
   display: inline-block;
   width: 8px;
@@ -74,45 +104,47 @@
   background: #0a0a0c;
 }
 
+/* Label — hidden at rest (max-width 0), expanded on button hover
+   (or when sending/sent/error so feedback stays readable). Width
+   transition gives the pill its smooth expand. */
+.mh-overlay-label {
+  display: inline-block;
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  opacity: 0;
+  margin-left: 0;
+  transition:
+    max-width 0.18s ease,
+    opacity 0.12s ease 0.04s,
+    margin-left 0.18s ease;
+}
+.mh-overlay-btn:hover .mh-overlay-label,
+.mh-overlay-btn.mh-sending .mh-overlay-label,
+.mh-overlay-btn.mh-sent .mh-overlay-label,
+.mh-overlay-btn.mh-err .mh-overlay-label {
+  max-width: 120px;
+  opacity: 1;
+  margin-left: 6px;
+}
+
+/* Status colors. */
 .mh-overlay-btn.mh-sending {
-  background: rgba(90, 122, 30, 0.85);
+  background: rgba(90, 122, 30, 0.9);
   border-color: #5a7a1e;
   cursor: wait;
 }
 .mh-overlay-btn.mh-sent {
-  background: rgba(197, 255, 61, 0.95);
+  background: rgba(197, 255, 61, 0.97);
   color: #0a0a0c;
   border-color: #c5ff3d;
 }
 .mh-overlay-btn.mh-err {
-  background: rgba(120, 30, 30, 0.85);
+  background: rgba(120, 30, 30, 0.9);
   border-color: #ff6363;
   color: #ffd6d6;
 }
 
-/* 1.2.14 — Instagram in-page button was attempted but pulled:
-   Instagram's video player click-locks all pointer events and
-   wins the capture-phase race no matter what we tried (window-
-   level guards, direct handler dispatch, etc.). Instagram is
-   still covered by the popup + stream sniffer; the in-page
-   overlay just doesn't work there. Override removed. */
-
-/* 1.3.0 — Pinterest overrides. Pinterest hovers a "Save"
-   action layer on every pin that:
-     1. uses very high z-indexes that beat 9999
-     2. intercepts pointerdown on a sibling layer covering the
-        whole pin (cancels our click before it fires)
-     3. re-renders the pin's children on hover, which would
-        unmount our button if we let hover gate visibility
-   Fix: pin our button to the highest z-index possible, force
-   pointer-events on, and keep it always visible (no hover gate)
-   while on pinterest.com so the user can mash-click without the
-   button dancing in and out under their cursor. */
-.mh-host.mh-host--pinterest .mh-overlay-btn {
-  z-index: 2147483647 !important; /* signed 32-bit max */
-  opacity: 0.95 !important;       /* always visible */
-  pointer-events: auto !important;
-}
-.mh-host.mh-host--pinterest .mh-overlay-btn:hover {
-  opacity: 1 !important;
-}
+/* 1.2.14 — Instagram in-page button was attempted but pulled.
+   Their player click-locks all pointer events; the half-above
+   redesign should make a retry viable next pass. */
