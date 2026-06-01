@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Media Hub — Send to App",
   "short_name": "Media Hub",
-  "version": "1.2.15",
+  "version": "1.3.0",
   "description": "Send the current tab (or any link/video) straight into Media Hub's download queue. Pairs with the desktop app via localhost.",
 
   "permissions": [
@@ -42,6 +42,25 @@
         "https://reddit.com/*"
       ],
       "js": ["content-reddit.js"],
+      "css": ["content-overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.pinterest.com/*",
+        "https://pinterest.com/*",
+        "https://*.pinterest.co.uk/*",
+        "https://*.pinterest.ca/*",
+        "https://*.pinterest.com.au/*",
+        "https://*.pinterest.de/*",
+        "https://*.pinterest.fr/*",
+        "https://*.pinterest.es/*",
+        "https://*.pinterest.it/*",
+        "https://*.pinterest.jp/*",
+        "https://*.pinterest.com.mx/*",
+        "https://*.pinterest.com.br/*"
+      ],
+      "js": ["content-pinterest.js"],
       "css": ["content-overlay.css"],
       "run_at": "document_idle"
     }
