@@ -32,7 +32,7 @@
   "content_scripts": [
     {
       "matches": ["https://x.com/*", "https://twitter.com/*"],
-      "js": ["content-twitter.js"],
+      "js": ["content-portal.js", "content-twitter.js"],
       "css": ["content-overlay.css"],
       "run_at": "document_idle"
     },
@@ -41,7 +41,7 @@
         "https://*.reddit.com/*",
         "https://reddit.com/*"
       ],
-      "js": ["content-reddit.js"],
+      "js": ["content-portal.js", "content-reddit.js"],
       "css": ["content-overlay.css"],
       "run_at": "document_idle"
     },
@@ -60,7 +60,16 @@
         "https://*.pinterest.com.mx/*",
         "https://*.pinterest.com.br/*"
       ],
-      "js": ["content-pinterest.js"],
+      "js": ["content-portal.js", "content-pinterest.js"],
+      "css": ["content-overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.instagram.com/*",
+        "https://instagram.com/*"
+      ],
+      "js": ["content-portal.js", "content-instagram.js"],
       "css": ["content-overlay.css"],
       "run_at": "document_idle"
     }
