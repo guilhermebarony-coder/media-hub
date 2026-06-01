@@ -12,6 +12,11 @@ import { revealFile } from "../lib/library";
 import { useActiveProject } from "../lib/activeProject";
 import { useSettings } from "../lib/settings";
 import {
+  detectPlatform,
+  isLikelyVideoUrl,
+  isUndownloadablePreviewUrl,
+} from "../lib/platforms";
+import {
   useDownloads,
   type QueueJob,
   type QueueStatus,
@@ -131,35 +136,10 @@ function pickBestFormat(formats: FormatOption[]): FormatOption | null {
   }, null);
 }
 
-/**
- * Pattern-match a URL string against known platform shapes. Used to
- * decide whether to auto-fetch on paste (0.9 UX win #5). Conservative:
- * we'd rather skip an auto-fetch on an unrecognized URL than fire a
- * useless yt-dlp call. Manual Fetch button always works.
- */
-function isLikelyVideoUrl(s: string): boolean {
-  const t = s.trim();
-  if (!t.startsWith("http://") && !t.startsWith("https://")) return false;
-  return /youtube\.com\/watch|youtu\.be\/|youtube\.com\/shorts\/|twitter\.com\/|x\.com\/|tiktok\.com\//i.test(
-    t,
-  );
-}
-
-/**
- * Detect the source platform from a paste-able URL. Today we only
- * support YouTube — but the 0.8.C sticky-format feature stores last
- * picks per platform so the shape is forward-compatible with the 1.x
- * platform abstraction. Returns "youtube" as a sensible default for
- * any unrecognized URL (the worst case is a sticky pick that won't
- * resolve, which we simply ignore).
- */
-function detectPlatform(url: string): string {
-  const u = url.toLowerCase();
-  if (u.includes("youtube.com") || u.includes("youtu.be")) return "youtube";
-  if (u.includes("twitter.com") || u.includes("x.com")) return "twitter";
-  if (u.includes("tiktok.com")) return "tiktok";
-  return "youtube";
-}
+// 1.3.x — `isLikelyVideoUrl` and `detectPlatform` moved to lib/platforms.ts
+// so the download orchestrator can stamp each library row with the
+// correct source instead of hardcoding "youtube". See that module for
+// the actual logic + the registry of supported hosts.
 
 /**
  * 1.1 — Classify a YouTube URL by what the user probably meant.
@@ -464,6 +444,18 @@ function MetadataCard() {
     // Track manual fetches in the same ref so the auto-fetch effect
     // won't re-fire after a manual click on the same URL.
     autoFetchedUrlRef.current = url.trim();
+    // 1.3.x — Pinterest's lightbox right-click hands the user a
+    // `blob:https://…` URL that only exists inside the originating
+    // tab. yt-dlp can't fetch those. Catch it up-front with a
+    // useful message so users know to grab the real pin URL.
+    if (isUndownloadablePreviewUrl(url)) {
+      setErr(
+        "That looks like a preview URL from an in-page lightbox " +
+          "(Pinterest, X, etc.). Open the post in its own tab and " +
+          "copy the URL from the address bar instead.",
+      );
+      return;
+    }
     setLoading(true);
     setErr(null);
     setMeta(null);

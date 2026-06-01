@@ -2094,6 +2094,10 @@ function platformLabel(p: string): string {
     case "twitter":
     case "x":
       return "Twitter / X";
+    case "pinterest":
+      return "Pinterest";
+    case "tiktok":
+      return "TikTok";
     default:
       return p;
   }
@@ -2240,6 +2244,12 @@ function LibCard({
             <>
               <Icon.twitter width={8} height={8} /> X
             </>
+          ) : asset.platform === "pinterest" ? (
+            <>
+              <Icon.pinterest width={9} height={9} style={{ verticalAlign: "-1px" }} /> PIN
+            </>
+          ) : asset.platform === "tiktok" ? (
+            <>TIKTOK</>
           ) : (
             asset.platform.toUpperCase()
           )}

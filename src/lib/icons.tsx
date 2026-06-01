@@ -117,6 +117,14 @@ export const Icon = {
       <path d="M11.7 2H14l-4.8 5.5L14.5 14H10l-3.5-4.4L2.5 14H.2l5.2-6L.5 2h4.6l3.1 4zM11 12.7h1.3L4.5 3.2H3.1z" />
     </svg>
   ),
+  // 1.3.x — Pinterest. Stylized "P" mark inside a circle; matches the
+  // brand silhouette enough to read at chip size while staying mono-
+  // chromatic with the rest of the icon set.
+  pinterest: (p: P = {}) => (
+    <svg viewBox="0 0 16 16" fill="currentColor" {...p}>
+      <path d="M8 1.4a6.6 6.6 0 0 0-2.4 12.74c-.06-.54-.12-1.37.02-1.96.14-.53.9-3.37.9-3.37s-.23-.46-.23-1.14c0-1.07.62-1.87 1.39-1.87.66 0 .97.49.97 1.08 0 .66-.42 1.65-.64 2.57-.18.76.39 1.39 1.14 1.39 1.37 0 2.42-1.44 2.42-3.52 0-1.84-1.32-3.13-3.21-3.13-2.19 0-3.47 1.64-3.47 3.33 0 .66.25 1.36.57 1.75.06.07.07.13.05.21l-.21.85c-.03.14-.11.17-.25.1-.94-.44-1.53-1.81-1.53-2.91 0-2.37 1.72-4.55 4.96-4.55 2.6 0 4.62 1.85 4.62 4.33 0 2.58-1.63 4.66-3.89 4.66-.76 0-1.48-.4-1.72-.86l-.47 1.78c-.17.65-.62 1.47-.93 1.97A6.6 6.6 0 1 0 8 1.4Z" />
+    </svg>
+  ),
   // 1.2.0 — video + audio tab icons. Minimal "film strip" and
   // "music note" so the Video|Audio mode tabs are scannable at a glance.
   video: (p: P = {}) => (

@@ -47,6 +47,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { extFromPath } from "./format";
+import { detectPlatform } from "./platforms";
 import {
   attachLocalThumbnail,
   audioCodecFor,
@@ -476,7 +477,11 @@ export function DownloadsProvider({
 
       const assetId = await recordInLibrary({
         source_url: job.url,
-        platform: "youtube",
+        // 1.3.x — was hardcoded "youtube" for every source, which
+        // mislabeled TikTok/X/Pinterest clips on library cards.
+        // Same detector the Download page uses for sticky-format keys
+        // so behavior stays consistent across both flows.
+        platform: detectPlatform(job.url),
         video_id: meta.id,
         channel: meta.channel,
         title: meta.title,
@@ -665,7 +670,10 @@ export function DownloadsProvider({
           const isAudio = !!args.audioFormat;
           const assetId = await recordInLibrary({
             source_url: args.url,
-            platform: "youtube",
+            // 1.3.x — see note in queue worker above. detectPlatform
+            // covers YT / Twitter / TikTok / Pinterest, plus "other"
+            // for anything yt-dlp can chew through without us caring.
+            platform: detectPlatform(args.url),
             video_id: args.meta.id,
             channel: args.meta.channel,
             title: args.meta.title,
