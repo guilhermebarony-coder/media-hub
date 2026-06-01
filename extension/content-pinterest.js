@@ -1,38 +1,55 @@
 // Media Hub — Pinterest content script (1.3.x).
 //
-// Same pattern as content-twitter.js / content-reddit.js — inject a
-// hover-reveal "Media Hub" button on every video pin on
-// pinterest.com, click sends the parent PIN's URL (not the raw CDN
-// .mp4). yt-dlp's pinterest extractor wants the pin URL — the raw
-// CDN URLs are blob: / signed URLs that either expire fast or refuse
-// to download anonymously.
+// Pinterest's player layer is a heavyweight overlay that captures
+// pointerdown across the entire video bbox AND its wrapper has
+// `overflow: hidden`, clipping anything that tries to spill out
+// the top edge. The earlier attempt to plant the button inside the
+// pin DOM lost both fights: the button visually clipped at the
+// top, and clicks got eaten by the player layer.
 //
-// Pin URL shape:
-//   https://www.pinterest.com/pin/<numeric_id>/
-//   (locale subdomains and country TLDs like .co.uk all canonicalize
-//    to the same numeric pin id; we keep whatever host the user is on
-//    so cookies / region routing stays consistent)
+// Solution: PORTAL THE BUTTON TO document.body with position:fixed.
+//   - Outside Pinterest's DOM tree → their overflow:hidden + overlays
+//     can't touch us
+//   - getBoundingClientRect() tracks the video's on-screen position
+//   - rAF-throttled scroll / resize / mutation observer keeps the
+//     button glued to the video corner
+//   - When the video leaves the viewport (or is removed by
+//     Pinterest's virtualized scroll), the button hides itself
 //
-// Pinterest layout coverage:
-//   - Feed cards: <div data-test-id="pin"> ... <video> ...
-//   - "Closeup" / lightbox pin view: URL is already /pin/<id>/, so
-//     even if our DOM walk fails we can fall back to location.pathname.
-//   - GIF "Idea pins" with multiple video frames count once per video
-//     element thanks to the idempotent MARKER_CLASS guard.
+// Pin URL discovery is unchanged from the in-DOM version.
 
-const MARKER_CLASS = "mh-injected";
+const MARKER_ATTR = "data-mh-pinterest";
 const PIN_RE = /^\/pin\/(\d+)\/?/i;
+
+// Single overlay container appended to <body>. All Pinterest pin
+// buttons live as siblings inside it — keeps the DOM tidy when the
+// user has 30+ pins on screen.
+let overlayLayer = null;
+function ensureOverlayLayer() {
+  if (overlayLayer && document.body.contains(overlayLayer)) return overlayLayer;
+  overlayLayer = document.createElement("div");
+  overlayLayer.id = "mh-pinterest-layer";
+  // The layer itself doesn't capture pointer events — only its
+  // button children do. Otherwise the layer would block every
+  // click on the page underneath.
+  Object.assign(overlayLayer.style, {
+    position: "fixed",
+    top: "0",
+    left: "0",
+    width: "0",
+    height: "0",
+    pointerEvents: "none",
+    zIndex: "2147483647",
+  });
+  document.body.appendChild(overlayLayer);
+  return overlayLayer;
+}
 
 /**
  * Walk up from a <video> to find the parent pin and return its URL.
- * Returns null when we can't identify a pin — in which case we skip
- * injecting (no point sending unknown context).
+ * Same logic as the in-DOM version.
  */
 function findPinUrl(video) {
-  // Preferred path: closest pin container.
-  // Pinterest's stable hooks are `data-test-id="pin"` (feed cards)
-  // and `data-test-id="pinrep"` (variant on some surfaces). Walk
-  // anchors inside it for the pin permalink.
   const pin =
     video.closest("[data-test-id='pin']") ||
     video.closest("[data-test-id='pinrep']") ||
@@ -47,14 +64,10 @@ function findPinUrl(video) {
         continue;
       }
       if (PIN_RE.test(path)) {
-        // Keep the user's current host (locale TLD) — yt-dlp
-        // resolves all of them.
         return `https://${location.host}${path}`;
       }
     }
   }
-
-  // Fallback: page-level pin URL (closeup / direct /pin/<id>/ view).
   if (PIN_RE.test(location.pathname)) {
     return `https://${location.host}${location.pathname}`;
   }
@@ -64,25 +77,13 @@ function findPinUrl(video) {
 function makeButton(pinUrl) {
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.className = "mh-overlay-btn";
+  btn.className = "mh-overlay-btn mh-overlay-btn--portal";
   btn.title = "Send to Media Hub";
   btn.innerHTML = `
     <span class="mh-overlay-dot"></span>
     <span class="mh-overlay-label">Media Hub</span>
   `;
 
-  // 1.3.x — Pinterest hovers a "Save" + react-button layer on every
-  // pin that wins the click race by hooking `pointerdown` on a
-  // sibling layer covering the whole pin. By the time `click` fires,
-  // Pinterest has already navigated the user to the closeup view and
-  // our button is gone with the previous DOM.
-  //
-  // Fix: trigger the send on `mousedown` in CAPTURE phase, which
-  // fires before Pinterest's bubbling pointerdown handler. We swallow
-  // propagation so Pinterest never sees the event at all. The
-  // bubble-phase `click` handler below is the fallback for browsers
-  // where the capture-phase trick somehow loses (none observed yet,
-  // but cheap insurance).
   const fire = async (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
@@ -90,7 +91,7 @@ function makeButton(pinUrl) {
       ev.stopImmediatePropagation();
     }
     if (btn.classList.contains("mh-sending") || btn.classList.contains("mh-sent")) {
-      return; // dedupe — mousedown + click may both fire
+      return;
     }
     btn.classList.add("mh-sending");
     btn.querySelector(".mh-overlay-label").textContent = "Sending…";
@@ -131,14 +132,10 @@ function makeButton(pinUrl) {
     }
   };
 
-  // Capture-phase mousedown — fires BEFORE Pinterest's overlay
-  // pointerdown handler can run. This is the actual primary path.
+  // Capture-phase mousedown — fires before any Pinterest handler
+  // that might still try to reach us through the portal.
   btn.addEventListener("mousedown", fire, { capture: true });
-  // Bubble-phase click fallback in case capture-phase mousedown
-  // doesn't fire (e.g. keyboard activation via Enter).
   btn.addEventListener("click", fire);
-  // Stop pointerdown propagating in case Pinterest also listens on
-  // window/document to navigate the pin into closeup view.
   btn.addEventListener("pointerdown", (ev) => {
     ev.stopPropagation();
     if (typeof ev.stopImmediatePropagation === "function") {
@@ -150,47 +147,110 @@ function makeButton(pinUrl) {
 }
 
 /**
- * Pick the smallest positioned ancestor to host the button so
- * position:absolute lands in the video's corner. Pin cards usually
- * have a positioned wrapper a couple levels above the <video>.
+ * Track a video element's on-screen position and keep the button
+ * glued just above its top-right corner. The button lives in the
+ * body-portal overlay layer, so we only need to update top/left
+ * (in viewport coords) — no transforms relative to host elements.
  */
-function findHostFor(video) {
-  let cur = video.parentElement;
-  for (let i = 0; i < 8 && cur; i++) {
-    const pos = getComputedStyle(cur).position;
-    if (pos === "relative" || pos === "absolute" || pos === "fixed") {
-      return cur;
+function trackVideo(video, btn) {
+  let pendingFrame = null;
+  let lastVisible = false;
+
+  const positionBtn = () => {
+    pendingFrame = null;
+    const r = video.getBoundingClientRect();
+    // Hide when the video is offscreen, collapsed, or hidden.
+    const visible =
+      r.width > 0 &&
+      r.height > 0 &&
+      r.bottom > 0 &&
+      r.top < window.innerHeight &&
+      r.right > 0 &&
+      r.left < window.innerWidth;
+    if (visible !== lastVisible) {
+      btn.style.display = visible ? "" : "none";
+      lastVisible = visible;
     }
-    cur = cur.parentElement;
-  }
-  const parent = video.parentElement;
-  if (parent) parent.style.position = parent.style.position || "relative";
-  return parent;
+    if (!visible) return;
+    // Sit at the video's top-right corner, with the button's
+    // center pulled to the video's top edge (translateY -50% on
+    // the button via CSS). top/right anchor in viewport coords.
+    btn.style.top = `${r.top}px`;
+    btn.style.left = `${r.right - 14}px`; // 14 ≈ half the compact pill width
+  };
+
+  const schedule = () => {
+    if (pendingFrame !== null) return;
+    pendingFrame = requestAnimationFrame(positionBtn);
+  };
+
+  // Update on every scroll + resize. Capture-phase so it catches
+  // scrolls from inner containers too (Pinterest's feed virtualizes
+  // through nested scroll regions on some surfaces).
+  const onScroll = schedule;
+  const onResize = schedule;
+  window.addEventListener("scroll", onScroll, { capture: true, passive: true });
+  window.addEventListener("resize", onResize, { passive: true });
+
+  // ResizeObserver on the video catches layout changes when
+  // Pinterest swaps the player size (autoplay, ratio change).
+  const ro = new ResizeObserver(schedule);
+  ro.observe(video);
+
+  // IntersectionObserver hides the button when the video scrolls
+  // out of viewport. Cheaper than re-checking on every scroll.
+  const io = new IntersectionObserver(schedule, {
+    threshold: [0, 0.01, 0.99, 1],
+  });
+  io.observe(video);
+
+  // Pinterest will eventually unmount the video as the user scrolls.
+  // Detect that via a MutationObserver on body, watch for removed
+  // nodes; when our tracked video is gone, clean up.
+  const cleanupObs = new MutationObserver(() => {
+    if (!document.body.contains(video)) {
+      cleanup();
+    }
+  });
+  cleanupObs.observe(document.body, { childList: true, subtree: true });
+
+  const cleanup = () => {
+    window.removeEventListener("scroll", onScroll, { capture: true });
+    window.removeEventListener("resize", onResize);
+    ro.disconnect();
+    io.disconnect();
+    cleanupObs.disconnect();
+    if (btn.parentNode) btn.parentNode.removeChild(btn);
+    if (pendingFrame !== null) cancelAnimationFrame(pendingFrame);
+  };
+
+  // First paint.
+  positionBtn();
+
+  return { cleanup };
 }
 
 function processVideo(video) {
-  if (video.classList.contains(MARKER_CLASS)) return;
+  if (video.getAttribute(MARKER_ATTR) === "1") return;
   const pinUrl = findPinUrl(video);
   if (!pinUrl) return;
-  const host = findHostFor(video);
-  if (!host) return;
-  video.classList.add(MARKER_CLASS);
-  const btn = makeButton(pinUrl);
-  host.classList.add("mh-host");
-  host.appendChild(btn);
+  video.setAttribute(MARKER_ATTR, "1");
 
-  // Hover-reveal: same pattern as twitter/reddit. The 1.3.x button
-  // redesign sits HALF ABOVE the video's top edge, which puts the
-  // click hitbox outside Pinterest's player layer — so the
-  // capture-phase mousedown + half-above geometry combined keeps
-  // clicks safe even on Pinterest's overlay-happy DOM.
+  const btn = makeButton(pinUrl);
+  ensureOverlayLayer().appendChild(btn);
+
+  // Hover-reveal: bind on the pin's outermost container so the
+  // button shows whenever the cursor enters the pin card, and
+  // hides when it leaves. Track the button itself too so moving
+  // onto the button doesn't trigger hide.
   const show = () => btn.classList.add("mh-visible");
   const hide = () => btn.classList.remove("mh-visible");
   const pin =
     video.closest("[data-test-id='pin']") ||
     video.closest("[data-test-id='pinrep']") ||
-    video.closest("article");
-  const targets = [pin, host, video].filter(Boolean);
+    video.closest("article") ||
+    video.parentElement;
+  const targets = [pin, video].filter(Boolean);
   for (const t of targets) {
     t.addEventListener("pointerenter", show);
     t.addEventListener("pointerleave", hide);
@@ -199,22 +259,24 @@ function processVideo(video) {
   }
   btn.addEventListener("pointerenter", show);
   btn.addEventListener("mouseenter", show);
+  btn.addEventListener("pointerleave", hide);
+  btn.addEventListener("mouseleave", hide);
+
+  trackVideo(video, btn);
 
   console.log(
-    `[mh] pinterest: attached button (host: ${host.tagName}.${host.className.slice(0, 30)}, targets: ${targets.length}, pin: ${pinUrl})`,
+    `[mh] pinterest: portaled button (pin: ${pinUrl})`,
   );
 }
 
 function init() {
+  ensureOverlayLayer();
   const initial = document.querySelectorAll("video");
   console.log(
     `[mh] pinterest: init on ${location.href} — found ${initial.length} videos at load time`,
   );
   for (const v of initial) processVideo(v);
 
-  // Pinterest is an SPA that swaps the closeup lightbox in/out and
-  // virtualizes the feed grid heavily. New <video> elements appear
-  // constantly as the user scrolls and clicks pins.
   let observed = 0;
   const obs = new MutationObserver((mutations) => {
     for (const m of mutations) {

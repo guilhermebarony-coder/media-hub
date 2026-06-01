@@ -148,3 +148,18 @@
 /* 1.2.14 — Instagram in-page button was attempted but pulled.
    Their player click-locks all pointer events; the half-above
    redesign should make a retry viable next pass. */
+
+/* 1.3.x — Portal variant. Used by content-pinterest.js, which
+   appends the button to a body-level overlay layer instead of
+   inside the pin DOM. Pinterest's pin wrapper has overflow:hidden
+   that our `.mh-host { overflow: visible !important }` couldn't
+   reliably override, so we sidestep their DOM entirely.
+   - position: fixed because the JS sets top/left in viewport coords
+   - right: auto so the universal `right: 8px` doesn't stretch the
+     button across the whole viewport
+   - same translateY(-50%) so the button still sits half above
+     the video's top edge */
+.mh-overlay-btn.mh-overlay-btn--portal {
+  position: fixed !important;
+  right: auto !important;
+}
