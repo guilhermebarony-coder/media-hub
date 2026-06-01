@@ -71,9 +71,27 @@ function makeButton(pinUrl) {
     <span class="mh-overlay-label">Media Hub</span>
   `;
 
-  btn.addEventListener("click", async (ev) => {
+  // 1.3.x — Pinterest hovers a "Save" + react-button layer on every
+  // pin that wins the click race by hooking `pointerdown` on a
+  // sibling layer covering the whole pin. By the time `click` fires,
+  // Pinterest has already navigated the user to the closeup view and
+  // our button is gone with the previous DOM.
+  //
+  // Fix: trigger the send on `mousedown` in CAPTURE phase, which
+  // fires before Pinterest's bubbling pointerdown handler. We swallow
+  // propagation so Pinterest never sees the event at all. The
+  // bubble-phase `click` handler below is the fallback for browsers
+  // where the capture-phase trick somehow loses (none observed yet,
+  // but cheap insurance).
+  const fire = async (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
+    if (typeof ev.stopImmediatePropagation === "function") {
+      ev.stopImmediatePropagation();
+    }
+    if (btn.classList.contains("mh-sending") || btn.classList.contains("mh-sent")) {
+      return; // dedupe — mousedown + click may both fire
+    }
     btn.classList.add("mh-sending");
     btn.querySelector(".mh-overlay-label").textContent = "Sending…";
     try {
@@ -111,13 +129,22 @@ function makeButton(pinUrl) {
       }, 3000);
       console.warn("[mh] send failed:", e);
     }
-  });
+  };
 
-  // Pinterest's video player also intercepts pointer events for its
-  // own controls — stop propagation so our click doesn't toggle
-  // play/pause underneath.
-  btn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
-  btn.addEventListener("mousedown", (ev) => ev.stopPropagation());
+  // Capture-phase mousedown — fires BEFORE Pinterest's overlay
+  // pointerdown handler can run. This is the actual primary path.
+  btn.addEventListener("mousedown", fire, { capture: true });
+  // Bubble-phase click fallback in case capture-phase mousedown
+  // doesn't fire (e.g. keyboard activation via Enter).
+  btn.addEventListener("click", fire);
+  // Stop pointerdown propagating in case Pinterest also listens on
+  // window/document to navigate the pin into closeup view.
+  btn.addEventListener("pointerdown", (ev) => {
+    ev.stopPropagation();
+    if (typeof ev.stopImmediatePropagation === "function") {
+      ev.stopImmediatePropagation();
+    }
+  });
 
   return btn;
 }
@@ -149,30 +176,18 @@ function processVideo(video) {
   if (!host) return;
   video.classList.add(MARKER_CLASS);
   const btn = makeButton(pinUrl);
-  host.classList.add("mh-host");
+  // Pinterest variant flag — keeps the button always visible (no
+  // hover gate) so the user can mash-click on it without the
+  // overlay flickering it in/out, and bumps z-index above
+  // Pinterest's hover layer. See content-overlay.css.
+  host.classList.add("mh-host", "mh-host--pinterest");
+  // Pre-mark visible since we skip the pointer-enter dance on
+  // Pinterest (the platform's overlays fight us if we hide it).
+  btn.classList.add("mh-visible");
   host.appendChild(btn);
 
-  // Hover-reveal: same belt-and-suspenders approach as twitter/reddit.
-  // Pinterest's "save"/"react" overlays cover the video at hover, so
-  // we cast a wide net binding on the pin container + host + video.
-  const show = () => btn.classList.add("mh-visible");
-  const hide = () => btn.classList.remove("mh-visible");
-  const pin =
-    video.closest("[data-test-id='pin']") ||
-    video.closest("[data-test-id='pinrep']") ||
-    video.closest("article");
-  const targets = [pin, host, video].filter(Boolean);
-  for (const t of targets) {
-    t.addEventListener("pointerenter", show);
-    t.addEventListener("pointerleave", hide);
-    t.addEventListener("mouseenter", show);
-    t.addEventListener("mouseleave", hide);
-  }
-  btn.addEventListener("pointerenter", show);
-  btn.addEventListener("mouseenter", show);
-
   console.log(
-    `[mh] pinterest: attached button (host: ${host.tagName}.${host.className.slice(0, 30)}, targets: ${targets.length}, pin: ${pinUrl})`,
+    `[mh] pinterest: attached button (host: ${host.tagName}.${host.className.slice(0, 30)}, pin: ${pinUrl})`,
   );
 }
 

@@ -96,3 +96,23 @@
    level guards, direct handler dispatch, etc.). Instagram is
    still covered by the popup + stream sniffer; the in-page
    overlay just doesn't work there. Override removed. */
+
+/* 1.3.0 — Pinterest overrides. Pinterest hovers a "Save"
+   action layer on every pin that:
+     1. uses very high z-indexes that beat 9999
+     2. intercepts pointerdown on a sibling layer covering the
+        whole pin (cancels our click before it fires)
+     3. re-renders the pin's children on hover, which would
+        unmount our button if we let hover gate visibility
+   Fix: pin our button to the highest z-index possible, force
+   pointer-events on, and keep it always visible (no hover gate)
+   while on pinterest.com so the user can mash-click without the
+   button dancing in and out under their cursor. */
+.mh-host.mh-host--pinterest .mh-overlay-btn {
+  z-index: 2147483647 !important; /* signed 32-bit max */
+  opacity: 0.95 !important;       /* always visible */
+  pointer-events: auto !important;
+}
+.mh-host.mh-host--pinterest .mh-overlay-btn:hover {
+  opacity: 1 !important;
+}
