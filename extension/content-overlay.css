@@ -34,27 +34,43 @@
   right: 8px;
   transform: translateY(-50%);
   z-index: 2147483647; /* signed 32-bit max — beats every platform overlay */
-  display: inline-flex;
-  align-items: center;
-  gap: 0; /* label has its own margin when expanded */
-  /* Compact pill at rest. Padding tuned so the icon dot sits in
-     a 22x22-ish square. */
-  padding: 5px 7px;
-  background: rgba(10, 10, 12, 0.78);
-  color: #f4f4f6;
-  border: 1px solid rgba(197, 255, 61, 0.4);
-  border-radius: 999px;
-  font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
-  cursor: pointer;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 0 !important; /* label has its own margin when expanded */
+  /* Reddit / Twitter inject their own button reset (min-height,
+     font-size, padding, line-height) site-wide. Force every
+     box-model value explicitly so the pill is identical across
+     sites. */
+  box-sizing: border-box !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 5px 7px !important;
+  background: rgba(10, 10, 12, 0.78) !important;
+  color: #f4f4f6 !important;
+  border: 1px solid rgba(197, 255, 61, 0.4) !important;
+  border-radius: 999px !important;
+  font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  text-decoration: none !important;
+  cursor: pointer !important;
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
   /* Resting opacity — fully invisible until the user hovers the
      pin/video. Hover-reveal handled by JS-toggled .mh-visible. */
   opacity: 0;
-  pointer-events: auto;
+  pointer-events: auto !important;
+  box-shadow: none !important; /* Reddit adds button focus rings */
+  outline: none !important;
   transition:
     opacity 0.15s ease,
     padding 0.15s ease,
