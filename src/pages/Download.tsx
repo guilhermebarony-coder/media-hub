@@ -1093,13 +1093,9 @@ function MetadataCard() {
                   onClick={() =>
                     void startDirectDownload({
                       url: url.trim(),
-                      // Best-effort title from the URL's filename.
-                      title:
-                        url
-                          .split(/[?#]/)[0]
-                          .split("/")
-                          .pop()
-                          ?.replace(/\.[^.]+$/, "") ?? "",
+                      // Title omitted — let the orchestrator's
+                      // prettyDirectTitle() build a source-aware
+                      // label from the URL.
                       projectId:
                         !overrideLibrary && scope.kind === "project"
                           ? scope.id

@@ -47,7 +47,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { extFromPath } from "./format";
-import { detectPlatform, isDirectMediaUrl } from "./platforms";
+import { detectPlatform, isDirectMediaUrl, prettyDirectTitle } from "./platforms";
 import {
   attachLocalThumbnail,
   audioCodecFor,
@@ -160,10 +160,10 @@ export type AudioFormat = "mp3" | "m4a" | "flac";
  *  something readable until the user renames it. */
 export type StartDirectArgs = {
   url: string;
-  /** Best-effort title for the library row. The Download page sets
-   *  this from the URL's filename (no extension). Empty string is
-   *  fine — recordInLibrary will fall back to the asset id. */
-  title: string;
+  /** Optional override for the library row's title. When omitted,
+   *  startDirectDownload uses prettyDirectTitle() to build a
+   *  source-aware label like "Pinterest pin · 93a0607e…". */
+  title?: string;
   projectId: string | null;
 };
 
@@ -419,7 +419,13 @@ export function DownloadsProvider({
           platform: detectPlatform(job.url),
           video_id: job.url.split("/").pop()?.split("?")[0] ?? job.url,
           channel: null,
-          title: finalPath.split(/[\\/]/).pop() || job.url,
+          // Library-friendly title — "Pinterest pin · 93a0607e…"
+          // beats raw hash filenames in the grid view. Falls back
+          // to the filename for unrecognized sources.
+          title: prettyDirectTitle(
+            job.url,
+            finalPath.split(/[\\/]/).pop() || job.url,
+          ),
           duration_sec: null,
           in_sec: null,
           out_sec: null,
@@ -866,10 +872,18 @@ export function DownloadsProvider({
   // later via the library card if they want).
   const startDirectDownload = useCallback<DownloadsContextValue["startDirectDownload"]>(
     async (args) => {
+      // Pretty title up-front so the in-progress "downloading…"
+      // chip + the final library row read the same.
+      const initialTitle =
+        args.title ||
+        prettyDirectTitle(
+          args.url,
+          args.url.split(/[?#]/)[0].split("/").pop() || args.url,
+        );
       setSingleDownload({
         jobId: SINGLE_URL_JOB_ID,
         url: args.url,
-        title: args.title || args.url,
+        title: initialTitle,
         thumbnailUrl: null,
         phase: "downloading",
         progress: null,
@@ -900,7 +914,16 @@ export function DownloadsProvider({
           // so dedupe still works against identical direct pastes.
           video_id: args.url.split("/").pop()?.split("?")[0] ?? args.url,
           channel: null,
-          title: args.title || finalPath.split(/[\\/]/).pop() || args.url,
+          // Single-URL path may carry an explicit title from the
+          // Download page (filename stem of the pasted URL). Fall
+          // through to the platform-aware prettifier otherwise so
+          // the row reads cleanly in the grid.
+          title:
+            args.title ||
+            prettyDirectTitle(
+              args.url,
+              finalPath.split(/[\\/]/).pop() || args.url,
+            ),
           duration_sec: null,
           in_sec: null,
           out_sec: null,

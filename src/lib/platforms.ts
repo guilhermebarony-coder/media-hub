@@ -16,6 +16,7 @@ export type Platform =
   | "twitter"
   | "tiktok"
   | "pinterest"
+  | "instagram"
   | "other";
 
 /**
@@ -43,6 +44,17 @@ const PLATFORM_PATTERNS: ReadonlyArray<{
   {
     platform: "tiktok",
     test: (u) => u.includes("tiktok.com"),
+  },
+  {
+    platform: "instagram",
+    // /reel/, /p/, /tv/ are the downloadable URL shapes — same as
+    // content-instagram.js matches.  Also pick up cdninstagram.com
+    // (their CDN) so direct downloads from the extension's Layer 1
+    // sniffer-fallback land with the right badge.
+    test: (u) =>
+      /instagram\.com\/(?:reel|p|tv)\//.test(u) ||
+      u.includes("cdninstagram.com") ||
+      u.includes("fbcdn.net"),
   },
   {
     platform: "pinterest",
@@ -110,4 +122,44 @@ export function isDirectMediaUrl(url: string): boolean {
   const t = url.trim();
   if (!t.startsWith("http://") && !t.startsWith("https://")) return false;
   return DIRECT_MEDIA_EXT_RE.test(t);
+}
+
+/**
+ * Human-readable title for a direct-download asset. yt-dlp normally
+ * pulls a real title from the page; the direct path doesn't have a
+ * page to scrape, so we'd otherwise stamp the asset with the raw CDN
+ * filename ("93a0607e39b57db99f29f4759d12e8c8_720w") which is ugly in
+ * the library grid. This helper prefixes with the source platform
+ * and trims the hash so the library card reads like a sentence.
+ *
+ * Examples:
+ *   pinterest, "...93a0607e39b57db99f29f4759d12e8c8_720w.mp4"
+ *     → "Pinterest pin · 93a0607e3…"
+ *   twitter, ".../ext_tw_video/abc123.mp4"
+ *     → "Tweet video · abc123"
+ *   other, "foo_720w.mp4"
+ *     → "foo_720w" (filename only, no prefix when we don't know the source)
+ */
+export function prettyDirectTitle(url: string, fileName: string): string {
+  // Strip extension and `_720w` quality marker from the filename.
+  const stem = fileName
+    .replace(/\.[^.]+$/, "")
+    .replace(/_(\d{3,4})w$/i, "")
+    .trim();
+  const short = stem.length > 14 ? `${stem.slice(0, 12)}…` : stem;
+  switch (detectPlatform(url)) {
+    case "pinterest":
+      return short ? `Pinterest pin · ${short}` : "Pinterest pin";
+    case "twitter":
+      return short ? `Tweet video · ${short}` : "Tweet video";
+    case "tiktok":
+      return short ? `TikTok · ${short}` : "TikTok";
+    case "instagram":
+      return short ? `Instagram · ${short}` : "Instagram";
+    case "youtube":
+      return short ? `YouTube · ${short}` : "YouTube";
+    default:
+      // Unknown source — just the cleaned filename, no fake prefix.
+      return stem || fileName;
+  }
 }
