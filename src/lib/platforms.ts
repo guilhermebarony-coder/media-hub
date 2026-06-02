@@ -49,9 +49,14 @@ const PLATFORM_PATTERNS: ReadonlyArray<{
     // Both /pin/<id>/ and short pin.it/<id> need to match. The bare
     // "pinterest." matcher would over-match (profile pages aren't
     // downloadable), so we keep it tight to pin URLs.
+    // pinimg.com (Pinterest's CDN) gets matched too — the extension's
+    // Layer 1 fallback hands us direct pinimg.com URLs when it reads
+    // the live <video>.src, and we want those library rows to show
+    // the Pinterest badge, not "OTHER".
     test: (u) =>
       /pinterest\.[a-z.]+\/pin\//.test(u) ||
-      /(^|\/\/)pin\.it\//.test(u),
+      /(^|\/\/)pin\.it\//.test(u) ||
+      /\bpinimg\.com\//.test(u),
   },
 ];
 
