@@ -356,15 +356,48 @@ pub fn translate_ytdlp_error(raw: &str) -> String {
         );
     }
 
-    // "Requested format is not available" — yt-dlp's way of saying
-    // it extracted ZERO formats. On age-restricted/private videos
-    // this is almost always the user's cookies not actually applying
-    // (browser was open, cookies.txt path unreadable, expired, etc).
-    // Without cookies, YouTube returns no formats and any selection
-    // — even the default "best" — fails with this misleading message.
+    // "Requested format is not available" / "No video formats found"
+    // — yt-dlp's way of saying it extracted ZERO formats. yt-dlp
+    // prefixes errors with `[ExtractorName]`, so we branch the
+    // user-facing message on the extractor instead of assuming
+    // YouTube. Pre-1.3.x this was YouTube-only and Pinterest /
+    // Reddit / TikTok errors got dumped with text about Chrome
+    // DPAPI bugs and YouTube watch history — actively wrong and
+    // confused testers.
     if lower.contains("requested format is not available")
         || lower.contains("no video formats found")
     {
+        // Pinterest: not all /pin/<id>/ URLs are videos (image pins
+        // share the URL shape), the pin may be private/removed, or
+        // yt-dlp's Pinterest extractor needs an upstream fix.
+        if lower.contains("[pinterest]") {
+            return format!(
+                "yt-dlp's Pinterest extractor couldn't find any video on this pin. \
+                 Likely causes: \
+                 • The pin is image-only (Pinterest mixes images and videos under the same /pin/<id>/ URL shape — not every pin has a video). \
+                 • The pin was deleted or made private. \
+                 • An embed type our bundled yt-dlp doesn't recognize yet — try another pin to check whether it's all of Pinterest or just this one. \
+                 Workaround: open the pin in your browser and save the video manually, then drop the file into the Library folder. Raw: {raw}"
+            );
+        }
+        // Other non-YouTube sources: same family of causes, different
+        // extractor. Generic friendly message.
+        if lower.contains("[reddit]")
+            || lower.contains("[twitter]")
+            || lower.contains("[tiktok]")
+            || lower.contains("[instagram]")
+        {
+            return format!(
+                "yt-dlp couldn't find any downloadable video at this URL. \
+                 Likely causes: \
+                 • The post was deleted, made private, or is geo-restricted. \
+                 • The post is image / text only (no video to fetch). \
+                 • The site's extractor needs an upstream fix — try a different post to confirm. \
+                 Workaround: download via your browser and drop the file into the Library folder. Raw: {raw}"
+            );
+        }
+        // Default: YouTube. Original message kept verbatim because
+        // it's been battle-tested against real YouTube auth failures.
         return format!(
             "yt-dlp got zero formats for this video. This means YouTube refused to \
              serve format manifests for this URL with the auth (or lack of auth) \
