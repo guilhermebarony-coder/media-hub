@@ -43,11 +43,20 @@
           <span class="streams-title">Detected on this tab</span>
           <span class="streams-count mono" id="streams-count">0</span>
         </div>
+        <!-- 1.3.x — filter chips. Click toggles the active filter.
+             Persisted via chrome.storage.local so the choice survives
+             popup re-opens. -->
+        <div class="streams-filters" id="streams-filters" role="tablist">
+          <button class="filter-chip active" data-filter="all" role="tab">All</button>
+          <button class="filter-chip" data-filter="video" role="tab">Video</button>
+          <button class="filter-chip" data-filter="audio" role="tab">Audio</button>
+          <button class="filter-chip" data-filter="stream" role="tab">HLS/DASH</button>
+        </div>
         <p class="streams-hint">
-          Click a row to send · click 👁 to preview in a new tab.
-          On single-tweet / single-video pages, the big Send button
-          above is usually the cleaner choice (it preserves title +
-          uploader metadata).
+          Click a row to send the highest-quality variant · use ▾ to
+          pick a specific quality · ▶ for inline preview. The big Send
+          button above is usually the cleaner choice on single-video
+          pages (preserves title + uploader metadata).
         </p>
         <ul class="streams-list" id="streams-list"></ul>
       </section>

@@ -130,6 +130,56 @@ function basename(urlStr) {
   }
 }
 
+// 1.3.x — Quality / stream-root extraction. Sites often serve the
+// same video at multiple sizes (Pinterest: foo_240w.mp4, foo_480w.mp4,
+// foo_720w.mp4 — three rows for one clip pre-rework). We compute:
+//   - root: the URL with the quality marker stripped, used as the
+//     group key so the popup can render one row per actual video.
+//   - quality: human-readable label ("720w", "1080p", "HD") so the
+//     popup can offer a quality picker on grouped rows.
+//
+// Patterns we recognize (most common first):
+//   - "_<n>w" before extension      (Pinterest, some Twitter)
+//   - "_<n>p" before extension      (generic resolution-tagged)
+//   - "_<n>x<m>" before extension   (occasional CDN)
+//   - "/<n>p/" path segment         (some Vimeo-style CDNs)
+const QUALITY_RES = [
+  // captures: 1=full marker incl. underscore, 2=marker text without underscore
+  { re: /_((?:\d{2,4})(?:w|p))(\.[a-z0-9]+)?$/i, label: (m) => m[1] },
+  { re: /_((?:\d{2,4})x(?:\d{2,4}))(\.[a-z0-9]+)?$/i, label: (m) => m[1] },
+  { re: /\/((?:\d{2,4}p))\//i, label: (m) => m[1] },
+];
+
+function rootAndQuality(urlStr) {
+  for (const { re, label } of QUALITY_RES) {
+    const m = urlStr.match(re);
+    if (m) {
+      // Strip the captured marker for the group key; keep the file
+      // extension when present so different formats of the same
+      // content (.mp4 vs .webm) don't get collapsed.
+      let root;
+      if (re.source.includes("\\/")) {
+        // path-segment pattern — replace "/720p/" with "/"
+        root = urlStr.replace(re, "/");
+      } else {
+        // "_NNNw" before extension — strip the marker only
+        root = urlStr.replace(re, m[2] || "");
+      }
+      return { root, quality: label(m) };
+    }
+  }
+  // No quality marker found — the URL is its own root, quality unknown.
+  return { root: urlStr, quality: null };
+}
+
+/** Approximate quality rank for sorting "best first" inside a group.
+ *  Higher number = higher resolution. Falls back to 0 for unknown. */
+function qualityRank(label) {
+  if (!label) return 0;
+  const m = String(label).match(/^(\d{2,4})/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
 function hostnameOf(urlStr) {
   try {
     return new URL(urlStr).hostname;
@@ -172,12 +222,18 @@ function recordStream(tabId, url, frameUrl) {
     tabStreams.set(tabId, set);
   }
   if (set.has(url)) return; // dedupe
+  const { root, quality } = rootAndQuality(url);
   set.set(url, {
     url,
     type: hit.type,
     ext: hit.ext,
     name: basename(url),
     host: hostnameOf(url),
+    // 1.3.x — group key + quality label so the popup can collapse
+    // multiple resolutions of the same video into one row.
+    root,
+    quality,
+    qualityRank: qualityRank(quality),
     frameUrl: frameUrl || "",
     detectedAt: Date.now(),
   });
