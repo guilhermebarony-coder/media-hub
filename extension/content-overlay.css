@@ -82,53 +82,71 @@
 /* Hover-reveal: cursor enters the pin/video → JS adds .mh-visible. */
 .mh-overlay-btn.mh-visible,
 .mh-overlay-btn:focus-visible {
-  opacity: 0.95;
+  opacity: 0.95 !important;
 }
 
 /* Hover on the button itself — flip to lime fill, grow the pill
-   horizontally to expose the label. */
+   horizontally to expose the label. Every property carries
+   !important because the resting state above is locked down with
+   !important to beat site CSS, and we need hover to beat resting. */
 .mh-overlay-btn:hover {
-  background: rgba(197, 255, 61, 0.97);
-  color: #0a0a0c;
-  border-color: #c5ff3d;
-  opacity: 1;
-  padding: 5px 12px 5px 9px;
-  transform: translateY(-50%) scale(1.04);
+  background: rgba(197, 255, 61, 0.97) !important;
+  color: #0a0a0c !important;
+  border-color: #c5ff3d !important;
+  opacity: 1 !important;
+  padding: 5px 12px 5px 9px !important;
+  transform: translateY(-50%) scale(1.04) !important;
   pointer-events: auto !important;
 }
 
 /* While sending / sent / errored, stay expanded + visible so the
    user can see the outcome of their click. */
-.mh-host .mh-overlay-btn.mh-sending,
-.mh-host .mh-overlay-btn.mh-sent,
-.mh-host .mh-overlay-btn.mh-err {
+.mh-overlay-btn.mh-sending,
+.mh-overlay-btn.mh-sent,
+.mh-overlay-btn.mh-err {
   opacity: 1 !important;
   padding: 5px 12px 5px 9px !important;
   pointer-events: auto !important;
 }
 
-/* Lime dot — always shown. Acts as the icon at rest. All
-   geometry locked with !important because sites (Reddit
-   especially) reset <span> widths / margins / displays. */
-.mh-overlay-dot {
-  display: inline-block !important;
-  width: 8px !important;
-  height: 8px !important;
-  min-width: 8px !important;
-  min-height: 8px !important;
-  max-width: 8px !important;
-  max-height: 8px !important;
+/* Icon — download arrow glyph (inline SVG). The wrapper span owns
+   the color (lime at rest, dark on hover) and the SVG inherits via
+   currentColor on its stroke. All geometry locked with !important
+   because Reddit / Twitter / etc. reset <span> + <svg> dimensions
+   in their site CSS. */
+.mh-overlay-icon {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 12px !important;
+  height: 12px !important;
+  min-width: 12px !important;
+  min-height: 12px !important;
+  max-width: 12px !important;
+  max-height: 12px !important;
   margin: 0 !important;
   padding: 0 !important;
-  background: #c5ff3d !important;
   border: 0 !important;
-  border-radius: 2px !important;
+  background: transparent !important;
+  color: #c5ff3d !important;
   flex-shrink: 0 !important;
   vertical-align: middle !important;
+  line-height: 1 !important;
 }
-.mh-overlay-btn:hover .mh-overlay-dot,
-.mh-overlay-btn.mh-sent .mh-overlay-dot {
-  background: #0a0a0c !important;
+.mh-overlay-icon svg {
+  display: block !important;
+  width: 12px !important;
+  height: 12px !important;
+  fill: none !important;
+  stroke: currentColor !important;
+  overflow: visible !important;
+}
+.mh-overlay-btn:hover .mh-overlay-icon,
+.mh-overlay-btn.mh-sent .mh-overlay-icon {
+  color: #0a0a0c !important;
+}
+.mh-overlay-btn.mh-err .mh-overlay-icon {
+  color: #ffd6d6 !important;
 }
 
 /* Label — hidden at rest (max-width 0), expanded on button hover

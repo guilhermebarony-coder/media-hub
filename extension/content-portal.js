@@ -45,8 +45,15 @@
     btn.type = "button";
     btn.className = "mh-overlay-btn mh-overlay-btn--portal";
     btn.title = "Send to Media Hub";
+    // 1.3.x — download arrow glyph instead of the plain square dot.
+    // Tray + arrow, ~10x10, stroke uses currentColor on .mh-overlay-icon
+    // so resting (lime) and hover (dark) inversion stays single-source.
     btn.innerHTML = `
-      <span class="mh-overlay-dot"></span>
+      <span class="mh-overlay-icon" aria-hidden="true">
+        <svg viewBox="0 0 12 12" fill="none">
+          <path d="M6 1.6v5.4M3.5 5l2.5 2.5L8.5 5M2.4 10h7.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </span>
       <span class="mh-overlay-label">Media Hub</span>
     `;
 
