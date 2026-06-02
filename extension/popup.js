@@ -305,11 +305,42 @@ function togglePreview(slot, stream) {
   const tag = stream.type === "audio" ? "audio" : "video";
   slot.innerHTML = `<${tag} src="${escapeHtml(stream.url)}" controls preload="metadata"></${tag}>`;
   const el = slot.querySelector(tag);
-  // If the CDN refuses (Pinterest blocks naked Referer requests
-  // from chrome-extension:// origins), give a fallback hint.
-  el.addEventListener("error", () => {
-    slot.innerHTML = `<div class="stream-preview-err mono">Preview blocked by source. Click the row to send — Media Hub fetches with the right Referer.</div>`;
-  });
+
+  const ERR_MSG = `<div class="stream-preview-err mono">Preview blocked by source (CDN refused without the right Referer / cookies — Twitter MP4s and some Pinterest pins do this). Click the row to send — Media Hub fetches it properly.</div>`;
+  const showErr = () => {
+    slot.innerHTML = ERR_MSG;
+  };
+
+  // The hard `error` event covers obvious failures (DNS, 404, CORS).
+  el.addEventListener("error", showErr);
+
+  // 1.3.x — stall watchdog for the Twitter case: the player loads
+  // metadata fine (duration shows up) but the byte-range requests
+  // 403 silently, so the controls render with a black void instead
+  // of erroring out. After 3 seconds, if the video still hasn't
+  // reached HAVE_CURRENT_DATA, surface our friendly message early.
+  //
+  // readyState reference:
+  //   0 = HAVE_NOTHING        — not even metadata
+  //   1 = HAVE_METADATA       — duration known, no actual frame data
+  //   2 = HAVE_CURRENT_DATA   — current playback position has data
+  //   3 = HAVE_FUTURE_DATA    — and a bit ahead
+  //   4 = HAVE_ENOUGH_DATA    — plus enough to play through
+  //
+  // Anything < 2 after 3s means "we got the headers, the bytes
+  // refused" — the Twitter signed-URL trap exactly.
+  const watchdog = setTimeout(() => {
+    // readyState < 2 means we never got past metadata — the byte
+    // stream stalled. (A successfully-playing or even paused-after-
+    // buffering video has readyState >= 2.)
+    if (el.readyState < 2) showErr();
+  }, 3000);
+  // Cancel the watchdog as soon as the video proves it can actually
+  // play, so a slow-but-fine connection doesn't get false-positived.
+  const cancelWatchdog = () => clearTimeout(watchdog);
+  el.addEventListener("playing", cancelWatchdog);
+  el.addEventListener("canplay", cancelWatchdog);
+  el.addEventListener("loadeddata", cancelWatchdog);
 }
 
 async function handleStreamClick(li, stream) {
