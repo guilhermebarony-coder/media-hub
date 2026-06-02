@@ -44,7 +44,11 @@ tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 # 1.2.16 — yt-dlp engine auto-updater. reqwest fetches the nightly
 # release tag (GitHub API) + downloads the binary. rustls-tls avoids a
 # system OpenSSL dependency on Windows/macOS build machines.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+# 1.3.x — futures::StreamExt needed for the direct-download module's
+# byte streaming. reqwest's `stream` feature gives us a Stream<bytes>
+# but the helpers (next/while-let) come from futures-util.
+futures-util = "0.3"
 # 1.3.0 — App auto-updater (distinct from the yt-dlp engine updater
 # above). Checks a GitHub Releases-hosted `latest.json` manifest against
 # the bundled minisign public key; downloads + verifies + applies the

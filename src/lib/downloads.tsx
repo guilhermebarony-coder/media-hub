@@ -47,7 +47,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { extFromPath } from "./format";
-import { detectPlatform } from "./platforms";
+import { detectPlatform, isDirectMediaUrl } from "./platforms";
 import {
   attachLocalThumbnail,
   audioCodecFor,
@@ -154,6 +154,19 @@ export type StartSingleArgs = {
  *  lossless) chosen server-side; no bitrate picker in the UI. */
 export type AudioFormat = "mp3" | "m4a" | "flac";
 
+/** 1.3.x — Arguments for the direct-download fallback. The URL
+ *  itself is the only thing yt-dlp would've given us anyway; we
+ *  guess the title from the filename so the library card has
+ *  something readable until the user renames it. */
+export type StartDirectArgs = {
+  url: string;
+  /** Best-effort title for the library row. The Download page sets
+   *  this from the URL's filename (no extension). Empty string is
+   *  fine — recordInLibrary will fall back to the asset id. */
+  title: string;
+  projectId: string | null;
+};
+
 // ---------------------------------------------------------------------
 // Module-level pieces — survive HMR + provider re-mounts
 // ---------------------------------------------------------------------
@@ -243,6 +256,13 @@ type DownloadsContextValue = {
   // Single-URL
   singleDownload: SingleDownload | null;
   startSingleDownload: (args: StartSingleArgs) => Promise<void>;
+  /** 1.3.x — fallback path when yt-dlp can't enumerate formats for
+   *  a URL but the URL itself is a direct media file (CDN .mp4
+   *  from Pinterest / sniffer, etc.). Bypasses yt-dlp and streams
+   *  the bytes directly via HTTP with platform-aware Referer
+   *  headers. Reuses the single-URL state + progress channel so
+   *  the existing UI lights up unchanged. */
+  startDirectDownload: (args: StartDirectArgs) => Promise<void>;
   cancelSingleDownload: () => Promise<void>;
   resetSingleDownload: () => void;
   // Computed
@@ -373,14 +393,96 @@ export function DownloadsProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 1.3.x — Direct-HTTP path for a queue row, used by processOne when
+  // the URL is a raw media file (CDN .mp4 etc.). Same shape as the
+  // single-URL direct path but writes its result into the queue row's
+  // status instead of the singleDownload slot.
+  const runQueueDirect = useCallback(
+    async (job: QueueJob) => {
+      updateQueueJob(job.id, {
+        status: "downloading",
+        title: job.url.split(/[?#]/)[0].split("/").pop() || job.url,
+      });
+      try {
+        const result = await invoke<DownloadResult>("media_direct_download", {
+          url: job.url,
+          jobId: job.id,
+          projectId: job.projectId,
+        });
+        const finalPath = result.path;
+        const finalBytes = result.bytes;
+        const ext = (extFromPath(finalPath) ?? "").toLowerCase();
+        const audioExts = new Set(["mp3", "m4a", "aac", "flac", "wav", "ogg", "opus"]);
+        const isAudio = audioExts.has(ext);
+        const assetId = await recordInLibrary({
+          source_url: job.url,
+          platform: detectPlatform(job.url),
+          video_id: job.url.split("/").pop()?.split("?")[0] ?? job.url,
+          channel: null,
+          title: finalPath.split(/[\\/]/).pop() || job.url,
+          duration_sec: null,
+          in_sec: null,
+          out_sec: null,
+          file_path: finalPath,
+          file_size: finalBytes,
+          container: ext,
+          codec_video: null,
+          codec_audio: isAudio ? ext : null,
+          width: null,
+          height: null,
+          fps: null,
+          transcoded_to: null,
+          thumbnail_url: null,
+          project_id: job.projectId,
+          kind: isAudio ? "audio" : "video",
+        });
+        if (assetId) {
+          if (isAudio) {
+            void attachLocalWaveform(assetId, finalPath);
+          } else {
+            void attachLocalThumbnail(assetId, finalPath, null);
+          }
+        }
+        updateQueueJob(job.id, {
+          status: "done",
+          resultPath: finalPath,
+          resultBytes: finalBytes ?? null,
+        });
+      } catch (e) {
+        updateQueueJob(job.id, { status: "failed", error: String(e) });
+      }
+    },
+    [updateQueueJob],
+  );
+
   const processOne = useCallback(
     async (job: QueueJob) => {
       updateQueueJob(job.id, { status: "fetching" });
+
+      // 1.3.x — Direct-download shortcut. If the queue row's URL is
+      // itself a direct media file (CDN .mp4 etc.), skip the yt-dlp
+      // metadata fetch entirely — yt-dlp's generic extractor often
+      // returns zero formats for these and we'd just fail. Mirrors
+      // the Download page's fallback button.
+      if (isDirectMediaUrl(job.url)) {
+        await runQueueDirect(job);
+        return;
+      }
+
       let meta: VideoMetadata;
       try {
         meta = await invoke<VideoMetadata>("yt_fetch_metadata", { url: job.url });
       } catch (e) {
         updateQueueJob(job.id, { status: "failed", error: String(e) });
+        return;
+      }
+
+      // 1.3.x — Second-chance direct fallback: yt-dlp succeeded at
+      // metadata fetch but returned no usable formats. Only useful
+      // when the URL ends in a media extension — otherwise we have
+      // nothing to give the HTTP client.
+      if (meta.formats.length === 0 && isDirectMediaUrl(job.url)) {
+        await runQueueDirect(job);
         return;
       }
 
@@ -509,7 +611,7 @@ export function DownloadsProvider({
         }
       }
     },
-    [updateQueueJob],
+    [updateQueueJob, runQueueDirect],
   );
 
   // Spawn workers whenever there's queued work and we're below ceiling.
@@ -753,6 +855,107 @@ export function DownloadsProvider({
   const resetSingleDownload = useCallback(() => setSingleDownload(null), []);
 
   // -----------------------------------------------------------------
+  // 1.3.x — Direct download fallback
+  // -----------------------------------------------------------------
+  // When yt-dlp's extractor can't enumerate formats but we have a
+  // direct media URL (.mp4/.mp3/etc), bypass yt-dlp entirely. Uses
+  // the same single-URL state slot + progress event channel so
+  // MetadataCard's existing progress bar reflects the direct
+  // download with zero UI plumbing. Skips transcode (no preset
+  // makes sense for an arbitrary CDN file — user can transcode
+  // later via the library card if they want).
+  const startDirectDownload = useCallback<DownloadsContextValue["startDirectDownload"]>(
+    async (args) => {
+      setSingleDownload({
+        jobId: SINGLE_URL_JOB_ID,
+        url: args.url,
+        title: args.title || args.url,
+        thumbnailUrl: null,
+        phase: "downloading",
+        progress: null,
+        transcodeProgress: null,
+        error: null,
+        result: null,
+        downloadedPaths: [],
+      });
+      try {
+        const result = await invoke<DownloadResult>("media_direct_download", {
+          url: args.url,
+          jobId: SINGLE_URL_JOB_ID,
+          projectId: args.projectId,
+        });
+        const finalPath = result.path;
+        const finalBytes = result.bytes;
+        const ext = (extFromPath(finalPath) ?? "").toLowerCase();
+        // Best-effort kind detection from the URL/file extension.
+        // Audio extensions go in as kind="audio" so the library
+        // renders them with the waveform/music UI.
+        const audioExts = new Set(["mp3", "m4a", "aac", "flac", "wav", "ogg", "opus"]);
+        const isAudio = audioExts.has(ext);
+
+        const assetId = await recordInLibrary({
+          source_url: args.url,
+          platform: detectPlatform(args.url),
+          // No video id from the CDN URL — use the filename stem
+          // so dedupe still works against identical direct pastes.
+          video_id: args.url.split("/").pop()?.split("?")[0] ?? args.url,
+          channel: null,
+          title: args.title || finalPath.split(/[\\/]/).pop() || args.url,
+          duration_sec: null,
+          in_sec: null,
+          out_sec: null,
+          file_path: finalPath,
+          file_size: finalBytes,
+          container: ext,
+          codec_video: null,
+          codec_audio: isAudio ? ext : null,
+          width: null,
+          height: null,
+          fps: null,
+          transcoded_to: null,
+          thumbnail_url: null,
+          project_id: args.projectId,
+          kind: isAudio ? "audio" : "video",
+        });
+        if (assetId) {
+          if (isAudio) {
+            void attachLocalWaveform(assetId, finalPath);
+          } else {
+            void attachLocalThumbnail(assetId, finalPath, null);
+          }
+        }
+
+        setSingleDownload((prev) =>
+          prev
+            ? {
+                ...prev,
+                phase: "idle",
+                result: { path: finalPath, bytes: finalBytes ?? null },
+                downloadedPaths: [finalPath],
+                progress: null,
+                transcodeProgress: null,
+              }
+            : prev,
+        );
+      } catch (e) {
+        const msg = String(e);
+        setSingleDownload((prev) =>
+          prev
+            ? {
+                ...prev,
+                phase: "idle",
+                error: msg,
+                progress: null,
+                transcodeProgress: null,
+              }
+            : prev,
+        );
+      }
+    },
+    [],
+  );
+
+  // -----------------------------------------------------------------
   // Computed
   // -----------------------------------------------------------------
   const activeCount = useMemo(() => {
@@ -776,6 +979,7 @@ export function DownloadsProvider({
     updateQueueJob,
     singleDownload,
     startSingleDownload,
+    startDirectDownload,
     cancelSingleDownload,
     resetSingleDownload,
     activeCount,

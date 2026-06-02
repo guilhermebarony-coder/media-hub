@@ -4,6 +4,7 @@
 // Milestone 0.2 in progress: `yt_fetch_metadata` (paste URL → metadata card).
 
 mod bridge;
+mod direct;
 mod library;
 mod settings;
 mod updater;
@@ -2334,6 +2335,7 @@ pub fn run() {
             media_transcode,
             media_extract_thumbnail,
             media_extract_waveform,
+            direct::media_direct_download,
             library::library_insert,
             library::library_list,
             library::library_count,

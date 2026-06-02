@@ -85,3 +85,24 @@ export function isLikelyVideoUrl(s: string): boolean {
 export function isUndownloadablePreviewUrl(url: string): boolean {
   return /^blob:/i.test(url.trim());
 }
+
+/**
+ * 1.3.x — URL looks like a direct media file we can pull over plain
+ * HTTP without yt-dlp's extractor. Used as the gate for the
+ * "Download as-is" fallback button: when the user pastes a CDN URL
+ * that yt-dlp's generic extractor can't enumerate formats for, we
+ * still know it's downloadable if the path ends in a known media
+ * extension.
+ *
+ * Conservative on purpose — false negatives are fine (user just
+ * doesn't see the fallback button), false positives offer the
+ * button on a URL that won't actually return media bytes.
+ */
+const DIRECT_MEDIA_EXT_RE =
+  /\.(mp4|m4v|mov|webm|mkv|avi|flv|m4a|mp3|aac|wav|flac|ogg|opus)(\?|#|$)/i;
+
+export function isDirectMediaUrl(url: string): boolean {
+  const t = url.trim();
+  if (!t.startsWith("http://") && !t.startsWith("https://")) return false;
+  return DIRECT_MEDIA_EXT_RE.test(t);
+}

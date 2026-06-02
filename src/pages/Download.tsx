@@ -13,6 +13,7 @@ import { useActiveProject } from "../lib/activeProject";
 import { useSettings } from "../lib/settings";
 import {
   detectPlatform,
+  isDirectMediaUrl,
   isLikelyVideoUrl,
   isUndownloadablePreviewUrl,
 } from "../lib/platforms";
@@ -361,6 +362,7 @@ function MetadataCard() {
   const {
     singleDownload,
     startSingleDownload,
+    startDirectDownload,
     cancelSingleDownload,
     resetSingleDownload,
   } = useDownloads();
@@ -1066,6 +1068,55 @@ function MetadataCard() {
                       : "Download"}
             </button>
           </div>
+
+          {/* 1.3.x — Direct-download fallback. Shows whenever yt-dlp
+              came back with zero usable formats AND the URL itself
+              looks like a direct media file. Bypasses yt-dlp,
+              streams the bytes via HTTP with platform-aware Referer
+              (Pinterest CDN etc.). Same progress channel, lands in
+              the same scope as a normal download. */}
+          {meta != null &&
+            meta.formats.length === 0 &&
+            isDirectMediaUrl(url) &&
+            !downloading && (
+              <div className="dlbar dlbar-fallback">
+                <div className="dlbar-summary">
+                  <span className="hint-chip">no formats — using direct HTTP</span>
+                  <span className="faint mono">
+                    yt-dlp couldn't enumerate this URL, but it ends in a media
+                    extension so we can stream it directly. No metadata or
+                    transcode — just the file.
+                  </span>
+                </div>
+                <button
+                  className={"btn" + (overrideLibrary ? " btn-override" : "")}
+                  onClick={() =>
+                    void startDirectDownload({
+                      url: url.trim(),
+                      // Best-effort title from the URL's filename.
+                      title:
+                        url
+                          .split(/[?#]/)[0]
+                          .split("/")
+                          .pop()
+                          ?.replace(/\.[^.]+$/, "") ?? "",
+                      projectId:
+                        !overrideLibrary && scope.kind === "project"
+                          ? scope.id
+                          : null,
+                    })
+                  }
+                  title={
+                    overrideLibrary
+                      ? "Save direct to Library (Ctrl held)"
+                      : "Save the file as-is, no yt-dlp"
+                  }
+                >
+                  <Icon.download width={13} height={13} />
+                  {overrideLibrary ? "Download as-is → Library" : "Download as-is"}
+                </button>
+              </div>
+            )}
 
           {downloading && phase === "downloading" && (
             <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
