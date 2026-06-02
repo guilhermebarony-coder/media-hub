@@ -41,6 +41,37 @@ function findPinUrl(video) {
   return null;
 }
 
+/**
+ * 1.3.x — Layer 1 of the sniffer-fallback strategy: at CLICK TIME,
+ * read the actual <video>'s current source. When Pinterest's player
+ * uses a plain `<video src="https://v1.pinimg.com/.../foo_720w.mp4">`
+ * (which is most pins), we get the real CDN URL with no sniffer
+ * round-trip and the desktop app's queue auto-routes it through
+ * media_direct_download. yt-dlp's flaky Pinterest extractor is
+ * skipped entirely.
+ *
+ * If the src is a blob: URL (MediaSource Extensions, Pinterest's
+ * fallback for some pins) or empty, we fall back to the pin-page
+ * URL — yt-dlp will then take its normal shot at the extractor.
+ * Layer 2 (sniffer round-trip for the blob: case) is the next-up
+ * task; this layer alone should cover the majority of pins.
+ */
+function pickBestUrlAtClickTime(video, pinUrl) {
+  return () => {
+    try {
+      const src = video.currentSrc || video.src || "";
+      if (/^https?:\/\//i.test(src)) {
+        console.log(`[mh] pinterest: using live <video>.currentSrc (${src})`);
+        return src;
+      }
+    } catch {
+      /* video element gone — fall through to pin URL */
+    }
+    console.log(`[mh] pinterest: live src unusable, falling back to pin URL (${pinUrl})`);
+    return pinUrl;
+  };
+}
+
 function processVideo(video) {
   if (!window.mhPortal) return; // portal helper missing — shouldn't happen
   if (video.getAttribute(MARKER_ATTR) === "1") return;
@@ -56,7 +87,10 @@ function processVideo(video) {
 
   window.mhPortal.attachPortalButton({
     video,
-    targetUrl: pinUrl,
+    // 1.3.x — pass a resolver instead of a fixed URL so we read
+    // the live <video>.currentSrc at click time. See
+    // pickBestUrlAtClickTime above for the layering.
+    targetUrl: pickBestUrlAtClickTime(video, pinUrl),
     source: "content-pinterest",
     hoverContainer,
   });

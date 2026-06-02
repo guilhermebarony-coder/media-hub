@@ -40,6 +40,25 @@
     return layer;
   }
 
+  // 1.3.x — `targetUrl` may be a string (most sites) OR a function
+  // resolved at click time. The function form lets Pinterest read the
+  // active <video>.currentSrc — which is the actual CDN .mp4 URL —
+  // instead of the pin-page URL that yt-dlp's extractor sometimes
+  // fails on. Return falsy from the resolver and we fall back to the
+  // original targetUrl string (if the resolver was paired with one).
+  function resolveTargetUrl(targetUrl) {
+    if (typeof targetUrl === "function") {
+      try {
+        const v = targetUrl();
+        if (v && typeof v === "string") return v;
+      } catch (e) {
+        console.warn("[mh] targetUrl resolver threw:", e);
+      }
+    }
+    if (typeof targetUrl === "string") return targetUrl;
+    return null;
+  }
+
   function makeButton({ targetUrl, mode = "video", source }) {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -66,12 +85,26 @@
       if (btn.classList.contains("mh-sending") || btn.classList.contains("mh-sent")) {
         return; // dedupe — mousedown + click can both fire
       }
+      // Resolve the URL right now — for sites passing a function this
+      // reads the live <video>.src so we capture the actual CDN URL
+      // the player is on, even if the user nav'd between pins after
+      // the button attached.
+      const resolved = resolveTargetUrl(targetUrl);
+      if (!resolved) {
+        btn.classList.add("mh-err");
+        btn.querySelector(".mh-overlay-label").textContent = "No URL";
+        setTimeout(() => {
+          btn.classList.remove("mh-err");
+          btn.querySelector(".mh-overlay-label").textContent = "Media Hub";
+        }, 2500);
+        return;
+      }
       btn.classList.add("mh-sending");
       btn.querySelector(".mh-overlay-label").textContent = "Sending…";
       try {
         const reply = await chrome.runtime.sendMessage({
           kind: "send-to-hub",
-          url: targetUrl,
+          url: resolved,
           mode,
           source,
         });
