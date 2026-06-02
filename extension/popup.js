@@ -173,9 +173,15 @@ function renderStreams(streams) {
   const count = $("streams-count");
   if (!streams.length) {
     section.classList.add("hidden");
+    // 1.3.x — pop the popup back to its compact width when there's
+    // nothing in the sniffer (or the panel was just cleared).
+    document.body.classList.remove("has-streams");
     return;
   }
   section.classList.remove("hidden");
+  // Widen the popup to give the row + quality picker + two action
+  // buttons room to breathe.
+  document.body.classList.add("has-streams");
   // Show the total raw count, not the grouped/filtered count, so the
   // user knows "the sniffer caught N media URLs even if my filter
   // hides some". Matches the toolbar badge.
@@ -225,14 +231,18 @@ function renderGroup(g) {
             : ""
       }
       <span class="stream-host mono">${escapeHtml(g.host)}</span>
-      <button class="stream-preview" type="button" title="${
-        directlyPlayable ? "Inline preview" : "HLS/DASH — open in tab to inspect"
-      }">${directlyPlayable ? "▶" : "↗"}</button>
+      ${
+        directlyPlayable
+          ? `<button class="stream-preview" type="button" title="Inline preview">▶</button>`
+          : ""
+      }
+      <button class="stream-open" type="button" title="Open URL in a new tab (full-size view)">👁</button>
     </div>
     <div class="stream-row-preview hidden"></div>
   `;
 
-  const previewBtn = li.querySelector(".stream-preview");
+  const previewBtn = li.querySelector(".stream-preview"); // may be null for HLS/DASH
+  const openBtn = li.querySelector(".stream-open");
   const previewSlot = li.querySelector(".stream-row-preview");
   const qualitySel = li.querySelector(".stream-quality");
   const nameEl = li.querySelector(".stream-name");
@@ -252,21 +262,30 @@ function renderGroup(g) {
   }
 
   // Row click → send. Skip if click landed inside the quality picker
-  // or the preview button (each handles its own behavior).
+  // or either action button (each handles its own behavior).
   li.querySelector(".stream-row-main").addEventListener("click", (ev) => {
-    if (ev.target.closest(".stream-quality, .stream-preview")) return;
+    if (
+      ev.target.closest(".stream-quality, .stream-preview, .stream-open")
+    )
+      return;
     void handleStreamClick(li, selected);
   });
 
-  previewBtn.addEventListener("click", (ev) => {
+  // ▶ — inline mini preview (direct video/audio only).
+  if (previewBtn) {
+    previewBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      togglePreview(previewSlot, selected);
+    });
+  }
+
+  // 👁 — open the URL in a new browser tab. Works for direct media
+  // (plays full-size in the tab's native player), and is the only
+  // option for HLS/DASH manifests (the tab will just download the
+  // manifest as a tiny text file, which still confirms it resolves).
+  openBtn.addEventListener("click", (ev) => {
     ev.stopPropagation();
-    if (!directlyPlayable) {
-      // HLS / DASH: opening in a tab is still the best we have —
-      // <video> can't play raw m3u8 in Chrome.
-      chrome.tabs.create({ url: selected.url, active: true });
-      return;
-    }
-    togglePreview(previewSlot, selected);
+    chrome.tabs.create({ url: selected.url, active: true });
   });
 
   return li;
