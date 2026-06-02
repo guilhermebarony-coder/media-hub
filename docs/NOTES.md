@@ -1,7 +1,7 @@
 # Media Hub — Working Notes
 
-Status: living doc, last refreshed 2026-05-27 (post 1.2.15 — audio +
-browser extension shipped to testers). This is
+Status: living doc, last refreshed 2026-06-01 (post 1.3.0 + Pinterest
+support + portal-based extension overlay). This is
 the parking lot for ideas, gotchas, and things-to-remember that don't
 belong in ROADMAP (too speculative or too small) or ARCHITECTURE (not
 a structural decision).
@@ -20,6 +20,121 @@ library" into 0.5 (SQLite + tags + UI overhaul, shipped) and 0.6
 (dual-root + projects + in-app scrubber). Downstream shifts by one.
 Some entries below pre-date the renumbering — check ROADMAP's
 decision log for the mapping if a milestone number reads weird.
+
+---
+
+## 2026-06-01 wrap — Pinterest support + extension overlay redesign + direct-download fallback
+
+Long sprint, multiple wins:
+
+1. **Auto-updater shipped end-to-end.** `v1.3.0` cut + tagged + GitHub
+   release published with signed installer + `latest.json`. Settings
+   → Diagnostics → Check for app updates now returns `Up to date
+   (1.3.0)` on installed builds — proving the manifest + signature
+   verification flow works. First time-cost: long. Per-release cost
+   from now on: `npm run tauri build` + drag 5 files into a Release.
+   Critical gotcha discovered: Tauri v2 requires
+   `bundle.createUpdaterArtifacts: true` in `tauri.conf.json` for
+   `.sig` files to be emitted. The env var alone isn't enough.
+   Build pre-1.3.x bundles WITHOUT signing if you forget this.
+
+2. **Pinterest as a first-class source.**
+   - Desktop: `lib/platforms.ts` registry shared by Download page and
+     download orchestrator. `detectPlatform()` returns "pinterest"
+     for `pinterest.com/pin/*` + `pin.it/*`. Latent bug fixed: every
+     library row was being stamped `platform: "youtube"` regardless
+     of source — TikTok/X clips were lying. Now correct.
+   - URL guard: blob: URLs (Pinterest lightbox right-click trap)
+     caught up-front with a useful message.
+   - Library card badges + filter labels include Pinterest + TikTok.
+   - Backend error mapper now branches "no formats found" by
+     `[ExtractorName]` prefix so Pinterest errors stop quoting Chrome
+     DPAPI bugs and YouTube watch-history checks.
+
+3. **Browser extension: unified body-portal overlay.** Pinterest's
+   player wrapper has `overflow: hidden` AND captures pointerdown
+   on a sibling layer — the in-DOM button got both clipped and
+   click-eaten. Solution: portal every site's overlay button to a
+   single body-level `<div id="mh-overlay-portal-layer">` with
+   `position: fixed` and track each video's bounding rect. Outside
+   the platform's DOM tree → their overlays can't touch us.
+     - New shared helper `content-portal.js` (loaded first per
+       site). Site scripts collapsed to URL discovery + one
+       `attachPortalButton` call.
+     - Instagram support **restored** (was pulled in 1.2.14 for the
+       same click-lock the portal now bypasses).
+     - YouTube added as a safety-net: SPA `yt-navigate-finish`
+       cleans + re-attaches per video swap.
+     - Button redesign: tiny lime download arrow at rest, expands
+       to "● Media Hub" pill on hover. Universal styling with
+       every property locked `!important` so site CSS (Reddit's
+       button reset was the worst offender) can't bully us.
+
+4. **Direct-download fallback for raw media URLs.** When yt-dlp's
+   generic extractor returns zero formats but the URL itself is a
+   direct media file (CDN .mp4 etc.), Rust `media_direct_download`
+   does an HTTP GET with platform-aware Referer headers
+   (Pinterest CDN wants `pinterest.com/`, Twitter twimg wants
+   `x.com/`, etc.) and streams to disk. Reuses the same
+   `download:progress` event channel so the existing progress bar
+   lights up unchanged. Wired into:
+   - Download page (fallback button when meta.formats is empty +
+     URL is .mp4/.mp3/.webm/...)
+   - Queue worker (auto-routes direct media URLs through the same
+     path, no UI affordance needed)
+
+### Hand-off for tomorrow / next session (user's queue, in order)
+
+1. **Wire the extension sniffer as fallback to the in-page button.**
+   Today proved out: when yt-dlp's Pinterest extractor fails on a
+   pin URL, the extension sniffer DID see the underlying CDN .mp4
+   that the pin's video element loads. Path forward: when the
+   in-page Pinterest button click would result in a yt-dlp "no
+   formats" failure, fall through to "did the sniffer catch a
+   media URL for this tab?" and hand THAT to the desktop app's
+   new direct-download command. Feasibility check needed — the
+   sniffer state is per-tab in the background service worker,
+   needs to be queryable from the content script at click time.
+   This is the missing piece that makes Pinterest support feel
+   "just works".
+
+2. **UI dead-affordance sweep (the cleanup pass).**
+   - Top-right search bar — currently does nothing
+   - Grid / List view toggle on Library — switch the renderer
+     between current cards and a table view
+   - Copy audit — there are several "TODO"-feeling labels and
+     placeholder text strings to fix
+
+3. **Browser extension polish.** Open-ended — quick UX/visual fixes
+   the user has been collecting. Touch-ups on top of the new
+   portal overlay.
+
+4. **Video quality preference in Settings.** New idea this session:
+   add a "preferred max quality" dropdown to Settings → Downloads
+   (e.g. 1080p / 720p / source) that the **extension's quick-send
+   button** uses as default so testers don't have to remember to
+   pick a format every time. Doesn't override the Download page's
+   per-clip picker — that stays explicit.
+
+5. **Sniffer panel rework.** Bigger item carried over: filter
+   empties, dedupe by stream root, preserve state on tab switch,
+   replace the eye-preview with something actually useful.
+
+### Notes for tomorrow's Pinterest sniffer-fallback work
+
+- The sniffer lives in `extension/sniffer.js` (background service
+  worker). Today's session didn't touch it, so its API surface
+  is unchanged.
+- The content-script `attachPortalButton` flow lives in
+  `extension/content-portal.js` and currently sends a fixed URL
+  to the background. Adding fallback = letting the background
+  optionally pick "the sniffed URL for this tab" when the primary
+  URL fails — this is a 2-message round-trip pattern, not a big
+  refactor.
+- The desktop `media_direct_download` command is in
+  `src-tauri/src/direct.rs` and already does the right thing for
+  raw CDN URLs from any source. So all the heavy lifting on the
+  desktop side is done.
 
 ---
 
