@@ -30,7 +30,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { Icon } from "../lib/icons";
-import { thumbnailSrc, revealFile } from "../lib/library";
+import { thumbnailSrc, revealFile, openFileInDefaultApp } from "../lib/library";
 import { useActiveProject } from "../lib/activeProject";
 import type { Asset, LibraryFilters } from "../lib/types";
 import { fmtDuration, fmtBytes } from "../lib/format";
@@ -113,21 +113,51 @@ export function CommandPalette({
     return () => clearTimeout(handle);
   }, [query, open]);
 
-  const openAsset = useCallback(
+  /**
+   * Primary action — open the clip in the OS's default app (mpv,
+   * Premiere, etc.). Bound to Enter, click, and Ctrl-click on a row.
+   * Closes the palette after firing so the user can keep typing
+   * fresh searches without manually dismissing.
+   */
+  const playAsset = useCallback(
+    (asset: Asset) => {
+      void openFileInDefaultApp(asset.file_path);
+      onClose();
+    },
+    [onClose],
+  );
+
+  /**
+   * Secondary action — jump the Library page to this asset (scope-
+   * switch + select + scroll-into-view). Bound to Shift+Enter and
+   * the right-arrow row button. Useful when you want to look at
+   * sibling clips or apply tag/folder edits.
+   */
+  const showAssetInLibrary = useCallback(
     (asset: Asset) => {
       const detail: OpenAssetDetail = {
         assetId: asset.id,
         projectId: asset.project_id ?? null,
       };
-      // Dispatch BEFORE navigating so a Library page that's already
-      // mounted (keep-alive) handles it without the route flicker. A
-      // freshly-mounted Library page will pick up the event from its
-      // own listen-on-mount path that re-fires the last pending event.
       window.dispatchEvent(new CustomEvent(OPEN_ASSET_EVENT, { detail }));
       navigate("/library");
       onClose();
     },
     [navigate, onClose],
+  );
+
+  /**
+   * Tertiary action — open the OS file manager pointing at the file.
+   * Bound to the small folder button on each row.
+   */
+  const revealAsset = useCallback(
+    (asset: Asset) => {
+      void revealFile(asset.file_path).catch((err) =>
+        console.warn("[palette] revealFile failed:", err),
+      );
+      onClose();
+    },
+    [onClose],
   );
 
   // Keyboard nav. Bound on the input so it doesn't compete with the
@@ -153,18 +183,20 @@ export function CommandPalette({
         const target = results[selectedIdx];
         if (!target) return;
         e.preventDefault();
-        if (e.ctrlKey || e.metaKey) {
-          // Reveal in OS file manager instead of opening.
-          void revealFile(target.file_path).catch((err) =>
-            console.warn("[palette] revealFile failed:", err),
-          );
-          onClose();
+        // Shift+Enter → jump the library page to the asset (the old
+        // "open" meaning, kept under a modifier for power users).
+        if (e.shiftKey) {
+          showAssetInLibrary(target);
           return;
         }
-        openAsset(target);
+        // Plain Enter / Ctrl+Enter / Cmd+Enter all play the file
+        // with the OS default app. Ctrl-as-no-op matches the user's
+        // mental model of "all the obvious ways to open should just
+        // open." Reveal-in-folder lives on the per-row button now.
+        playAsset(target);
       }
     },
-    [onClose, openAsset, results, selectedIdx],
+    [onClose, playAsset, showAssetInLibrary, results, selectedIdx],
   );
 
   // Scroll the highlighted row into view when arrows move past the
@@ -183,7 +215,7 @@ export function CommandPalette({
     if (!query.trim()) return "Start typing to search clips by title, channel, or tag.";
     if (loading) return "searching…";
     if (results.length === 0) return `No clips match "${query}".`;
-    return `${results.length} match${results.length === 1 ? "" : "es"} · ↑↓ move · ↵ open · Ctrl ↵ reveal in folder · Esc close`;
+    return `${results.length} match${results.length === 1 ? "" : "es"} · ↑↓ move · ↵ play · ⇧↵ show in library · 📁 reveal · Esc close`;
   }, [query, loading, results.length]);
 
   if (!open) return null;
@@ -231,7 +263,9 @@ export function CommandPalette({
                 }
                 selected={i === selectedIdx}
                 idx={i}
-                onClick={() => openAsset(a)}
+                onPlay={() => playAsset(a)}
+                onReveal={() => revealAsset(a)}
+                onShowInLibrary={() => showAssetInLibrary(a)}
                 onMouseEnter={() => setSelectedIdx(i)}
               />
             ))}
@@ -249,14 +283,21 @@ function CommandRow({
   scopeLabel,
   selected,
   idx,
-  onClick,
+  onPlay,
+  onReveal,
+  onShowInLibrary,
   onMouseEnter,
 }: {
   asset: Asset;
   scopeLabel: string;
   selected: boolean;
   idx: number;
-  onClick: () => void;
+  /** Primary — open with OS default app. Fired by row click + Enter. */
+  onPlay: () => void;
+  /** Secondary — open the OS file manager pointing at the file. */
+  onReveal: () => void;
+  /** Tertiary — jump the Library page to this asset (select + scroll). */
+  onShowInLibrary: () => void;
   onMouseEnter: () => void;
 }) {
   const thumb = thumbnailSrc(asset.thumbnail_path, asset.thumbnail_url);
@@ -268,7 +309,16 @@ function CommandRow({
     <li
       className={"cmdp-row" + (selected ? " selected" : "")}
       data-idx={idx}
-      onClick={onClick}
+      // Click anywhere on the row body plays the file. Ctrl-click
+      // also plays — same as Enter. Modifier behaviour matches the
+      // user's "all the obvious clicks should just open" model.
+      onClick={(e) => {
+        if (e.target instanceof Element && e.target.closest(".cmdp-row-action")) {
+          // Action buttons handle their own click — don't double-fire.
+          return;
+        }
+        onPlay();
+      }}
       onMouseEnter={onMouseEnter}
     >
       <div className="cmdp-thumb">
@@ -279,6 +329,32 @@ function CommandRow({
         <div className="cmdp-meta mono">
           {meta.length > 0 ? meta.join(" · ") : <span className="faint">—</span>}
         </div>
+      </div>
+      <div className="cmdp-actions">
+        <button
+          type="button"
+          className="cmdp-row-action"
+          onClick={(e) => {
+            e.stopPropagation();
+            onReveal();
+          }}
+          title="Reveal file in folder"
+          aria-label="Reveal file in folder"
+        >
+          📁
+        </button>
+        <button
+          type="button"
+          className="cmdp-row-action"
+          onClick={(e) => {
+            e.stopPropagation();
+            onShowInLibrary();
+          }}
+          title="Show in library (⇧ Enter)"
+          aria-label="Show in library"
+        >
+          ↗
+        </button>
       </div>
       <div className="cmdp-scope mono">{scopeLabel}</div>
     </li>
