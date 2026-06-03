@@ -340,6 +340,21 @@ export default function LibraryPage() {
     return () => window.removeEventListener("mh:open-asset", onOpen);
   }, [scope, projects, setScope, inTrash]);
 
+  // 1.3.x — Command palette Tags tab fires this. Replaces the
+  // current activeTags set with the single picked tag so the user
+  // sees only that tag's clips. Bounces out of Trash too — tag
+  // filter on a trash view makes no sense.
+  useEffect(() => {
+    const onTag = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { tag: string } | undefined;
+      if (!detail?.tag) return;
+      if (inTrash) setInTrash(false);
+      setActiveTags(new Set([detail.tag]));
+    };
+    window.addEventListener("mh:apply-tag-filter", onTag);
+    return () => window.removeEventListener("mh:apply-tag-filter", onTag);
+  }, [inTrash]);
+
   // 1.3.x — Consume pendingOpenId once the matching asset has loaded
   // into the grid. Sets the single-asset selection (the inspector
   // picks it up automatically), scrolls it into view, and clears the

@@ -5,20 +5,29 @@
 // keyboard-driven shape so editors who've been using Eagle for years
 // don't have to re-learn anything.
 //
-// v1 scope (Clips only): search asset titles + channel + tags via
-// the existing library_list backend. Enter or click opens the result
-// in the Library page with the inspector drawer focused on it.
-// Ctrl+Enter (or Cmd+Enter on macOS) reveals the file in the OS
-// file manager. Tabs for Projects / Tags will land in v2.
+// v2 scope (Option B, 1.3.x): three tabs along the top.
+//   - Clips     — search asset titles / channels / tags via
+//                 library_list. Enter plays in OS default app;
+//                 Ctrl+Enter reveals in folder; Shift+Enter jumps
+//                 Library to the asset.
+//   - Projects  — search project names. Enter switches the active
+//                 scope and navigates to /library.
+//   - Tags      — search tag names. Enter applies that tag as a
+//                 filter on /library and navigates there.
+// Tab key cycles tabs forward, Shift+Tab cycles back. Clicking a
+// tab does the same.
 //
 // Wiring strategy:
 //   - This component renders nothing when closed (parent gates by
 //     `open` prop).
-//   - On Enter, dispatch a "mh:open-asset" CustomEvent that the
-//     Library page listens for. Decouples the palette from any
-//     specific page lifecycle; cross-route navigation is just
-//     navigate("/library") + the event handler fires after the page
-//     keep-alive mounts.
+//   - On Enter (Clips tab), dispatch a "mh:open-asset" CustomEvent
+//     the Library page listens for.
+//   - On Enter (Tags tab), dispatch "mh:apply-tag-filter".
+//   - Projects use the activeProject context directly (setScope) so
+//     no extra event channel is needed.
+//   - Cross-route navigation is always navigate("/library") AFTER
+//     dispatch so the keep-alive page handles state changes in
+//     place when already mounted.
 
 import {
   useCallback,
@@ -32,7 +41,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { Icon } from "../lib/icons";
 import { thumbnailSrc, revealFile, openFileInDefaultApp } from "../lib/library";
 import { useActiveProject } from "../lib/activeProject";
-import type { Asset, LibraryFilters } from "../lib/types";
+import type {
+  Asset,
+  LibraryFilters,
+  Project,
+  TagCount,
+} from "../lib/types";
 import { fmtDuration, fmtBytes } from "../lib/format";
 
 /** Window-level event payload — the Library page listens for this and
@@ -45,6 +59,15 @@ export type OpenAssetDetail = {
 };
 export const OPEN_ASSET_EVENT = "mh:open-asset";
 
+/** 1.3.x — Tags tab Enter handler. Library listens, replaces its
+ *  activeTags set with the single tag, navigates not needed (this
+ *  fires together with navigate("/library") at the call site). */
+export type ApplyTagFilterDetail = { tag: string };
+export const APPLY_TAG_FILTER_EVENT = "mh:apply-tag-filter";
+
+type PaletteTab = "clips" | "projects" | "tags";
+const TAB_ORDER: PaletteTab[] = ["clips", "projects", "tags"];
+
 export function CommandPalette({
   open,
   onClose,
@@ -52,42 +75,67 @@ export function CommandPalette({
   open: boolean;
   onClose: () => void;
 }) {
+  const [tab, setTab] = useState<PaletteTab>("clips");
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<Asset[]>([]);
+  const [clipResults, setClipResults] = useState<Asset[]>([]);
+  const [tagResults, setTagResults] = useState<TagCount[]>([]);
+  const [allTags, setAllTags] = useState<TagCount[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const navigate = useNavigate();
-  // Project list cached at the app level — we use it just to resolve
-  // project_id → human-readable name for the right-side scope chip
-  // on each row. No additional fetch needed.
-  const { projects } = useActiveProject();
+  // Project list cached at the app level — we use it both for the
+  // Projects tab results and to resolve project_id → human-readable
+  // name for the Clips tab's scope chip. No extra fetch needed.
+  const { projects, setScope } = useActiveProject();
   const projectNameById = useMemo(() => {
     const m = new Map<string, string>();
     for (const p of projects) m.set(p.id, p.name);
     return m;
   }, [projects]);
 
+  // Filter projects + tags client-side. Both collections are small
+  // (< 100 items each in practice), so an in-memory substring filter
+  // is faster than a backend round-trip per keystroke.
+  const projectResults = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return projects;
+    return projects.filter((p) => p.name.toLowerCase().includes(q));
+  }, [projects, query]);
+
   // Reset when (re)opened. Clear stale query + results; refocus input.
+  // Default to the Clips tab — most common entry point.
   useEffect(() => {
     if (!open) return;
+    setTab("clips");
     setQuery("");
-    setResults([]);
+    setClipResults([]);
     setSelectedIdx(0);
     // Wait a tick so the input is in the DOM before focusing.
     queueMicrotask(() => inputRef.current?.focus());
+    // Tags list is small (< 200 items in practice), fetch once on
+    // open so the Tags tab is responsive when the user switches.
+    void invoke<TagCount[]>("tag_list_all")
+      .then((tags) => setAllTags(tags))
+      .catch((e) => console.warn("[palette] tag_list_all failed:", e));
   }, [open]);
 
-  // Search. 200ms debounce so the user can type "pinterest pin"
-  // without firing 14 backend calls. Empty query → empty results
-  // (we don't want to dump the whole library here; the Library page
-  // is the dump view).
+  // Whenever the tab changes, reset selection to top and refocus input
+  // (Tab key would otherwise blur it into the tab strip).
   useEffect(() => {
     if (!open) return;
+    setSelectedIdx(0);
+    inputRef.current?.focus();
+  }, [tab, open]);
+
+  // Clips search — only fires on the Clips tab. 200ms debounce so the
+  // user can type "pinterest pin" without firing 14 backend calls.
+  useEffect(() => {
+    if (!open || tab !== "clips") return;
     const trimmed = query.trim();
     if (!trimmed) {
-      setResults([]);
+      setClipResults([]);
       setLoading(false);
       return;
     }
@@ -96,22 +144,30 @@ export function CommandPalette({
       try {
         const filters: LibraryFilters = {
           query: trimmed,
-          scope: { kind: "any" }, // 1.3.x — search the whole library + every project
+          scope: { kind: "any" }, // search the whole library + every project
           limit: 50,
           trashed: false,
         };
         const list = await invoke<Asset[]>("library_list", { filters });
-        setResults(list);
+        setClipResults(list);
         setSelectedIdx(0);
       } catch (e) {
         console.warn("[palette] search failed:", e);
-        setResults([]);
+        setClipResults([]);
       } finally {
         setLoading(false);
       }
     }, 200);
     return () => clearTimeout(handle);
-  }, [query, open]);
+  }, [query, open, tab]);
+
+  // Tags filter — client-side substring against the cached list.
+  useEffect(() => {
+    if (!open || tab !== "tags") return;
+    const q = query.trim().toLowerCase();
+    setTagResults(q ? allTags.filter((t) => t.name.toLowerCase().includes(q)) : allTags);
+    setSelectedIdx(0);
+  }, [query, open, tab, allTags]);
 
   /**
    * Primary action — open the clip in the OS's default app (mpv,
@@ -160,6 +216,54 @@ export function CommandPalette({
     [onClose],
   );
 
+  /**
+   * Projects tab — switch active scope to the picked project then
+   * navigate to /library so the user can see its clips.
+   */
+  const openProject = useCallback(
+    (project: Project) => {
+      setScope({ kind: "project", id: project.id, name: project.name });
+      navigate("/library");
+      onClose();
+    },
+    [navigate, onClose, setScope],
+  );
+
+  /**
+   * Tags tab — apply the tag as a filter on the Library page and
+   * navigate there. Library's listener REPLACES its activeTags set
+   * (not adds), so picking a tag from the palette is "show me only
+   * this tag", not "and-also this tag".
+   */
+  const applyTagFilter = useCallback(
+    (tag: TagCount) => {
+      const detail: ApplyTagFilterDetail = { tag: tag.name };
+      window.dispatchEvent(new CustomEvent(APPLY_TAG_FILTER_EVENT, { detail }));
+      navigate("/library");
+      onClose();
+    },
+    [navigate, onClose],
+  );
+
+  // Current tab's result length — used by ArrowUp/Down clamping.
+  const currentLen =
+    tab === "clips"
+      ? clipResults.length
+      : tab === "projects"
+        ? projectResults.length
+        : tagResults.length;
+
+  const cycleTab = useCallback(
+    (dir: 1 | -1) => {
+      setTab((cur) => {
+        const i = TAB_ORDER.indexOf(cur);
+        const next = (i + dir + TAB_ORDER.length) % TAB_ORDER.length;
+        return TAB_ORDER[next];
+      });
+    },
+    [],
+  );
+
   // Keyboard nav. Bound on the input so it doesn't compete with the
   // global Ctrl+Space handler at the Shell level.
   const onKeyDown = useCallback(
@@ -169,9 +273,16 @@ export function CommandPalette({
         onClose();
         return;
       }
+      // Tab / Shift+Tab cycle tabs. Browser default Tab would blur
+      // the input → kill the typing flow.
+      if (e.key === "Tab") {
+        e.preventDefault();
+        cycleTab(e.shiftKey ? -1 : 1);
+        return;
+      }
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setSelectedIdx((i) => Math.min(i + 1, Math.max(0, results.length - 1)));
+        setSelectedIdx((i) => Math.min(i + 1, Math.max(0, currentLen - 1)));
         return;
       }
       if (e.key === "ArrowUp") {
@@ -180,25 +291,41 @@ export function CommandPalette({
         return;
       }
       if (e.key === "Enter") {
-        const target = results[selectedIdx];
-        if (!target) return;
         e.preventDefault();
-        // Shift+Enter → jump library page to the asset.
-        if (e.shiftKey) {
-          showAssetInLibrary(target);
+        if (tab === "clips") {
+          const target = clipResults[selectedIdx];
+          if (!target) return;
+          if (e.shiftKey) return showAssetInLibrary(target);
+          if (e.ctrlKey || e.metaKey) return revealAsset(target);
+          return playAsset(target);
+        }
+        if (tab === "projects") {
+          const proj = projectResults[selectedIdx];
+          if (proj) openProject(proj);
           return;
         }
-        // Ctrl+Enter → reveal file in OS file manager. Mirrors the
-        // click-vs-ctrl-click mapping below so keyboard and mouse
-        // map identically.
-        if (e.ctrlKey || e.metaKey) {
-          revealAsset(target);
+        if (tab === "tags") {
+          const t = tagResults[selectedIdx];
+          if (t) applyTagFilter(t);
           return;
         }
-        playAsset(target);
       }
     },
-    [onClose, playAsset, revealAsset, showAssetInLibrary, results, selectedIdx],
+    [
+      onClose,
+      cycleTab,
+      currentLen,
+      tab,
+      clipResults,
+      projectResults,
+      tagResults,
+      selectedIdx,
+      playAsset,
+      revealAsset,
+      showAssetInLibrary,
+      openProject,
+      applyTagFilter,
+    ],
   );
 
   // Scroll the highlighted row into view when arrows move past the
@@ -212,13 +339,30 @@ export function CommandPalette({
     row?.scrollIntoView({ block: "nearest" });
   }, [selectedIdx, open]);
 
-  // Helpful hint footer adapts to selection state.
+  // Helpful hint footer adapts to selection state + active tab so
+  // the user sees the right shortcuts for what they're picking.
   const hint = useMemo(() => {
-    if (!query.trim()) return "Start typing to search clips by title, channel, or tag.";
-    if (loading) return "searching…";
-    if (results.length === 0) return `No clips match "${query}".`;
-    return `${results.length} match${results.length === 1 ? "" : "es"} · ↑↓ move · ↵ play · Ctrl ↵ reveal · ⇧↵ show in library · Esc close`;
-  }, [query, loading, results.length]);
+    const tabHint = "Tab to switch tabs";
+    if (tab === "clips") {
+      if (!query.trim()) return `Start typing to search clips. ${tabHint}.`;
+      if (loading) return "searching…";
+      if (clipResults.length === 0) return `No clips match "${query}". ${tabHint}.`;
+      return `${clipResults.length} match${clipResults.length === 1 ? "" : "es"} · ↵ play · Ctrl ↵ reveal · ⇧↵ show in library · ${tabHint}`;
+    }
+    if (tab === "projects") {
+      if (projectResults.length === 0)
+        return query.trim()
+          ? `No projects match "${query}". ${tabHint}.`
+          : `No projects yet. ${tabHint}.`;
+      return `${projectResults.length} project${projectResults.length === 1 ? "" : "s"} · ↵ switch & open · ${tabHint}`;
+    }
+    // tags
+    if (tagResults.length === 0)
+      return query.trim()
+        ? `No tags match "${query}". ${tabHint}.`
+        : `No tags yet — tag some clips in the library. ${tabHint}.`;
+    return `${tagResults.length} tag${tagResults.length === 1 ? "" : "s"} · ↵ filter library · ${tabHint}`;
+  }, [tab, query, loading, clipResults.length, projectResults.length, tagResults.length]);
 
   if (!open) return null;
 
@@ -230,14 +374,20 @@ export function CommandPalette({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="cmdp-modal" role="dialog" aria-label="Search clips">
+      <div className="cmdp-modal" role="dialog" aria-label="Command palette">
         <div className="cmdp-input-row">
           <Icon.search width={14} height={14} />
           <input
             ref={inputRef}
             type="text"
             className="cmdp-input"
-            placeholder="Search clips…"
+            placeholder={
+              tab === "clips"
+                ? "Search clips…"
+                : tab === "projects"
+                  ? "Search projects…"
+                  : "Search tags…"
+            }
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
@@ -254,9 +404,34 @@ export function CommandPalette({
           </button>
         </div>
 
-        {results.length > 0 && (
+        <div className="cmdp-tabs" role="tablist">
+          {TAB_ORDER.map((t) => (
+            <button
+              key={t}
+              type="button"
+              role="tab"
+              className={"cmdp-tab" + (tab === t ? " active" : "")}
+              aria-selected={tab === t}
+              onClick={() => {
+                setTab(t);
+                inputRef.current?.focus();
+              }}
+            >
+              {t === "clips" ? "Clips" : t === "projects" ? "Projects" : "Tags"}
+              <span className="cmdp-tab-count mono">
+                {t === "clips"
+                  ? clipResults.length
+                  : t === "projects"
+                    ? projectResults.length
+                    : tagResults.length}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {tab === "clips" && clipResults.length > 0 && (
           <ul className="cmdp-list" ref={listRef}>
-            {results.map((a, i) => (
+            {clipResults.map((a, i) => (
               <CommandRow
                 key={a.id}
                 asset={a}
@@ -272,6 +447,36 @@ export function CommandPalette({
                   else if (modifier === "shift") showAssetInLibrary(a);
                   else playAsset(a);
                 }}
+                onMouseEnter={() => setSelectedIdx(i)}
+              />
+            ))}
+          </ul>
+        )}
+
+        {tab === "projects" && projectResults.length > 0 && (
+          <ul className="cmdp-list" ref={listRef}>
+            {projectResults.map((p, i) => (
+              <ProjectRow
+                key={p.id}
+                project={p}
+                selected={i === selectedIdx}
+                idx={i}
+                onOpen={() => openProject(p)}
+                onMouseEnter={() => setSelectedIdx(i)}
+              />
+            ))}
+          </ul>
+        )}
+
+        {tab === "tags" && tagResults.length > 0 && (
+          <ul className="cmdp-list" ref={listRef}>
+            {tagResults.map((t, i) => (
+              <TagRow
+                key={t.name}
+                tag={t}
+                selected={i === selectedIdx}
+                idx={i}
+                onApply={() => applyTagFilter(t)}
                 onMouseEnter={() => setSelectedIdx(i)}
               />
             ))}
@@ -369,6 +574,82 @@ function CommandRow({
         </button>
       </div>
       <div className="cmdp-scope mono">{scopeLabel}</div>
+    </li>
+  );
+}
+
+/**
+ * Projects tab row. Single Enter target — switches the active scope
+ * and navigates to /library so the user is dropped into that
+ * project's clip grid.
+ */
+function ProjectRow({
+  project,
+  selected,
+  idx,
+  onOpen,
+  onMouseEnter,
+}: {
+  project: Project;
+  selected: boolean;
+  idx: number;
+  onOpen: () => void;
+  onMouseEnter: () => void;
+}) {
+  return (
+    <li
+      className={"cmdp-row cmdp-row-simple" + (selected ? " selected" : "")}
+      data-idx={idx}
+      onClick={onOpen}
+      onMouseEnter={onMouseEnter}
+    >
+      <div className="cmdp-row-icon">
+        <Icon.projects width={14} height={14} />
+      </div>
+      <div className="cmdp-text">
+        <div className="cmdp-title">{project.name}</div>
+        <div className="cmdp-meta mono">
+          {project.asset_count} {project.asset_count === 1 ? "clip" : "clips"}
+          {project.root_path ? ` · ${project.root_path}` : ""}
+        </div>
+      </div>
+      <div className="cmdp-scope mono">Switch & open</div>
+    </li>
+  );
+}
+
+/**
+ * Tags tab row. Single Enter target — apply this tag as the only
+ * filter on the Library page and navigate there.
+ */
+function TagRow({
+  tag,
+  selected,
+  idx,
+  onApply,
+  onMouseEnter,
+}: {
+  tag: TagCount;
+  selected: boolean;
+  idx: number;
+  onApply: () => void;
+  onMouseEnter: () => void;
+}) {
+  return (
+    <li
+      className={"cmdp-row cmdp-row-simple" + (selected ? " selected" : "")}
+      data-idx={idx}
+      onClick={onApply}
+      onMouseEnter={onMouseEnter}
+    >
+      <div className="cmdp-row-icon">#</div>
+      <div className="cmdp-text">
+        <div className="cmdp-title">{tag.name}</div>
+        <div className="cmdp-meta mono">
+          {tag.count} {tag.count === 1 ? "clip" : "clips"} tagged
+        </div>
+      </div>
+      <div className="cmdp-scope mono">Filter library</div>
     </li>
   );
 }

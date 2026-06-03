@@ -3446,12 +3446,81 @@ textarea.field-input {
 }
 .cmdp-close:hover { background: var(--bg-3); color: var(--text-0); }
 
+/* Tab strip below the input. */
+.cmdp-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+}
+.cmdp-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  letter-spacing: 0.02em;
+  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+}
+.cmdp-tab:hover {
+  background: var(--bg-3);
+  color: var(--text-0);
+}
+.cmdp-tab.active {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-2));
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.cmdp-tab-count {
+  font-size: 10px;
+  opacity: 0.7;
+  background: var(--bg-3);
+  padding: 0 6px;
+  border-radius: 999px;
+  min-width: 18px;
+  text-align: center;
+}
+.cmdp-tab.active .cmdp-tab-count {
+  background: color-mix(in srgb, var(--accent) 32%, var(--bg-1));
+  color: var(--accent);
+  opacity: 1;
+}
+
 .cmdp-list {
   list-style: none;
   margin: 0;
   padding: 4px 0;
   overflow-y: auto;
   flex: 1;
+}
+
+/* Simpler row layout for Projects + Tags tabs — no thumbnail slot,
+   a tinted icon block instead. */
+.cmdp-row-simple .cmdp-row-icon {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  background: var(--bg-3);
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+}
+.cmdp-row-simple.selected .cmdp-row-icon,
+.cmdp-row-simple:hover .cmdp-row-icon {
+  color: var(--accent);
 }
 .cmdp-row {
   display: flex;
