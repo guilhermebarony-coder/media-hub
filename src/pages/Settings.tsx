@@ -586,6 +586,7 @@ function DownloadsSection() {
             void save((s) => ({
               ...s,
               download_concurrency: 3,
+              preferred_max_quality: "1080",
               bandwidth_limit_kbps: null,
               last_formats: {},
               jog_sensitivity: 1.0,
@@ -622,6 +623,34 @@ function DownloadsSection() {
         />
         <span className="hint-text faint">
           Applies to the batch queue. Single-URL downloads ignore this.
+        </span>
+      </div>
+
+      {/* 1.3.x — Preferred max video quality. Applies to queue jobs
+          and extension/bridge sends — anywhere a download happens
+          WITHOUT an explicit format pick on the Download page. */}
+      <div className="settings-row">
+        <span className="settings-label">Preferred quality</span>
+        <select
+          className="field-input"
+          style={{ width: 130, flex: "0 0 130px" }}
+          value={settings.preferred_max_quality}
+          onChange={(e) =>
+            void save((s) => ({ ...s, preferred_max_quality: e.target.value }))
+          }
+        >
+          <option value="2160">2160p (4K)</option>
+          <option value="1440">1440p (QHD)</option>
+          <option value="1080">1080p (FHD)</option>
+          <option value="720">720p (HD)</option>
+          <option value="480">480p (SD)</option>
+          <option value="">Source (no cap)</option>
+        </select>
+        <span className="hint-text faint">
+          Cap for batch queue + extension sends. Picks the highest
+          variant ≤ cap; falls back to source if the video doesn't
+          go that high. The Download page's format picker overrides
+          this — it stays explicit.
         </span>
       </div>
 

@@ -68,7 +68,10 @@ function DownloadsHost({ children }: { children: React.ReactNode }) {
   const { settings } = useSettings();
   const concurrency = Math.max(1, Math.min(6, settings.download_concurrency));
   return (
-    <DownloadsProvider downloadConcurrency={concurrency}>
+    <DownloadsProvider
+      downloadConcurrency={concurrency}
+      preferredMaxQuality={settings.preferred_max_quality}
+    >
       {/* 1.1.6 — CloseGuard removed. The component hooked
           getCurrentWindow().onCloseRequested to kill child processes
           before window destroy. Multiple iterations (with dialog,

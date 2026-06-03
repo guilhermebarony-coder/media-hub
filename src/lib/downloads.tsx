@@ -204,6 +204,26 @@ export function newJobId(): string {
   return `job-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 }
 
+/**
+ * 1.3.x — Build a yt-dlp `-f` spec that respects a max-quality
+ * preference. Used by the queue worker for video jobs that don't
+ * carry an explicit format pick.
+ *
+ *   maxQuality = "1080" → `bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b`
+ *   maxQuality = ""     → `bv*+ba/b`                       (no cap)
+ *
+ * The trailing `/bv*+ba/b` is a fallback: if no source variant matches
+ * the height cap (e.g., the source maxes out at 480p), yt-dlp falls
+ * through to "best of what's available" instead of failing the job.
+ */
+export function videoFormatSpecForMaxQuality(maxQuality: string): string {
+  const trimmed = maxQuality.trim();
+  if (!trimmed || trimmed === "source") return "bv*+ba/b";
+  // Only digits, defensively — anything else falls through to no-cap.
+  if (!/^\d+$/.test(trimmed)) return "bv*+ba/b";
+  return `bv*[height<=${trimmed}]+ba/b[height<=${trimmed}]/bv*+ba/b`;
+}
+
 const QUEUE_STORAGE_KEY = "mh.queue.v1";
 
 function loadQueueFromStorage(): QueueJob[] {
@@ -279,11 +299,18 @@ const DownloadsContext = createContext<DownloadsContextValue | null>(null);
 export function DownloadsProvider({
   children,
   downloadConcurrency,
+  preferredMaxQuality,
 }: {
   children: ReactNode;
   /** Mirrors settings.download_concurrency. Bumping it mid-session
    *  spawns more worker loops to consume the new headroom. */
   downloadConcurrency: number;
+  /** 1.3.x — mirrors settings.preferred_max_quality. Numeric height
+   *  string ("1080" / "720" / "480") OR empty for "no cap". Applied
+   *  to queue rows + bridge-enqueued jobs that don't carry their own
+   *  format choice. Read at each processOne() so changing it mid-
+   *  session affects subsequent jobs immediately. */
+  preferredMaxQuality: string;
 }) {
   const [queueJobs, setQueueJobs] = useState<QueueJob[]>(() => loadQueueFromStorage());
   const [singleDownload, setSingleDownload] = useState<SingleDownload | null>(null);
@@ -306,6 +333,11 @@ export function DownloadsProvider({
   const activeWorkersRef = useRef(0);
   const workerCeilingRef = useRef(downloadConcurrency);
   workerCeilingRef.current = downloadConcurrency;
+  // 1.3.x — queue worker reads the latest preferred quality every
+  // iteration via this ref, so changing the Settings dropdown takes
+  // effect on the next queued job without re-instantiating workers.
+  const maxQualityRef = useRef(preferredMaxQuality);
+  maxQualityRef.current = preferredMaxQuality;
 
   const updateQueueJob = useCallback((id: string, patch: Partial<QueueJob>) => {
     setQueueJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j)));
@@ -514,9 +546,14 @@ export function DownloadsProvider({
       try {
         const results = await invoke<DownloadResult[]>("yt_download", {
           url: job.url,
-          // Audio jobs: bestaudio. Video jobs: best video + best audio
-          // muxed into MP4 (queue's existing default).
-          formatSpec: isAudio ? "bestaudio/best" : "bv*+ba/b",
+          // Audio jobs: bestaudio. Video jobs: best video + best
+          // audio muxed into MP4, respecting Settings → Downloads →
+          // Preferred max quality (1.3.x). A 1080p preference downloads
+          // 1080p when available and falls back to the source's best
+          // when not (e.g., a 480p-only Twitter clip).
+          formatSpec: isAudio
+            ? "bestaudio/best"
+            : videoFormatSpecForMaxQuality(maxQualityRef.current),
           mergeContainer: isAudio ? null : "mp4",
           totalBytesHint: isAudio ? null : (bestVideo?.filesize_bytes ?? null),
           videoId: meta.id,

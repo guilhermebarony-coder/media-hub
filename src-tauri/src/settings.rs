@@ -71,6 +71,16 @@ pub struct Settings {
     /// / "dnxhr_sq" / "h264_mp4" / "h264_nvenc_mp4". Lands 0.8.B.
     pub default_transcode_preset: String,
 
+    /// 1.3.x — Preferred max video height for downloads that DON'T
+    /// have an explicit format picked (queue rows, extension/bridge
+    /// sends, etc.). Stored as a numeric height ("1080", "720",
+    /// "480") OR the empty string meaning "no cap, use source".
+    /// Doesn't override the Download page's format picker — that
+    /// stays explicit. Default: "1080" (most testers want NLE-
+    /// friendly sizes; cinema 4K rarely useful for B-roll).
+    #[serde(default = "default_preferred_max_quality")]
+    pub preferred_max_quality: String,
+
     // Misc.
     /// Whether the onboarding tutorial has been completed. False on
     /// first launch → onboarding modal renders. Lands 0.8.D.
@@ -117,6 +127,10 @@ fn default_jog_sensitivity() -> f32 {
     1.0
 }
 
+fn default_preferred_max_quality() -> String {
+    "1080".into()
+}
+
 fn default_bridge_port() -> u16 {
     47821
 }
@@ -145,6 +159,7 @@ impl Default for Settings {
             download_concurrency: 3,
             bandwidth_limit_kbps: None,
             default_transcode_preset: "none".into(),
+            preferred_max_quality: default_preferred_max_quality(),
             onboarding_complete: false,
             last_formats: HashMap::new(),
             jog_sensitivity: 1.0,

@@ -185,6 +185,12 @@ export type Settings = {
   download_concurrency: number;
   bandwidth_limit_kbps: number | null;
   default_transcode_preset: string;
+  /** 1.3.x — Preferred max video height ("1080" / "720" / "480") or
+   *  empty string for "no cap, use source". Applied to downloads
+   *  where no format is explicitly picked (queue rows, extension /
+   *  bridge sends). Doesn't override the Download page's format
+   *  table — that stays explicit. */
+  preferred_max_quality: string;
   onboarding_complete: boolean;
   /** Per-platform sticky last-format memory (0.8.C). Key = platform
    * id ("youtube"); value = the format_id last picked for that
@@ -214,6 +220,7 @@ export const DEFAULT_SETTINGS: Settings = {
   download_concurrency: 3,
   bandwidth_limit_kbps: null,
   default_transcode_preset: "none",
+  preferred_max_quality: "1080",
   onboarding_complete: false,
   last_formats: {},
   jog_sensitivity: 1.0,
