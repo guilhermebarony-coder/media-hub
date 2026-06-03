@@ -4,6 +4,7 @@ import { Icon } from "../lib/icons";
 import { useActiveProject } from "../lib/activeProject";
 import { useDownloads } from "../lib/downloads";
 import { APP_VERSION } from "../lib/version";
+import { CommandPalette } from "../components/CommandPalette";
 
 // 1.1.3 — lazy-load pages here (moved from App.tsx) so the Shell owns
 // the keep-alive lifecycle. Vite still produces one chunk per page;
@@ -44,6 +45,11 @@ function RouteLoading() {
  */
 export function Shell() {
   useNavShortcuts();
+  // 1.3.x — global command palette. Ctrl+Space opens; clicking the
+  // topbar Search button does the same. State lives at the Shell
+  // level so the palette is reachable from any page.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  usePaletteShortcut(() => setPaletteOpen(true));
   const { pathname } = useLocation();
   // 1.1.3 — keep-alive pages. Mount each page on first visit and keep
   // it mounted thereafter. `hidden` attribute hides the non-active
@@ -65,7 +71,8 @@ export function Shell() {
 
   return (
     <div className="mh">
-      <TopBar />
+      <TopBar onOpenPalette={() => setPaletteOpen(true)} />
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <div className="main">
         <Nav />
         <div className="content-host">
@@ -124,6 +131,43 @@ function RedirectToLibrary() {
  *     URL input or a tag editor must NOT navigate.
  *   - Ignored on key repeat to avoid double-nav from a held key.
  */
+/**
+ * 1.3.x — Ctrl+Space opens the command palette. Reserved for this
+ * purpose since 0.6 (see the comment in Download.tsx). We deliberately
+ * intercept ONLY Ctrl+Space, not Space alone (the Scrubber uses bare
+ * Space for play/pause) and not Ctrl alone (the Download page uses
+ * that for the override-to-Library shortcut).
+ *
+ * Honors the same isTypingTarget guard as useNavShortcuts so the
+ * shortcut doesn't fight URL input boxes / tag editors.
+ */
+function usePaletteShortcut(onOpen: () => void) {
+  useEffect(() => {
+    const isTypingTarget = (el: EventTarget | null): boolean => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+      if (el.isContentEditable) return true;
+      return false;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      // Ctrl-or-Cmd + Space. Space-only would fight Scrubber play/pause.
+      const isCtrlSpace =
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        !e.shiftKey &&
+        e.code === "Space";
+      if (!isCtrlSpace) return;
+      if (isTypingTarget(e.target)) return;
+      e.preventDefault();
+      onOpen();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onOpen]);
+}
+
 function useNavShortcuts() {
   const navigate = useNavigate();
   useEffect(() => {
@@ -164,7 +208,7 @@ function useNavShortcuts() {
   }, [navigate]);
 }
 
-function TopBar() {
+function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
   return (
     <div className="topbar">
       <div className="brand">
@@ -178,10 +222,17 @@ function TopBar() {
           whenever any single-URL or queue job is active. Clicking
           jumps to /download so the user can see what's happening. */}
       <ActivityBadge />
-      <button className="topbar-search" type="button" title="Global search (coming soon)">
+      {/* 1.3.x — opens the command palette (used to be a dead
+          "coming soon" button). Ctrl+Space does the same. */}
+      <button
+        className="topbar-search"
+        type="button"
+        onClick={onOpenPalette}
+        title="Search clips (Ctrl+Space)"
+      >
         <Icon.search width={13} height={13} />
-        <span>Search everything…</span>
-        <span className="kbd">Ctrl K</span>
+        <span>Search clips…</span>
+        <span className="kbd">Ctrl Space</span>
       </button>
       <div className="topbar-icons">
         <NavLink to="/settings" className="ic-btn" title="Settings">

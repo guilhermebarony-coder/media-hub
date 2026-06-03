@@ -29,7 +29,7 @@ type Bucket = "now" | "today" | "week" | "month" | "older";
  * (added-date, duration).
  */
 export default function LibraryPage() {
-  const { scope } = useActiveProject();
+  const { scope, setScope, projects } = useActiveProject();
   const [assets, setAssets] = useState<Asset[]>([]);
   const [count, setCount] = useState<number>(0);
   const [err, setErr] = useState<string | null>(null);
@@ -129,6 +129,14 @@ export default function LibraryPage() {
   // chrome. trashCount drives the sidebar badge in any view.
   const [inTrash, setInTrash] = useState(false);
   const [trashCount, setTrashCount] = useState(0);
+
+  // 1.3.x — Command-palette open-asset handoff. When the global
+  // palette fires `mh:open-asset`, we may need to switch the active
+  // scope to that asset's project first (so the grid actually contains
+  // it), and then select + scroll-into-view once the new asset list
+  // has loaded. `pendingOpenId` carries the asset id through that
+  // round-trip; a second effect (watching `assets`) consumes it.
+  const [pendingOpenId, setPendingOpenId] = useState<string | null>(null);
 
   // 1.1 — box-drag (marquee) selection state. When the user mouses
   // down on empty grid area, we start a drag; mousemove updates the
@@ -290,6 +298,77 @@ export default function LibraryPage() {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedQuery, activeTags, scope, folderFilter, inTrash]);
+
+  // 1.3.x — Listen for the command palette's open-asset event.
+  // Switches the active scope when the target asset lives in a
+  // different project; sets pendingOpenId so the consume-effect
+  // below can finish the job once the new asset list lands.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const detail = (e as CustomEvent).detail as
+        | { assetId: string; projectId: string | null }
+        | undefined;
+      if (!detail?.assetId) return;
+      // Exit the Trash view first so the live grid is what receives the
+      // selection — otherwise an asset can appear "missing" because the
+      // trashed view filters it out.
+      if (inTrash) setInTrash(false);
+      // Scope switch if the asset's home doesn't match the current.
+      const targetIsLib = detail.projectId == null;
+      const currentScopeId =
+        scope.kind === "project" ? scope.id : null;
+      if (targetIsLib && scope.kind !== "library") {
+        setScope({ kind: "library" });
+      } else if (
+        !targetIsLib &&
+        detail.projectId &&
+        currentScopeId !== detail.projectId
+      ) {
+        const proj = projects.find((p) => p.id === detail.projectId);
+        if (proj) {
+          setScope({ kind: "project", id: proj.id, name: proj.name });
+        } else {
+          // Project deleted while the palette result was stale —
+          // fall back to Library and let pendingOpenId match if the
+          // asset's row still exists at library scope.
+          setScope({ kind: "library" });
+        }
+      }
+      setPendingOpenId(detail.assetId);
+    };
+    window.addEventListener("mh:open-asset", onOpen);
+    return () => window.removeEventListener("mh:open-asset", onOpen);
+  }, [scope, projects, setScope, inTrash]);
+
+  // 1.3.x — Consume pendingOpenId once the matching asset has loaded
+  // into the grid. Sets the single-asset selection (the inspector
+  // picks it up automatically), scrolls it into view, and clears the
+  // pending id. If 1s passes with no match the asset is probably gone
+  // — clear pending so we don't leave the listener half-armed.
+  useEffect(() => {
+    if (!pendingOpenId) return;
+    const present = assets.find((a) => a.id === pendingOpenId);
+    if (present) {
+      setSelection(new Set([pendingOpenId]));
+      setAnchor(pendingOpenId);
+      // Scroll-into-view after a microtask so the new selected styling
+      // is applied first.
+      queueMicrotask(() => {
+        const card = document.querySelector<HTMLElement>(
+          `[data-asset-id='${pendingOpenId}']`,
+        );
+        card?.scrollIntoView({ block: "center", behavior: "smooth" });
+      });
+      setPendingOpenId(null);
+      return;
+    }
+    // Asset hasn't shown up yet — set a 1s grace timer.
+    const t = setTimeout(() => {
+      console.warn(`[lib] open-asset target ${pendingOpenId} not found after refresh`);
+      setPendingOpenId(null);
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [assets, pendingOpenId]);
 
   // 1.3.0 — Trash actions. Restore moves files back to their original
   // location; empty permanently deletes. Both operate on the current

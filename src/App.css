@@ -3374,3 +3374,162 @@ textarea.field-input {
 }
 .onb-foot-spacer { flex: 1; }
 
+/* ============================================================
+   Command palette (1.3.x).
+   Ctrl+Space (or topbar Search button) opens a centered modal
+   with a search input, a result list, and a hint footer. Inspired
+   by Eagle's palette — same keyboard-first shape.
+   ============================================================ */
+.cmdp-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 8000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14vh;
+  animation: cmdp-fade 0.12s ease;
+}
+@keyframes cmdp-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.cmdp-modal {
+  width: min(640px, 92vw);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  border: 1px solid var(--line-hi);
+  border-radius: 8px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  animation: cmdp-pop 0.14s ease;
+}
+@keyframes cmdp-pop {
+  from { transform: translateY(-6px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+.cmdp-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-2);
+}
+.cmdp-input {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  color: var(--text-0);
+  font: 14px/1.2 system-ui, -apple-system, "Segoe UI", sans-serif;
+  outline: none;
+}
+.cmdp-input::placeholder { color: var(--text-3); }
+.cmdp-close {
+  background: transparent;
+  border: 0;
+  color: var(--text-3);
+  font-size: 18px;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.cmdp-close:hover { background: var(--bg-3); color: var(--text-0); }
+
+.cmdp-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  overflow-y: auto;
+  flex: 1;
+}
+.cmdp-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.cmdp-row:hover,
+.cmdp-row.selected {
+  background: var(--bg-2);
+  border-left-color: var(--accent);
+}
+.cmdp-thumb {
+  width: 56px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--bg-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cmdp-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.cmdp-thumb-empty {
+  width: 100%;
+  height: 100%;
+  background: repeating-linear-gradient(
+    45deg,
+    var(--bg-3),
+    var(--bg-3) 6px,
+    var(--bg-2) 6px,
+    var(--bg-2) 12px
+  );
+}
+.cmdp-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.cmdp-title {
+  font-size: 13px;
+  color: var(--text-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmdp-meta {
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.cmdp-scope {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  color: var(--text-2);
+  background: var(--bg-3);
+  padding: 2px 8px;
+  border-radius: 999px;
+  max-width: 160px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cmdp-footer {
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 10.5px;
+  color: var(--text-3);
+  background: var(--bg-2);
+}
+
