@@ -183,20 +183,22 @@ export function CommandPalette({
         const target = results[selectedIdx];
         if (!target) return;
         e.preventDefault();
-        // Shift+Enter → jump the library page to the asset (the old
-        // "open" meaning, kept under a modifier for power users).
+        // Shift+Enter → jump library page to the asset.
         if (e.shiftKey) {
           showAssetInLibrary(target);
           return;
         }
-        // Plain Enter / Ctrl+Enter / Cmd+Enter all play the file
-        // with the OS default app. Ctrl-as-no-op matches the user's
-        // mental model of "all the obvious ways to open should just
-        // open." Reveal-in-folder lives on the per-row button now.
+        // Ctrl+Enter → reveal file in OS file manager. Mirrors the
+        // click-vs-ctrl-click mapping below so keyboard and mouse
+        // map identically.
+        if (e.ctrlKey || e.metaKey) {
+          revealAsset(target);
+          return;
+        }
         playAsset(target);
       }
     },
-    [onClose, playAsset, showAssetInLibrary, results, selectedIdx],
+    [onClose, playAsset, revealAsset, showAssetInLibrary, results, selectedIdx],
   );
 
   // Scroll the highlighted row into view when arrows move past the
@@ -215,7 +217,7 @@ export function CommandPalette({
     if (!query.trim()) return "Start typing to search clips by title, channel, or tag.";
     if (loading) return "searching…";
     if (results.length === 0) return `No clips match "${query}".`;
-    return `${results.length} match${results.length === 1 ? "" : "es"} · ↑↓ move · ↵ play · ⇧↵ show in library · 📁 reveal · Esc close`;
+    return `${results.length} match${results.length === 1 ? "" : "es"} · ↑↓ move · ↵ play · Ctrl ↵ reveal · ⇧↵ show in library · Esc close`;
   }, [query, loading, results.length]);
 
   if (!open) return null;
@@ -263,9 +265,13 @@ export function CommandPalette({
                 }
                 selected={i === selectedIdx}
                 idx={i}
-                onPlay={() => playAsset(a)}
                 onReveal={() => revealAsset(a)}
                 onShowInLibrary={() => showAssetInLibrary(a)}
+                onRowClick={(modifier) => {
+                  if (modifier === "ctrl") revealAsset(a);
+                  else if (modifier === "shift") showAssetInLibrary(a);
+                  else playAsset(a);
+                }}
                 onMouseEnter={() => setSelectedIdx(i)}
               />
             ))}
@@ -278,26 +284,30 @@ export function CommandPalette({
   );
 }
 
+type RowModifier = "ctrl" | "shift" | null;
+
 function CommandRow({
   asset,
   scopeLabel,
   selected,
   idx,
-  onPlay,
   onReveal,
   onShowInLibrary,
+  onRowClick,
   onMouseEnter,
 }: {
   asset: Asset;
   scopeLabel: string;
   selected: boolean;
   idx: number;
-  /** Primary — open with OS default app. Fired by row click + Enter. */
-  onPlay: () => void;
-  /** Secondary — open the OS file manager pointing at the file. */
+  /** 📁 button — reveal in OS file manager. */
   onReveal: () => void;
-  /** Tertiary — jump the Library page to this asset (select + scroll). */
+  /** ↗ button — jump Library page to this asset. */
   onShowInLibrary: () => void;
+  /** Row body click. Modifier is decoded at the parent so the row
+   *  doesn't need to know what each modifier means — it just
+   *  forwards the user's intent. */
+  onRowClick: (modifier: RowModifier) => void;
   onMouseEnter: () => void;
 }) {
   const thumb = thumbnailSrc(asset.thumbnail_path, asset.thumbnail_url);
@@ -309,15 +319,17 @@ function CommandRow({
     <li
       className={"cmdp-row" + (selected ? " selected" : "")}
       data-idx={idx}
-      // Click anywhere on the row body plays the file. Ctrl-click
-      // also plays — same as Enter. Modifier behaviour matches the
-      // user's "all the obvious clicks should just open" model.
+      // Row click — modifier decides:
+      //   plain → play in OS default app
+      //   ctrl  → reveal in folder (mirrors Ctrl+Enter)
+      //   shift → show in library (mirrors Shift+Enter)
       onClick={(e) => {
         if (e.target instanceof Element && e.target.closest(".cmdp-row-action")) {
           // Action buttons handle their own click — don't double-fire.
           return;
         }
-        onPlay();
+        const mod: RowModifier = e.ctrlKey || e.metaKey ? "ctrl" : e.shiftKey ? "shift" : null;
+        onRowClick(mod);
       }}
       onMouseEnter={onMouseEnter}
     >
