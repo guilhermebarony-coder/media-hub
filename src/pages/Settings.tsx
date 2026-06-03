@@ -4,6 +4,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Icon } from "../lib/icons";
 import { alertDialog, confirmDialog } from "../lib/dialog";
 import { useSettings } from "../lib/settings";
+import { APP_VERSION } from "../lib/version";
 import {
   RENAME_PRESETS,
   TRANSCODE_PRESETS,
@@ -80,7 +81,7 @@ function SourcesSection() {
   return (
     <section className="card-box">
       <h2>
-        Sources <span className="chip">YouTube cookies</span>
+        Sources <span className="chip">browser cookies</span>
         <ResetButton
           onClick={() =>
             void save((s) => ({ ...s, cookies_source: { kind: "none" } }))
@@ -88,11 +89,11 @@ function SourcesSection() {
         />
       </h2>
       <p className="hint">
-        Some YouTube videos require sign-in (age-restricted, private,
-        members-only, etc.). Point at a browser you're signed in to and
-        yt-dlp will pull the cookies for you. Public videos work without
-        any of this — leave at <strong>None</strong> if you don't hit
-        the wall.
+        Some videos require sign-in — age-restricted YouTube, private
+        Twitter/X posts, members-only content on any platform. Point
+        at a browser you're signed in to and yt-dlp will pull the
+        cookies for you. Public videos work without any of this —
+        leave at <strong>None</strong> if you don't hit the wall.
       </p>
 
       <div className="settings-row">
@@ -1220,7 +1221,7 @@ function AboutSection() {
       <dl className="settings-kv">
         <div>
           <dt>Version</dt>
-          <dd>0.9.0-dev</dd>
+          <dd>{APP_VERSION}</dd>
         </div>
         <div>
           <dt>Identifier</dt>

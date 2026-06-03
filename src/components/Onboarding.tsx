@@ -38,7 +38,7 @@ type Step = 0 | 1 | 2 | 3;
 const STEP_TITLES: string[] = [
   "Welcome",
   "Set up your library",
-  "YouTube cookies (optional)",
+  "Browser cookies (optional)",
   "How segment downloads work",
 ];
 
@@ -205,10 +205,11 @@ function ScreenWelcome() {
       <h2 className="onb-title">No bloat. Just the clip you need.</h2>
       <p className="onb-lead">
         Media Hub is a desktop sourcing tool for editors and creators.
-        Paste a YouTube URL, scrub or punch in timestamps, get only
-        the segment you want — transcoded into a format your NLE
-        actually likes (ProRes / DNxHR / optimized MP4), filed into
-        a tagged library you can search a month later.
+        Paste a video URL — YouTube, Twitter/X, TikTok, Pinterest,
+        Reddit, Instagram — scrub or punch in timestamps, get only the
+        segment you want — transcoded into a format your NLE actually
+        likes (ProRes / DNxHR / optimized MP4), filed into a tagged
+        library you can search a month later.
       </p>
       <ul className="onb-bullets">
         <li>
@@ -320,12 +321,13 @@ function ScreenCookies(props: {
   const { mode, setMode, browser, setBrowser, filePath, setFilePath } = props;
   return (
     <div className="onb-screen">
-      <h2 className="onb-title">YouTube cookies — only if you need them</h2>
+      <h2 className="onb-title">Browser cookies — only if you need them</h2>
       <p className="onb-lead">
-        Public YouTube videos work without any of this. Cookies are
-        only needed for age-restricted, members-only, or private
-        videos. Pick <strong>None</strong> if you're not sure — you
-        can flip this on later when you hit the wall.
+        Public videos work without any of this on every supported
+        source. Cookies are only needed for sign-in-walled clips —
+        age-restricted YouTube, private Twitter/X posts, members-
+        only content, and similar. Pick <strong>None</strong> if
+        you're not sure — flip it on later when you hit the wall.
       </p>
 
       <div className="onb-callout onb-callout-cookies">

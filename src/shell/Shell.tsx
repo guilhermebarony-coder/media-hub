@@ -3,6 +3,7 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { useActiveProject } from "../lib/activeProject";
 import { useDownloads } from "../lib/downloads";
+import { APP_VERSION } from "../lib/version";
 
 // 1.1.3 — lazy-load pages here (moved from App.tsx) so the Shell owns
 // the keep-alive lifecycle. Vite still produces one chunk per page;
@@ -169,7 +170,7 @@ function TopBar() {
       <div className="brand">
         <div className="brand-mark" />
         <div className="brand-name">media·hub</div>
-        <div className="brand-build">1.3.0</div>
+        <div className="brand-build">{APP_VERSION}</div>
       </div>
       <ActiveProject />
       <div className="topbar-spacer" />

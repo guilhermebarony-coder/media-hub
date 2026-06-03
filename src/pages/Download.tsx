@@ -662,10 +662,12 @@ function MetadataCard() {
         Fetch & download <span className="chip">single URL</span>
       </h2>
       <p className="hint">
-        Paste a YouTube URL. Runs <code>yt-dlp -j</code>, then lets you pick a
-        format, scrub segments, and optionally transcode. Files land in the
-        active scope (Library or current project). Hold <span className="kbd">Ctrl</span>{" "}
-        to override to Library.
+        Paste a video URL — YouTube, Twitter/X, TikTok, Pinterest, Reddit,
+        Instagram, or any direct <code>.mp4</code>/<code>.webm</code>. Runs{" "}
+        <code>yt-dlp -j</code>, then lets you pick a format, scrub
+        segments, and optionally transcode. Files land in the active
+        scope (Library or current project). Hold{" "}
+        <span className="kbd">Ctrl</span> to override to Library.
       </p>
 
       <form
@@ -682,7 +684,7 @@ function MetadataCard() {
           ref={urlInputRef}
           className="field-input"
           type="text"
-          placeholder="https://www.youtube.com/watch?v=…  (or /playlist?list=…)"
+          placeholder="https://… any video URL (YouTube, X, TikTok, Pinterest, Reddit, IG, or a direct .mp4)"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           spellCheck={false}
