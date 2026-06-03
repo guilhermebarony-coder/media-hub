@@ -2249,7 +2249,9 @@ function LibCard({
               <Icon.pinterest width={9} height={9} style={{ verticalAlign: "-1px" }} /> PIN
             </>
           ) : asset.platform === "tiktok" ? (
-            <>TIKTOK</>
+            <>
+              <Icon.tiktok width={9} height={9} style={{ verticalAlign: "-1px" }} /> TT
+            </>
           ) : (
             asset.platform.toUpperCase()
           )}

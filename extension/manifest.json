@@ -82,6 +82,17 @@
       "js": ["content-portal.js", "content-youtube.js"],
       "css": ["content-overlay.css"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.tiktok.com/*",
+        "https://tiktok.com/*",
+        "https://m.tiktok.com/*",
+        "https://vm.tiktok.com/*"
+      ],
+      "js": ["content-portal.js", "content-tiktok.js"],
+      "css": ["content-overlay.css"],
+      "run_at": "document_idle"
     }
   ],
 
