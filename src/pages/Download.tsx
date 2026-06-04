@@ -1672,7 +1672,12 @@ function QueueCard() {
 
       {jobs.length > 0 && (
         <ul className="queue-list">
-          {jobs.map((job) => (
+          {/* 1.3.x — newest-first: the queue's internal order stays
+              append-only (so worker logic / cancellation indices keep
+              their semantics), but the visible list reverses so a fresh
+              add lands at the top — what testers expected. Slice first
+              to avoid mutating the underlying jobs array. */}
+          {jobs.slice().reverse().map((job) => (
             <QueueRow key={job.id} job={job} onCancel={cancelJob} />
           ))}
         </ul>

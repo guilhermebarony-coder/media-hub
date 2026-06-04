@@ -558,7 +558,7 @@ function CommandRow({
           title="Reveal file in folder"
           aria-label="Reveal file in folder"
         >
-          📁
+          <Icon.folder width={13} height={13} />
         </button>
         <button
           type="button"
@@ -570,7 +570,7 @@ function CommandRow({
           title="Show in library (⇧ Enter)"
           aria-label="Show in library"
         >
-          ↗
+          <Icon.library width={13} height={13} />
         </button>
       </div>
       <div className="cmdp-scope mono">{scopeLabel}</div>
@@ -642,7 +642,9 @@ function TagRow({
       onClick={onApply}
       onMouseEnter={onMouseEnter}
     >
-      <div className="cmdp-row-icon">#</div>
+      <div className="cmdp-row-icon">
+        <Icon.tag width={14} height={14} />
+      </div>
       <div className="cmdp-text">
         <div className="cmdp-title">{tag.name}</div>
         <div className="cmdp-meta mono">

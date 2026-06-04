@@ -17,6 +17,43 @@ import type { Asset, AssetKind, Folder, FolderFilter, LibraryFilters, SiblingSum
 // (0.9 UX win #7.)
 type Bucket = "now" | "today" | "week" | "month" | "older";
 
+type SortMode =
+  | "recent"
+  | "oldest"
+  | "name_az"
+  | "name_za"
+  | "size_desc"
+  | "size_asc"
+  | "duration_desc"
+  | "duration_asc";
+
+// 1.3.x — Resizable list-view columns. All metadata columns AND the
+// title column have fixed widths driven by React state. The grid is
+// allowed to overflow horizontally if the user drags columns wider
+// than the container — that's the standard data-table behavior and
+// matches the "drag the handle right → that column grows toward
+// my cursor" intuition. (Earlier iteration kept title as `1fr` which
+// made dragged columns appear to grow leftward — title was eating
+// the dx — so testers reported the drag as inverted.)
+type ColKey = "title" | "tags" | "res" | "dur" | "size" | "date";
+const DEFAULT_COL_WIDTHS: Record<ColKey, number> = {
+  title: 380,
+  tags: 180,
+  res: 56,
+  dur: 72,
+  size: 72,
+  date: 78,
+};
+const MIN_COL_WIDTHS: Record<ColKey, number> = {
+  // Floors picked from "the header label still reads at this width".
+  title: 180,
+  tags: 60,
+  res: 40,
+  dur: 48,
+  size: 48,
+  date: 56,
+};
+
 /**
  * Library page — real grid (formerly the dev-card LibraryDevCard).
  * Filter sidebar (source / tags / added / duration) + grid of cards +
@@ -78,7 +115,6 @@ export default function LibraryPage() {
   // 1.1.1 — sort popup (Most recent / Oldest / Name / Size / Duration).
   // Pure client-side ordering on `filtered`; backend query stays sorted
   // by downloaded_at DESC so first paint already matches the default.
-  type SortMode = "recent" | "oldest" | "name_az" | "name_za" | "size_desc" | "size_asc" | "duration_desc" | "duration_asc";
   const [sortMode, setSortMode] = useState<SortMode>("recent");
   const [sortPopupOpen, setSortPopupOpen] = useState(false);
   const sortBtnRef = useRef<HTMLButtonElement>(null);
@@ -163,6 +199,51 @@ export default function LibraryPage() {
     y: number;
     asset: Asset;
   } | null>(null);
+
+  // 1.3.x — Grid vs List view. Persisted to localStorage so the user's
+  // preference sticks across sessions. List view shows the same assets
+  // as compact rows (thumb + title + meta columns) — useful when you're
+  // hunting by metadata rather than scanning thumbnails.
+  const [viewMode, setViewMode] = useState<"grid" | "list">(() => {
+    try {
+      const v = localStorage.getItem("mh.library.viewMode");
+      return v === "list" ? "list" : "grid";
+    } catch {
+      return "grid";
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("mh.library.viewMode", viewMode);
+    } catch {
+      // localStorage can be blocked (private windows, etc.) — fine.
+    }
+  }, [viewMode]);
+
+  // 1.3.x — Resizable list-view columns. Drag the right edge of a
+  // metadata column header to widen/narrow it; the title column
+  // (1fr) absorbs the slack. Each column has a min width so users
+  // can't squish a column into invisibility. Persisted to
+  // localStorage as JSON so layout sticks across sessions.
+  const [colWidths, setColWidths] = useState<Record<ColKey, number>>(() => {
+    try {
+      const raw = localStorage.getItem("mh.library.colWidths");
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<Record<ColKey, number>>;
+        return { ...DEFAULT_COL_WIDTHS, ...parsed };
+      }
+    } catch {
+      // localStorage blocked — fall back to defaults.
+    }
+    return DEFAULT_COL_WIDTHS;
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("mh.library.colWidths", JSON.stringify(colWidths));
+    } catch {
+      // localStorage blocked — widths are still live in memory.
+    }
+  }, [colWidths]);
 
   async function refresh() {
     try {
@@ -851,7 +932,11 @@ export default function LibraryPage() {
     // Skip if the user clicked on a card (the card's own click
     // handler already handled the selection update).
     const targetEl = ev.target as HTMLElement;
-    if (targetEl.closest(".lib-card")) return;
+    if (targetEl.closest(".lib-card, .lib-row")) return;
+    // Header strip in list view isn't a card/row — but clicking a sort
+    // button inside it shouldn't kick off a marquee drag (preventDefault
+    // here would swallow the button's click). Treat it like a card.
+    if (targetEl.closest(".lib-list-head")) return;
     ev.preventDefault();
 
     const rect = scroll.getBoundingClientRect();
@@ -879,7 +964,7 @@ export default function LibraryPage() {
 
       // Hit-test: collect all card elements, check viewport-rect
       // intersection. Cheap enough at our scale (< 500 cards).
-      const cards = scroll!.querySelectorAll<HTMLElement>(".lib-card");
+      const cards = scroll!.querySelectorAll<HTMLElement>(".lib-card, .lib-row");
       const hitIds = new Set<string>();
       const dragLeft = x;
       const dragTop = y;
@@ -1182,10 +1267,18 @@ export default function LibraryPage() {
         </span>
         <div className="ch-spacer" />
         <div className="ch-tabs">
-          <button className="ch-tab active" title="Grid view">
+          <button
+            className={"ch-tab" + (viewMode === "grid" ? " active" : "")}
+            title="Grid view"
+            onClick={() => setViewMode("grid")}
+          >
             <Icon.grid width={11} height={11} /> Grid
           </button>
-          <button className="ch-tab" title="List view (coming soon)" disabled>
+          <button
+            className={"ch-tab" + (viewMode === "list" ? " active" : "")}
+            title="List view"
+            onClick={() => setViewMode("list")}
+          >
             <Icon.list width={12} height={12} /> List
           </button>
         </div>
@@ -1519,6 +1612,47 @@ export default function LibraryPage() {
                 scopeName={scope.kind === "project" ? scope.name : null}
                 inTrash={inTrash}
               />
+            ) : viewMode === "list" ? (
+              <div
+                className="lib-list"
+                role="list"
+                style={
+                  {
+                    "--col-title": `${colWidths.title}px`,
+                    "--col-tags": `${colWidths.tags}px`,
+                    "--col-res": `${colWidths.res}px`,
+                    "--col-dur": `${colWidths.dur}px`,
+                    "--col-size": `${colWidths.size}px`,
+                    "--col-date": `${colWidths.date}px`,
+                  } as React.CSSProperties
+                }
+              >
+                <ListHead
+                  sortMode={sortMode}
+                  onSort={setSortMode}
+                  colWidths={colWidths}
+                  onResize={setColWidths}
+                />
+
+                {filtered.map((a) => (
+                  <LibRow
+                    key={a.id}
+                    asset={a}
+                    selected={selection.has(a.id)}
+                    onDragStart={(ev) => onCardDragStart(a, ev)}
+                    onClick={(ev) => handleCardClick(a, ev)}
+                    onDoubleClick={() => void handleCardDoubleClick(a)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      if (!selection.has(a.id)) {
+                        setSelection(new Set([a.id]));
+                        setAnchor(a.id);
+                      }
+                      setContextMenu({ x: e.clientX, y: e.clientY, asset: a });
+                    }}
+                  />
+                ))}
+              </div>
             ) : (
               <div className="lib-grid">
                 {filtered.map((a) => (
@@ -2398,6 +2532,273 @@ function LibCard({
   );
 }
 
+// 1.3.x — Library list-view row. Same selection / drag / context-menu
+// semantics as LibCard (so all the existing handlers work unchanged),
+// but laid out as a single horizontal row with a small thumbnail and
+// metadata columns. Compact density: ~32px row height. Truncates
+// title/channel with ellipsis; tags col shows the first few chips.
+function PlatformBadge({ platform }: { platform: string }) {
+  if (platform === "youtube") {
+    return <><Icon.yt width={9} height={9} style={{ verticalAlign: "-1px" }} /> YT</>;
+  }
+  if (platform === "twitter" || platform === "x") {
+    return <><Icon.twitter width={8} height={8} /> X</>;
+  }
+  if (platform === "pinterest") {
+    return <><Icon.pinterest width={9} height={9} style={{ verticalAlign: "-1px" }} /> PIN</>;
+  }
+  if (platform === "tiktok") {
+    return <><Icon.tiktok width={9} height={9} style={{ verticalAlign: "-1px" }} /> TT</>;
+  }
+  return <>{platform.toUpperCase()}</>;
+}
+
+function LibRow({
+  asset,
+  selected,
+  onClick,
+  onDoubleClick,
+  onContextMenu,
+  onDragStart,
+}: {
+  asset: Asset;
+  selected: boolean;
+  onClick: (ev: React.MouseEvent) => void;
+  onDoubleClick: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+  onDragStart: (ev: React.DragEvent<HTMLButtonElement>) => void;
+}) {
+  const thumb = thumbnailSrc(asset.thumbnail_path, asset.thumbnail_url);
+  const justNow = isJustNow(asset.downloaded_at);
+  const isAudio = asset.kind === "audio";
+  const className = [
+    "lib-row",
+    selected ? "selected" : "",
+    justNow ? "just-now" : "",
+    isAudio ? "audio" : "",
+    asset.missing ? "is-missing" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const addedDate = new Date(asset.downloaded_at * 1000);
+  const addedStr = addedDate.toLocaleDateString(undefined, {
+    year: "2-digit",
+    month: "short",
+    day: "numeric",
+  });
+  return (
+    <button
+      type="button"
+      className={className}
+      data-asset-id={asset.id}
+      draggable
+      onDragStart={onDragStart}
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      onContextMenu={onContextMenu}
+      role="listitem"
+    >
+      <div className="lib-list-col col-thumb">
+        <div className="lib-row-thumb">
+          {thumb && <img src={thumb} alt="" loading="lazy" />}
+          {isAudio && (
+            <span className="lib-row-audio-glyph" title="Audio">
+              <Icon.music width={10} height={10} />
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="lib-list-col col-title">
+        <span className="lib-row-platform">
+          <PlatformBadge platform={asset.platform} />
+        </span>
+        <span className="lib-row-title" title={asset.title}>
+          {asset.title}
+        </span>
+        {asset.missing && (
+          <span className="lib-row-missing" title="File not found on disk">
+            ⚠ missing
+          </span>
+        )}
+        {asset.channel && (
+          <span className="lib-row-channel" title={asset.channel}>
+            · {asset.channel}
+          </span>
+        )}
+        {asset.sibling_count > 0 && (
+          <span
+            className="lib-row-siblings mono"
+            title={`${asset.sibling_count} other ${
+              asset.sibling_count === 1 ? "clip" : "clips"
+            } from the same source`}
+          >
+            +{asset.sibling_count}
+          </span>
+        )}
+      </div>
+      <div className="lib-list-col col-tags">
+        {asset.tags.length === 0 ? (
+          <span className="faint">—</span>
+        ) : (
+          <>
+            {asset.tags.slice(0, 3).map((t) => (
+              <span key={t} className="tag">
+                {t}
+              </span>
+            ))}
+            {asset.tags.length > 3 && (
+              <span className="tag faint">+{asset.tags.length - 3}</span>
+            )}
+          </>
+        )}
+      </div>
+      <div className="lib-list-col col-res mono">
+        {isAudio
+          ? (asset.codec_audio ?? "audio").toUpperCase()
+          : asset.height
+            ? `${asset.height}p`
+            : "—"}
+      </div>
+      <div className="lib-list-col col-dur mono">{fmtDuration(asset.duration_sec)}</div>
+      <div className="lib-list-col col-size mono">{fmtBytes(asset.file_size)}</div>
+      <div className="lib-list-col col-date mono">{addedStr}</div>
+      <div className="lib-list-col col-tail" />
+    </button>
+  );
+}
+
+// 1.3.x — sortable header strip for list view. Clicking a sortable
+// column cycles the active SortMode for that column (default direction
+// → flipped direction → back to default). Non-sortable columns
+// (thumb, tags, res) render as plain labels. The arrow indicator
+// shows the active direction in lime; inactive sortable columns
+// get a faint two-headed arrow as an affordance.
+const COL_SORTS: Record<string, { asc: SortMode; desc: SortMode; defaultDir: "asc" | "desc" }> = {
+  title: { asc: "name_az", desc: "name_za", defaultDir: "asc" },
+  duration: { asc: "duration_asc", desc: "duration_desc", defaultDir: "desc" },
+  size: { asc: "size_asc", desc: "size_desc", defaultDir: "desc" },
+  date: { asc: "oldest", desc: "recent", defaultDir: "desc" },
+};
+
+function ListHead({
+  sortMode,
+  onSort,
+  colWidths,
+  onResize,
+}: {
+  sortMode: SortMode;
+  onSort: (m: SortMode) => void;
+  colWidths: Record<ColKey, number>;
+  onResize: (next: Record<ColKey, number>) => void;
+}) {
+  function dirFor(col: keyof typeof COL_SORTS): "asc" | "desc" | null {
+    const cfg = COL_SORTS[col];
+    if (sortMode === cfg.desc) return "desc";
+    if (sortMode === cfg.asc) return "asc";
+    return null;
+  }
+  function clickHeader(col: keyof typeof COL_SORTS) {
+    const cfg = COL_SORTS[col];
+    const cur = dirFor(col);
+    if (cur === null) onSort(cfg[cfg.defaultDir]);
+    else if (cur === cfg.defaultDir) onSort(cfg[cfg.defaultDir === "desc" ? "asc" : "desc"]);
+    else onSort(cfg[cfg.defaultDir]);
+  }
+  function Arrow({ col }: { col: keyof typeof COL_SORTS }) {
+    const dir = dirFor(col);
+    // No arrow on inactive columns — keeps the header strip clean.
+    // The active column gets a single ↓ / ↑ glyph in the accent color.
+    if (dir === null) return null;
+    return <span className="lib-sort-arrow">{dir === "desc" ? "↓" : "↑"}</span>;
+  }
+  function SortBtn({ col, label }: { col: keyof typeof COL_SORTS; label: string }) {
+    return (
+      <button
+        type="button"
+        className={"lib-sort-btn" + (dirFor(col) ? " active" : "")}
+        onClick={() => clickHeader(col)}
+        title={`Sort by ${label.toLowerCase()}`}
+      >
+        {label}
+        <Arrow col={col} />
+      </button>
+    );
+  }
+  // Drag handle on a column's right edge. Mousedown captures the
+  // starting width + cursor X; mousemove updates the column width
+  // (clamped to MIN_COL_WIDTHS); mouseup releases. Body cursor + a
+  // global "resizing" class give the user the col-resize cursor
+  // anywhere, even when they overshoot the 6px-wide handle.
+  function ResizeHandle({ col }: { col: ColKey }) {
+    return (
+      <span
+        className="lib-col-resize"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const startX = e.clientX;
+          const startWidth = colWidths[col];
+          document.body.classList.add("lib-resizing");
+          function onMove(mv: MouseEvent) {
+            const dx = mv.clientX - startX;
+            const next = Math.max(MIN_COL_WIDTHS[col], startWidth + dx);
+            onResize({ ...colWidths, [col]: next });
+          }
+          function onUp() {
+            document.body.classList.remove("lib-resizing");
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+          }
+          document.addEventListener("mousemove", onMove);
+          document.addEventListener("mouseup", onUp);
+        }}
+        onDoubleClick={(e) => {
+          // Double-click → reset this column to its default width.
+          e.stopPropagation();
+          onResize({ ...colWidths, [col]: DEFAULT_COL_WIDTHS[col] });
+        }}
+        title="Drag to resize · double-click to reset"
+      />
+    );
+  }
+  return (
+    <div className="lib-list-head">
+      {/* Title label sits in the 64px thumb cell, centered so it
+          reads as the column header for the thumbnails. */}
+      <span className="lib-list-col col-thumb head-title-cell">
+        <SortBtn col="title" label="Title" />
+      </span>
+      <span className="lib-list-col col-title">
+        <ResizeHandle col="title" />
+      </span>
+      <span className="lib-list-col col-tags">
+        Tags
+        <ResizeHandle col="tags" />
+      </span>
+      <span className="lib-list-col col-res">
+        Res
+        <ResizeHandle col="res" />
+      </span>
+      <span className="lib-list-col col-dur">
+        <SortBtn col="duration" label="Duration" />
+        <ResizeHandle col="dur" />
+      </span>
+      <span className="lib-list-col col-size">
+        <SortBtn col="size" label="Size" />
+        <ResizeHandle col="size" />
+      </span>
+      <span className="lib-list-col col-date">
+        <SortBtn col="date" label="Added" />
+        <ResizeHandle col="date" />
+      </span>
+      {/* Tail spacer — matches the trailing `1fr` in the grid template
+          so the head row aligns with the data rows when total column
+          widths are less than the container width. */}
+      <span className="lib-list-col col-tail" />
+    </div>
+  );
+}
+
 function EmptyState({
   hasFilters,
   totalCount,
@@ -2646,26 +3047,31 @@ function InspectorSingle({
         </div>
       </dl>
 
-      <div className="insp-actions">
+      <div className="insp-actions insp-actions-icon">
         <button
-          className="btn btn-secondary"
+          className="btn btn-secondary insp-action-btn"
           onClick={() => void openFileInDefaultApp(asset.file_path)}
+          title="Open in default app"
+          aria-label="Open in default app"
         >
-          <Icon.folder width={12} height={12} /> Open
+          <Icon.play width={18} height={18} />
         </button>
         <button
-          className="btn btn-secondary"
+          className="btn btn-secondary insp-action-btn"
           onClick={() => void revealFile(asset.file_path)}
+          title="Reveal in file manager"
+          aria-label="Reveal in file manager"
         >
-          <Icon.folder width={12} height={12} /> Reveal
+          <Icon.folder width={18} height={18} />
         </button>
         <button
-          className="btn btn-danger"
+          className="btn btn-danger insp-action-btn"
           onClick={onDelete}
           disabled={bulkDeleting}
-          title="Move file to Recycle Bin and remove from library — Delete"
+          title="Move to Recycle Bin — Delete"
+          aria-label="Move to Recycle Bin"
         >
-          <Icon.trash width={12} height={12} /> Delete
+          <Icon.trash width={18} height={18} />
         </button>
       </div>
 

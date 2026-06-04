@@ -83,16 +83,49 @@ export const Icon = {
       <path d="M2.5 3v3h3" />
     </svg>
   ),
+  // 1.3.x — Vault-parity icons. Vault uses Lucide-style 24×24 viewBox
+  // with stroke-width 1.8 so glyphs read with more weight than our
+  // original 16×16 / stroke-1.4 set. Folder + trash were the worst
+  // offenders next to filled icons (Icon.play, Icon.music) — bumping
+  // those two brings the inspector button row into balance and aligns
+  // with the Roundtrip Vault sidebar reference.
   trash: (p: P = {}) => (
-    <svg viewBox="0 0 16 16" {...base} {...p}>
-      <path d="M3 4h10M6 4V2.5a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 .5.5V4" />
-      <path d="M4 4l.7 9a1 1 0 0 0 1 1h4.6a1 1 0 0 0 1-1L12 4" />
-      <path d="M7 7v4M9 7v4" />
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...p}
+    >
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+      <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
     </svg>
   ),
   folder: (p: P = {}) => (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinejoin="round" {...p}>
-      <path d="M2 5a1 1 0 0 1 1-1h3l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5z" />
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...p}
+    >
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+    </svg>
+  ),
+  // 1.3.x — generic play triangle for "Open in default app". Distinct
+  // from Icon.yt (which is wrapped in a YouTube-branded box) and from
+  // Icon.folder (used for Reveal-in-explorer), so the three inspector
+  // action buttons read as three different actions at a glance.
+  play: (p: P = {}) => (
+    <svg viewBox="0 0 16 16" fill="currentColor" {...p}>
+      <path d="M4.5 3v10l8-5z" />
     </svg>
   ),
   tag: (p: P = {}) => (
