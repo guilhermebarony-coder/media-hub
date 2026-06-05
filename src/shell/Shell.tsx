@@ -5,7 +5,6 @@ import { Icon } from "../lib/icons";
 import { useActiveProject } from "../lib/activeProject";
 import { useDownloads } from "../lib/downloads";
 import { APP_VERSION } from "../lib/version";
-import { alertDialog } from "../lib/dialog";
 import { CommandPalette } from "../components/CommandPalette";
 
 // 1.1.3 — lazy-load pages here (moved from App.tsx) so the Shell owns
@@ -255,17 +254,6 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
 function BackgroundModeButton() {
   async function enterBackground() {
     try {
-      const hinted = localStorage.getItem("mh.bgMode.hinted") === "1";
-      if (!hinted) {
-        await alertDialog(
-          "Media Hub will keep running in the system tray (bottom-right of " +
-            "the taskbar — it may be tucked under the ▲ arrow).\n\n" +
-            "Downloads continue in the background. Click the tray icon any " +
-            "time to bring the window back.",
-          { title: "Running in the background" },
-        );
-        localStorage.setItem("mh.bgMode.hinted", "1");
-      }
       await invoke("app_enter_background");
     } catch (e) {
       console.error("[bg] enter background failed:", e);

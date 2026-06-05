@@ -1,6 +1,19 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { AssetInput, TranscodePreset } from "./types";
+
+/**
+ * Open a web URL in the OS default browser. In WebView2 an
+ * `<a target="_blank">` does nothing useful, so source links route
+ * through the opener plugin instead.
+ */
+export async function openExternalUrl(url: string): Promise<void> {
+  try {
+    await openUrl(url);
+  } catch (e) {
+    console.warn("openExternalUrl failed:", e);
+  }
+}
 
 /**
  * Record an asset row in the SQLite library and return its id. Wrapped

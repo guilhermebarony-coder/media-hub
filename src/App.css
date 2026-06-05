@@ -3953,3 +3953,70 @@ textarea.field-input {
   color: var(--text-3);
 }
 
+
+/* 1.3.x — In-app dialogs (replaces native OS dialogs; no system sound).
+   Centered modal over a blurred scrim, matching the command palette's
+   visual language. Kind drives a small accent dot + (for error
+   confirms) a red primary button. */
+.mh-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg-0) 55%, transparent);
+  backdrop-filter: blur(4px);
+  animation: mh-dialog-fade 120ms ease-out;
+}
+@keyframes mh-dialog-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.mh-dialog {
+  width: min(440px, calc(100vw - 48px));
+  background: var(--bg-1);
+  border: 1px solid var(--line-hi);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px -12px rgba(0, 0, 0, 0.6);
+  padding: 18px 18px 14px;
+  animation: mh-dialog-pop 130ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes mh-dialog-pop {
+  from { transform: translateY(6px) scale(0.98); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+.mh-dialog-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.mh-dialog-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.mh-dialog-dot-info { background: var(--accent); }
+.mh-dialog-dot-warning { background: #e0b341; }
+.mh-dialog-dot-error { background: var(--err, #e5484d); }
+.mh-dialog-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-0);
+  margin: 0;
+}
+.mh-dialog-msg {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+  margin: 0 0 16px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.mh-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

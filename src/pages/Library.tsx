@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTauriEvent } from "../lib/useTauriEvent";
 import { Icon } from "../lib/icons";
 import { fmtBytes, fmtDuration } from "../lib/format";
-import { attachLocalThumbnail, openFileInDefaultApp, revealFile, thumbnailSrc } from "../lib/library";
+import { attachLocalThumbnail, openExternalUrl, openFileInDefaultApp, revealFile, thumbnailSrc } from "../lib/library";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -3198,9 +3198,13 @@ function InspectorSingle({
         <a
           className="mono insp-url"
           href={asset.source_url}
-          target="_blank"
-          rel="noreferrer"
-          title={asset.source_url}
+          onClick={(e) => {
+            // WebView2 won't open target=_blank in the system browser;
+            // route through the opener plugin instead.
+            e.preventDefault();
+            void openExternalUrl(asset.source_url);
+          }}
+          title={`Open in browser — ${asset.source_url}`}
         >
           {asset.source_url}
         </a>
@@ -3297,14 +3301,14 @@ function InspectorBatch({
           the popup picker which shows indeterminate state. */}
       <BatchTagEditor selected={selected} knownTags={knownTags} />
 
-      <div className="insp-actions" style={{ flexDirection: "column", alignItems: "stretch" }}>
+      <div className="insp-actions insp-actions-icon" style={{ flexDirection: "column", alignItems: "stretch" }}>
         <button
-          className="btn btn-danger"
+          className="btn btn-danger insp-action-btn"
           onClick={onBulkDelete}
           disabled={bulkDeleting}
           title="Delete from library + move files to Recycle Bin — Delete"
         >
-          <Icon.trash width={12} height={12} />
+          <Icon.trash width={16} height={16} />
           {bulkDeleting ? "Deleting…" : `Delete ${selected.length}`}
         </button>
       </div>

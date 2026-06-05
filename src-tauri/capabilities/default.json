@@ -8,6 +8,7 @@
     "core:window:allow-cursor-position",
     "core:window:allow-inner-position",
     "opener:default",
+    "opener:allow-open-url",
     "dialog:default",
     "dialog:allow-open",
     "drag:default",

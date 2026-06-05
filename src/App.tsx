@@ -6,6 +6,7 @@ import { ActiveProjectProvider } from "./lib/activeProject";
 import { SettingsProvider, useSettings } from "./lib/settings";
 import { DownloadsProvider, useDownloads } from "./lib/downloads";
 import { confirmDialog } from "./lib/dialog";
+import { DialogHost } from "./components/DialogHost";
 import { lazy } from "react";
 import "./App.css";
 
@@ -243,6 +244,9 @@ export default function App() {
           </HashRouter>
         </DownloadsHost>
       </ActiveProjectProvider>
+      {/* 1.3.x — in-app dialog renderer (replaces native OS dialogs).
+          Mounted at root so confirm/alert modals overlay everything. */}
+      <DialogHost />
     </SettingsProvider>
   );
 }
