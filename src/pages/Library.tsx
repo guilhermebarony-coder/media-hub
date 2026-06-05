@@ -27,32 +27,56 @@ type SortMode =
   | "duration_desc"
   | "duration_asc";
 
-// 1.3.x — Resizable list-view columns. All metadata columns AND the
-// title column have fixed widths driven by React state. The grid is
-// allowed to overflow horizontally if the user drags columns wider
-// than the container — that's the standard data-table behavior and
-// matches the "drag the handle right → that column grows toward
-// my cursor" intuition. (Earlier iteration kept title as `1fr` which
-// made dragged columns appear to grow leftward — title was eating
-// the dx — so testers reported the drag as inverted.)
+// 1.3.x — Resizable list-view columns, v3. The model that actually
+// holds up:
+//
+//   • State stores RATIOS (fr units), not pixels. Sum = 100 always.
+//   • CSS Grid uses `minmax(MIN_PX, var(--fr))` per column, so the
+//     browser turns ratios into pixels at layout time. Total of all
+//     columns equals the available width — no overflow, no offscreen.
+//   • Window or inspector resizes flow automatically; we don't need
+//     a ResizeObserver loop because the browser does it.
+//   • Drag = pair-resize: A.fr += d, neighbor.fr -= d. Sum stays 100.
+//     CASCADE on grow: when the immediate neighbor hits its MIN_PX,
+//     the next column over takes the rest, then the next, and so on.
+//     "Boundaries collide and move together" — what the tester asked.
+//   • Pixel mins are translated to fr mins at drag-time using the
+//     measured container width, so the floor is always real-world
+//     correct regardless of how the user resized the window.
+//   • The last column (date) has no right-edge handle; resize date
+//     by dragging the size column's right edge instead. Symmetric,
+//     no edge cases.
 type ColKey = "title" | "tags" | "res" | "dur" | "size" | "date";
-const DEFAULT_COL_WIDTHS: Record<ColKey, number> = {
-  title: 380,
-  tags: 180,
+type ColRatios = Record<ColKey, number>;
+
+// Default fraction of the available width each column claims. Picked
+// to sum to 100 so the values read as percentages (40% title, 18%
+// tags, etc.) — keeps mental math easy during tuning.
+const DEFAULT_RATIOS: ColRatios = {
+  title: 40,
+  tags: 18,
+  res: 8,
+  dur: 8,
+  size: 9,
+  date: 17,
+};
+// Hard pixel floors. Each value = "the smallest column width where
+// this column's header label OR its worst-case content still reads
+// without being chopped." Date is the widest because pt-BR full
+// dates ("23 de mai. de 26") run ~130px in our mono font.
+const MIN_COL_PX: Record<ColKey, number> = {
+  title: 200,
+  tags: 80,
   res: 56,
-  dur: 72,
-  size: 72,
-  date: 78,
+  dur: 80,
+  size: 80,
+  date: 140,
 };
-const MIN_COL_WIDTHS: Record<ColKey, number> = {
-  // Floors picked from "the header label still reads at this width".
-  title: 180,
-  tags: 60,
-  res: 40,
-  dur: 48,
-  size: 48,
-  date: 56,
-};
+// Visual left-to-right order. A column's right-edge handle pair-resizes
+// ITS column with the NEXT entry here. The last entry (date) has no
+// right-edge handle since there's no "next" to redistribute width
+// with — users grow date by shrinking size from its handle instead.
+const COL_ORDER: ColKey[] = ["title", "tags", "res", "dur", "size", "date"];
 
 /**
  * Library page — real grid (formerly the dev-card LibraryDevCard).
@@ -220,30 +244,32 @@ export default function LibraryPage() {
     }
   }, [viewMode]);
 
-  // 1.3.x — Resizable list-view columns. Drag the right edge of a
-  // metadata column header to widen/narrow it; the title column
-  // (1fr) absorbs the slack. Each column has a min width so users
-  // can't squish a column into invisibility. Persisted to
-  // localStorage as JSON so layout sticks across sessions.
-  const [colWidths, setColWidths] = useState<Record<ColKey, number>>(() => {
+  // 1.3.x — Resizable list-view columns (v3, ratio-based). State holds
+  // FR ratios; the browser's grid layout turns them into pixels.
+  // Container resize, inspector open/close, narrow windows — all
+  // handled automatically by CSS Grid. The only thing this hook
+  // owns is persisting the user's chosen ratios across sessions.
+  const [colRatios, setColRatios] = useState<ColRatios>(() => {
     try {
-      const raw = localStorage.getItem("mh.library.colWidths");
+      const raw = localStorage.getItem("mh.library.colRatios");
       if (raw) {
-        const parsed = JSON.parse(raw) as Partial<Record<ColKey, number>>;
-        return { ...DEFAULT_COL_WIDTHS, ...parsed };
+        const parsed = JSON.parse(raw) as Partial<ColRatios>;
+        // Spread DEFAULT_RATIOS first so any missing key falls back
+        // cleanly (e.g., we ever add a new column in the future).
+        return { ...DEFAULT_RATIOS, ...parsed };
       }
     } catch {
       // localStorage blocked — fall back to defaults.
     }
-    return DEFAULT_COL_WIDTHS;
+    return DEFAULT_RATIOS;
   });
   useEffect(() => {
     try {
-      localStorage.setItem("mh.library.colWidths", JSON.stringify(colWidths));
+      localStorage.setItem("mh.library.colRatios", JSON.stringify(colRatios));
     } catch {
-      // localStorage blocked — widths are still live in memory.
+      // localStorage blocked — ratios still live in memory.
     }
-  }, [colWidths]);
+  }, [colRatios]);
 
   async function refresh() {
     try {
@@ -1618,20 +1644,20 @@ export default function LibraryPage() {
                 role="list"
                 style={
                   {
-                    "--col-title": `${colWidths.title}px`,
-                    "--col-tags": `${colWidths.tags}px`,
-                    "--col-res": `${colWidths.res}px`,
-                    "--col-dur": `${colWidths.dur}px`,
-                    "--col-size": `${colWidths.size}px`,
-                    "--col-date": `${colWidths.date}px`,
+                    "--col-title-fr": `${colRatios.title}fr`,
+                    "--col-tags-fr": `${colRatios.tags}fr`,
+                    "--col-res-fr": `${colRatios.res}fr`,
+                    "--col-dur-fr": `${colRatios.dur}fr`,
+                    "--col-size-fr": `${colRatios.size}fr`,
+                    "--col-date-fr": `${colRatios.date}fr`,
                   } as React.CSSProperties
                 }
               >
                 <ListHead
                   sortMode={sortMode}
                   onSort={setSortMode}
-                  colWidths={colWidths}
-                  onResize={setColWidths}
+                  ratios={colRatios}
+                  onResize={setColRatios}
                 />
 
                 {filtered.map((a) => (
@@ -2662,7 +2688,6 @@ function LibRow({
       <div className="lib-list-col col-dur mono">{fmtDuration(asset.duration_sec)}</div>
       <div className="lib-list-col col-size mono">{fmtBytes(asset.file_size)}</div>
       <div className="lib-list-col col-date mono">{addedStr}</div>
-      <div className="lib-list-col col-tail" />
     </button>
   );
 }
@@ -2683,13 +2708,13 @@ const COL_SORTS: Record<string, { asc: SortMode; desc: SortMode; defaultDir: "as
 function ListHead({
   sortMode,
   onSort,
-  colWidths,
+  ratios,
   onResize,
 }: {
   sortMode: SortMode;
   onSort: (m: SortMode) => void;
-  colWidths: Record<ColKey, number>;
-  onResize: (next: Record<ColKey, number>) => void;
+  ratios: ColRatios;
+  onResize: (next: ColRatios) => void;
 }) {
   function dirFor(col: keyof typeof COL_SORTS): "asc" | "desc" | null {
     const cfg = COL_SORTS[col];
@@ -2724,11 +2749,18 @@ function ListHead({
       </button>
     );
   }
-  // Drag handle on a column's right edge. Mousedown captures the
-  // starting width + cursor X; mousemove updates the column width
-  // (clamped to MIN_COL_WIDTHS); mouseup releases. Body cursor + a
-  // global "resizing" class give the user the col-resize cursor
-  // anywhere, even when they overshoot the 6px-wide handle.
+  // Drag handle on a column's right edge. Pair-resize semantics with
+  // CASCADE on grow:
+  //   • Dragging RIGHT: this column grows by dx, the immediate next
+  //     column shrinks by dx. If the next column hits its MIN_PX,
+  //     the cascade picks up the column AFTER that one, then the
+  //     one after, and so on — testers wanted "boundaries collide
+  //     and start moving together" and this is that.
+  //   • Dragging LEFT: this column shrinks (down to its own MIN_PX),
+  //     the immediate next column grows. No cascade needed since the
+  //     drag naturally stops when the dragged column hits its floor.
+  //   • Total of all ratios stays constant (=100), so the grid always
+  //     fits the container exactly — date never goes offscreen.
   function ResizeHandle({ col }: { col: ColKey }) {
     return (
       <span
@@ -2737,12 +2769,74 @@ function ListHead({
           e.preventDefault();
           e.stopPropagation();
           const startX = e.clientX;
-          const startWidth = colWidths[col];
+          const startRatios = { ...ratios };
+          const colIdx = COL_ORDER.indexOf(col);
+          const nextCol: ColKey | null = COL_ORDER[colIdx + 1] ?? null;
+          // Translate pixel drag → fr drag. We measure the container's
+          // EFFECTIVE width (clientWidth minus the 64px thumb track,
+          // minus the 6 × 10px grid gaps, minus the 2 × 10px row
+          // padding) at drag-start, then compute "how many fr units
+          // equal one pixel" so the drag tracks the cursor 1:1.
+          const handleEl = e.currentTarget as HTMLElement;
+          const scrollEl = handleEl.closest(".lib-grid-scroll") as HTMLElement | null;
+          const containerW = scrollEl?.clientWidth ?? 0;
+          const effectiveW = Math.max(1, containerW - 64 - 60 - 20);
+          const sumFr = COL_ORDER.reduce((acc, k) => acc + startRatios[k], 0);
+          const frPerPx = sumFr / effectiveW;
+          // Pixel mins → fr mins, evaluated against the current
+          // container width so floors stay real-world correct even
+          // when the user has the window narrow.
+          const minFr: Record<ColKey, number> = {
+            title: MIN_COL_PX.title * frPerPx,
+            tags: MIN_COL_PX.tags * frPerPx,
+            res: MIN_COL_PX.res * frPerPx,
+            dur: MIN_COL_PX.dur * frPerPx,
+            size: MIN_COL_PX.size * frPerPx,
+            date: MIN_COL_PX.date * frPerPx,
+          };
           document.body.classList.add("lib-resizing");
           function onMove(mv: MouseEvent) {
-            const dx = mv.clientX - startX;
-            const next = Math.max(MIN_COL_WIDTHS[col], startWidth + dx);
-            onResize({ ...colWidths, [col]: next });
+            const dxPx = mv.clientX - startX;
+            const dxFr = dxPx * frPerPx;
+            const next = { ...startRatios };
+            if (dxFr > 0) {
+              // BOUNDARY MOVES RIGHT. Dragged column grows; cascade
+              // RIGHTWARD — immediate next col shrinks first, then
+              // the col after that once the first one bottoms out,
+              // chaining until every column to the right is at its
+              // pixel floor.
+              let need = dxFr;
+              for (let i = colIdx + 1; i < COL_ORDER.length && need > 0; i++) {
+                const c = COL_ORDER[i];
+                const canGive = next[c] - minFr[c];
+                if (canGive <= 0) continue;
+                const give = Math.min(need, canGive);
+                next[c] -= give;
+                need -= give;
+              }
+              next[col] = startRatios[col] + (dxFr - need);
+            } else if (dxFr < 0 && nextCol) {
+              // BOUNDARY MOVES LEFT. The immediate right-side neighbor
+              // grows; cascade LEFTWARD — the dragged column shrinks
+              // first, then the column BEFORE it once the dragged
+              // column bottoms out, chaining until every column up
+              // to (but not including) the thumb is at its pixel
+              // floor. This is the symmetric counterpart to the
+              // rightward cascade above — testers wanted "drag them
+              // to the left together" and this is that.
+              let need = -dxFr;
+              for (let i = colIdx; i >= 0 && need > 0; i--) {
+                const c = COL_ORDER[i];
+                const canGive = next[c] - minFr[c];
+                if (canGive <= 0) continue;
+                const give = Math.min(need, canGive);
+                next[c] -= give;
+                need -= give;
+              }
+              const actualShrink = -dxFr - need;
+              next[nextCol] = startRatios[nextCol] + actualShrink;
+            }
+            onResize(next);
           }
           function onUp() {
             document.body.classList.remove("lib-resizing");
@@ -2753,11 +2847,12 @@ function ListHead({
           document.addEventListener("mouseup", onUp);
         }}
         onDoubleClick={(e) => {
-          // Double-click → reset this column to its default width.
+          // Double-click → reset ALL columns to defaults. Resetting
+          // just one would break the sum-stays-100 invariant.
           e.stopPropagation();
-          onResize({ ...colWidths, [col]: DEFAULT_COL_WIDTHS[col] });
+          onResize({ ...DEFAULT_RATIOS });
         }}
-        title="Drag to resize · double-click to reset"
+        title="Drag to resize · double-click to reset all columns"
       />
     );
   }
@@ -2787,14 +2882,11 @@ function ListHead({
         <SortBtn col="size" label="Size" />
         <ResizeHandle col="size" />
       </span>
+      {/* Last column — no right-edge handle. To resize date, drag the
+          size column's right edge instead. */}
       <span className="lib-list-col col-date">
         <SortBtn col="date" label="Added" />
-        <ResizeHandle col="date" />
       </span>
-      {/* Tail spacer — matches the trailing `1fr` in the grid template
-          so the head row aligns with the data rows when total column
-          widths are less than the container width. */}
-      <span className="lib-list-col col-tail" />
     </div>
   );
 }

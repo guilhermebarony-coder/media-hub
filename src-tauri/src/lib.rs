@@ -7,6 +7,7 @@ mod bridge;
 mod direct;
 mod library;
 mod settings;
+mod tray;
 mod updater;
 
 use serde::{Deserialize, Serialize};
@@ -2268,6 +2269,15 @@ pub fn run() {
             // spawn, drained as they finish or get killed.
             app.manage(JobRegistry::default());
 
+            // 1.3.x — Build the (hidden) system-tray icon used by
+            // "background mode". The topbar button toggles it; the
+            // window controls keep their normal behavior. Non-fatal:
+            // if tray creation fails (rare), the app still runs, the
+            // background button just won't have anywhere to hide to.
+            if let Err(e) = tray::build_tray(&app.handle()) {
+                eprintln!("[tray] failed to build tray icon: {e}");
+            }
+
             // 1.2.3 — Deep-link wiring.
             //
             // Three paths a mediahub:// URL can reach us:
@@ -2375,6 +2385,9 @@ pub fn run() {
             updater::yt_dlp_engine_info,
             updater::check_for_app_update,
             updater::install_app_update,
+            tray::app_enter_background,
+            tray::app_exit_background,
+            tray::app_set_tray_tooltip,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

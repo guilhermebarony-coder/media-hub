@@ -49,6 +49,14 @@ export const Icon = {
       <path d="M2 4h12M4 8h8M6 12h4" />
     </svg>
   ),
+  // 1.3.x — "background mode" / watcher. An eye: the app keeps
+  // watching the queue from the tray while the window is hidden.
+  eye: (p: P = {}) => (
+    <svg viewBox="0 0 16 16" {...base} {...p}>
+      <path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" />
+      <circle cx="8" cy="8" r="2" />
+    </svg>
+  ),
   grid: (p: P = {}) => (
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.4} {...p}>
       <rect x="2.5" y="2.5" width="4" height="4" rx="0.5" />

@@ -1,9 +1,11 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { invoke } from "@tauri-apps/api/core";
 import { Icon } from "../lib/icons";
 import { useActiveProject } from "../lib/activeProject";
 import { useDownloads } from "../lib/downloads";
 import { APP_VERSION } from "../lib/version";
+import { alertDialog } from "../lib/dialog";
 import { CommandPalette } from "../components/CommandPalette";
 
 // 1.1.3 — lazy-load pages here (moved from App.tsx) so the Shell owns
@@ -235,12 +237,66 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
         <span className="kbd">Ctrl Space</span>
       </button>
       <div className="topbar-icons">
+        <TrayTooltipSync />
+        <BackgroundModeButton />
         <NavLink to="/settings" className="ic-btn" title="Settings">
           <Icon.settings width={14} height={14} />
         </NavLink>
       </div>
     </div>
   );
+}
+
+// 1.3.x — "Run in background" button. Hides the window into the system
+// tray; the Rust backend + the (hidden but alive) download queue keep
+// running. The window controls keep their normal behavior — this button
+// is the explicit opt-in. First use shows a one-time hint so people
+// know where the app went and how to bring it back.
+function BackgroundModeButton() {
+  async function enterBackground() {
+    try {
+      const hinted = localStorage.getItem("mh.bgMode.hinted") === "1";
+      if (!hinted) {
+        await alertDialog(
+          "Media Hub will keep running in the system tray (bottom-right of " +
+            "the taskbar — it may be tucked under the ▲ arrow).\n\n" +
+            "Downloads continue in the background. Click the tray icon any " +
+            "time to bring the window back.",
+          { title: "Running in the background" },
+        );
+        localStorage.setItem("mh.bgMode.hinted", "1");
+      }
+      await invoke("app_enter_background");
+    } catch (e) {
+      console.error("[bg] enter background failed:", e);
+    }
+  }
+  return (
+    <button
+      type="button"
+      className="ic-btn"
+      onClick={() => void enterBackground()}
+      title="Run in background — hides to the tray, keeps downloading"
+    >
+      <Icon.eye width={15} height={15} />
+    </button>
+  );
+}
+
+// 1.3.x — keeps the system-tray tooltip in sync with the live active
+// download count, so while the window is hidden a hover over the tray
+// icon reads "Media Hub — 2 downloading". No-op in the backend when
+// the tray isn't visible. Renders nothing.
+function TrayTooltipSync() {
+  const { activeCount } = useDownloads();
+  useEffect(() => {
+    const text =
+      activeCount > 0
+        ? `Media Hub — ${activeCount} downloading`
+        : "Media Hub";
+    void invoke("app_set_tray_tooltip", { text }).catch(() => {});
+  }, [activeCount]);
+  return null;
 }
 
 function ActivityBadge() {

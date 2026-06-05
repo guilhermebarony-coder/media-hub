@@ -3676,15 +3676,20 @@ textarea.field-input {
      header resize handles to adjust each metadata column. The title
      column is `minmax(120px, 1fr)` so it absorbs slack but can't
      collapse to nothing if the metadata columns are dragged wide. */
+  /* 1.3.x — Ratio-driven grid template. State stores fr values; the
+     browser turns them into pixels at layout time. minmax(MIN_PX, fr)
+     enforces hard pixel floors so labels and worst-case content
+     (e.g., pt-BR full dates) never get truncated. Total of all
+     columns equals the available width, so date can never be
+     dragged offscreen. */
   grid-template-columns:
-    64px                                 /* thumb (fixed) */
-    var(--col-title, 380px)              /* title */
-    var(--col-tags, 180px)               /* tags */
-    var(--col-res, 56px)                 /* res */
-    var(--col-dur, 72px)                 /* duration */
-    var(--col-size, 72px)                /* size */
-    var(--col-date, 78px)                /* date */
-    minmax(0, 1fr);                      /* tail spacer (absorbs slack) */
+    64px                                                    /* thumb (fixed) */
+    minmax(200px, var(--col-title-fr, 40fr))                /* title */
+    minmax(80px, var(--col-tags-fr, 18fr))                  /* tags */
+    minmax(56px, var(--col-res-fr, 8fr))                    /* res */
+    minmax(80px, var(--col-dur-fr, 8fr))                    /* duration */
+    minmax(80px, var(--col-size-fr, 9fr))                   /* size */
+    minmax(140px, var(--col-date-fr, 17fr));                /* date */
   align-items: center;
   gap: 10px;
   padding: 4px 10px;
@@ -3740,36 +3745,55 @@ textarea.field-input {
 /* 1.3.x — column resize handles. A narrow strip on the right edge
    of each resizable header cell. Invisible by default; a lime tint
    appears on hover/active so users discover the affordance. */
-.lib-list-head .lib-list-col {
+/* Three-class selector so this beats `.lib-list-col.col-tags`
+   (which ships `overflow: hidden`) on specificity. Without this
+   the tags column's clip eats its handle and the divider between
+   tags and res is invisible. */
+.lib-list .lib-list-head .lib-list-col {
   position: relative;
+  overflow: visible;
 }
 .lib-col-resize {
+  /* Spans the full 10px gap between this column and its right
+     neighbor — the natural "no man's land" where a divider belongs.
+     `right: -10px` puts the handle's right edge 10px past the col,
+     and `width: 10px` makes it exactly fill the gap. The cursor
+     reads as col-resize anywhere over the gap. */
   position: absolute;
   top: 0;
   bottom: 0;
-  right: -5px;
-  width: 8px;
+  right: -10px;
+  width: 10px;
   cursor: col-resize;
   z-index: 3;
   user-select: none;
 }
 .lib-col-resize::before {
-  /* Visible 1px hairline centered in the 8px hit area. Faint by
-     default so it doesn't compete with the row borders; lights up
-     in accent on hover/drag for clear feedback. */
+  /* Stylized divider — subtle 1px line at rest, inset top/bottom so
+     it reads as a small delicate marker (not a chunky structural
+     bar). Brightens to a 2px lime line spanning more of the cell
+     height on hover so it's unmistakably the drag target.
+     `border-radius` softens both ends for a polished feel. */
   content: "";
   position: absolute;
   left: 50%;
-  top: 4px;
-  bottom: 4px;
+  transform: translateX(-50%);
+  top: 28%;
+  bottom: 28%;
   width: 1px;
-  background: var(--line-hi);
-  transition: background 80ms linear;
+  background: var(--text-3);
+  opacity: 0.5;
+  border-radius: 2px;
+  transition: background 120ms ease-out, opacity 120ms ease-out,
+              width 120ms ease-out, top 120ms ease-out, bottom 120ms ease-out;
 }
 .lib-col-resize:hover::before,
 .lib-resizing .lib-col-resize::before {
   background: var(--accent);
+  opacity: 1;
   width: 2px;
+  top: 12%;
+  bottom: 12%;
 }
 /* Lock the cursor across the whole document during a drag so users
    don't lose the col-resize affordance when they overshoot the
