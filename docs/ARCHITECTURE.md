@@ -1,15 +1,40 @@
 # Media Hub — Architecture
 
-Status: living doc, last refreshed 2026-05-27 (post 1.2.15 — audio
-downloads + the browser-extension stack: localhost HTTP bridge,
-`mediahub://` deep link, sideloadable MV3 extension with stream
-sniffer + in-page buttons on Twitter/Reddit). Earlier baseline (1.1.6):
-DownloadsProvider lifted state above the router, keep-alive Shell,
-topbar ActivityBadge, OrphanScanner on boot, CloseGuard removed due to
-Tauri bug #7119. This document is the **map** of
-what's actually built and where it lives. As code lands, this doc
-updates to match. If it drifts, fix the doc. Detailed contracts
-live in per-module header comments.
+Status: living doc, last refreshed 2026-06-04 (post 1.3.3). This document
+is the **map** of what's actually built and where it lives. As code
+lands, this doc updates to match. If it drifts, fix the doc. Detailed
+contracts live in per-module header comments.
+
+**What landed in the 1.3.x line (on top of the 1.2.15 baseline below):**
+- **Pinterest / TikTok / Instagram / YouTube extension overlays** — the
+  body-portal in-page download button generalized beyond Twitter/Reddit;
+  click-time live `<video>.currentSrc` capture; sniffer panel rework
+  (group-by-quality + inline preview + filter chips).
+- **Direct HTTP download path** (`src-tauri/src/direct.rs`) — reqwest
+  streaming with platform-aware Referer headers, for CDN/sniffed URLs
+  yt-dlp can't handle.
+- **Command palette** (`src/components/CommandPalette.tsx`) — Ctrl+Space;
+  Clips / Projects / Tags tabs; cross-route handoff via CustomEvents
+  (`mh:open-asset`, `mh:apply-tag-filter`).
+- **Library list view** — toggle alongside the grid; ratio-based
+  resizable + sortable columns; selection/drag/context-menu parity with
+  cards.
+- **Background mode** (`src-tauri/src/tray.rs`) — topbar eye button hides
+  the window to the system tray; backend + download queue keep running;
+  live tray tooltip; left-click / Show / Quit.
+- **In-app dialogs** (`src/lib/dialog.ts` + `src/components/DialogHost.tsx`)
+  — replaced native OS dialogs (and their system chime) with a styled,
+  silent modal behind the same async `confirmDialog` / `alertDialog` API.
+- **App auto-updater** (`tauri-plugin-updater`) — signed bundles verified
+  against the embedded pubkey; GitHub Releases `latest.json` endpoint.
+  Preferred-max-quality setting; per-platform pretty titles.
+
+**1.2.15 baseline:** audio downloads + the browser-extension stack
+(localhost HTTP bridge, `mediahub://` deep link, sideloadable MV3
+extension with stream sniffer + in-page buttons on Twitter/Reddit).
+**1.1.6 baseline:** DownloadsProvider lifted above the router, keep-alive
+Shell, topbar ActivityBadge, OrphanScanner on boot, CloseGuard removed
+(Tauri bug #7119).
 
 ✅ = shipped · 🟡 = planned · ❌ = decided against
 

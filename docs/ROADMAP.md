@@ -56,35 +56,43 @@ Decided 2026-05-19. Captured here because *why* matters more than *what*.
 
 ---
 
-## Current state — 2026-05-30 (post 1.3.0 + auto-updater scaffolded)
+## Current state — 2026-06-04 (post 1.3.3, shipped to testers)
 
-**The original 1.0 plan is moot — the app shipped past it.**
-We never cut a formal 1.0; the project flowed past 0.8 → 1.0 → 1.1 → 1.2
-→ 1.3.0 as a rolling release to a small tester circle. Daily-usable
-since ~1.1, with tester-shipped builds at 1.0.x and 1.2.15. Today the
-6-month working-tree drought ended: `v1.3.0` tagged at `5a34485`.
+**The original 1.0 plan is moot — the app shipped past it.** We never cut
+a formal 1.0; the project flowed 0.8 → 1.0 → 1.1 → 1.2 → 1.3.x as a
+rolling release to a small tester circle. Daily-usable since ~1.1.
+`v1.3.3` is the current tag, auto-update working end-to-end.
 
 What's live right now:
-- Library: multi-select + box-drag, folders sidebar, always-on inspector,
-  filter/tag/sort popups, drag-to-NLE, missing-file flagging, in-app
-  trash with restore.
-- Projects: custom on-disk folder location, master/detail UX,
-  Close vs Delete with custom-folder safety.
-- Audio downloads (MP3 / M4A / FLAC) + waveform thumbnails.
-- Browser extension: localhost bridge, deep-link `mediahub://`,
-  MV3 popup + stream sniffer + in-page buttons on Twitter/Reddit.
-- yt-dlp engine auto-updater (silent, 24h-throttled, nightly channel).
-- App auto-updater **scaffolded** (signed key + plugin + UI in tree;
-  needs first GitHub Release to be useful — see NOTES 2026-05-30).
+- **Library:** grid **+ list view** (ratio-based resizable/sortable
+  columns), multi-select + box-drag, folders sidebar, always-on
+  inspector (icon-only actions, clickable source link), filter/tag/sort
+  popups, drag-to-NLE, missing-file flagging, in-app trash with restore.
+- **Command palette** (Ctrl+Space): Clips / Projects / Tags search with
+  cross-route jump-to handoff.
+- **Projects:** custom on-disk folder location, master/detail UX, Close
+  vs Delete with custom-folder safety.
+- **Downloads:** video + audio (MP3/M4A/FLAC) + waveform thumbnails,
+  preferred-max-quality setting, segment trim, transcode presets, batch
+  queue (newest-first), direct HTTP fallback for CDN/sniffed URLs.
+- **Browser extension:** localhost bridge, deep-link `mediahub://`, MV3
+  popup + reworked stream sniffer (group-by-quality + inline preview +
+  filter chips), in-page download buttons on Twitter / Reddit / YouTube /
+  Pinterest / TikTok / Instagram.
+- **Background mode:** tray + topbar eye button; window hides, downloads
+  keep running.
+- **In-app dialogs:** custom, silent, styled (no OS chime).
+- **Auto-update:** app updater (signed, GitHub Releases) + yt-dlp engine
+  updater (silent, 24h-throttled).
 
-What's parked for the next session(s):
-- Pinterest support (popup-aware page URL + in-page button) — *blob URL
-  diagnosis logged in NOTES*.
-- Sniffer panel rework (filter empties / dedupe streams / preserve
-  state across tab switches / inline preview).
-- Wire up the dead UI affordances (top-bar search, Grid/List toggle,
-  copy audit).
-- App health checkup (was 0.9 plan) — still owed before 2.0.
+What's next (priority order):
+1. **Nested folder structure** — folders-in-folders. Needs `parent_id` on
+   the folders table + recursive CRUD + sidebar tree UI + DnD reparent.
+2. **Eagle integration investigation** — export/sync to an Eagle library
+   (see decision-log entry 2026-06-04 below).
+3. App health checkup carryover (was 0.9 plan) — still owed before 2.0.
+4. Release automation — `scripts/release.*` to generate `latest.json` +
+   upload in one command (see NOTES gotcha 2026-06-04).
 
 The "Path to 1.0" table below is HISTORICAL — keeping it for archeology.
 
