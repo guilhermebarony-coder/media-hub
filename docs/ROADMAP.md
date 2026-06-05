@@ -790,6 +790,51 @@ Anything more speculative than this belongs in `docs/NOTES.md` under
 
 Newest first. Every entry: what we decided, when, and *why*.
 
+### 2026-06-04 — Eagle integration: research notes (not yet decided)
+
+Investigated how hard an Eagle (eagle.cool DAM) integration would be.
+Findings, for when we pick this up:
+
+**Three integration surfaces:**
+1. **Local HTTP API** (`http://localhost:41595`) — the clean path. Eagle
+   must be running; no auth for localhost (token only for cross-device
+   LAN). Endpoints we'd use: `POST /api/item/addFromPath[s]` (push our
+   files in with name/website/tags/annotation/folderId), `addFromURL[s]`,
+   `GET /api/item/list` + `/api/item/info` (read/dedup), `GET
+   /api/folder/list` + `POST /api/folder/create` (mirror our folders),
+   `GET /api/application/info` (detect Eagle), `GET /api/library/info`
+   (which library is open).
+2. **On-disk library format** — libraries are plain folders
+   (`X.library/images/<id>.info/` = metadata.json + original + thumb).
+   Readable/writable directly but undocumented + cache-backed + corruption
+   risk. Avoid unless we need Eagle-not-running sync.
+3. **Eagle plugin SDK** (JS plugins inside Eagle) — wrong direction; we'd
+   be building an Eagle plugin, not integrating Eagle into us.
+
+**Difficulty by feature:**
+- *Download/Send directly to Eagle* — EASY (~1 day). After download +
+  transcode, POST `addFromPaths` with final path + title + source_url +
+  our tags + mapped folderId. Settings toggle + optional auto-send.
+- *Export selection to Eagle* — EASY (extends above). Library right-click
+  "Send to Eagle" (single + batch).
+- *Folder-tree mirroring* — MEDIUM. `folder/create` + cache an
+  ours→Eagle id map so re-exports land in the right place.
+- *True two-way sync* — HARD / partial. Eagle's public API is add+read
+  heavy, light on update/delete. Realistic ceiling: one-way push that
+  re-sends new/changed (store the returned Eagle item id per asset).
+  Eagle→us reconciliation is real work; scope out of v1.
+
+**Freedom level:** HIGH for push/export, MEDIUM for read, LOW for
+programmatic update/delete and bidirectional sync.
+
+**Caveats:** Eagle must be running (detect + graceful fallback); Eagle
+*copies* files into its own managed storage (duplication on disk); API is
+stable-ish but unversioned; localhost:41595 is open to any local process.
+
+**Recommended phasing if we do it:** P1 detect + "Send to Eagle"
+(single/batch, with tags+source) + optional auto-send-on-download → P2
+folder mirroring + id-map cache → P3 (maybe never) read-back sync.
+
 ### 2026-05-30 — 1.3.0 cut + app auto-updater scaffolded (catch-up commit)
 
 **Two big things.** First, the working-tree drought ended: every commit
