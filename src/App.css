@@ -1343,6 +1343,11 @@ textarea.field-input {
   align-items: center;
   gap: 8px;
   padding: 5px 8px;
+  /* Fixed box model so every row is identical height regardless of
+     state (selected / colored / anchor). Prevents the per-row padding
+     drift the eye picks up otherwise. */
+  box-sizing: border-box;
+  min-height: 26px;
   border-radius: 3px;
   font-size: 12px;
   color: var(--text-1);
@@ -1474,6 +1479,14 @@ textarea.field-input {
    distracting border the earlier outline drew. */
 .lib-folder.multiselected {
   background: color-mix(in srgb, var(--accent) 13%, transparent);
+}
+/* The "primary" of a multi-selection (last clicked / range anchor) gets
+   a stronger fill + a lime left bar so you can see where the next
+   Shift-range will pivot from. Uses inset box-shadow (not border) so it
+   doesn't shift the row's content or change its height. */
+.lib-folder.multiselected.anchor {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 /* 1.3.x — folder breadcrumb (focused-folder path). */

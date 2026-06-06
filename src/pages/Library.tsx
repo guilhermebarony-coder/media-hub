@@ -585,7 +585,9 @@ export default function LibraryPage() {
     return order;
   }, [childrenByParent, expandedFolders]);
   // Anchor for Shift-range selection (last plain/ctrl-clicked folder).
-  const folderAnchorRef = useRef<string | null>(null);
+  // State (not a ref) so the render can mark the "primary" selected
+  // folder distinctly within a multi-selection.
+  const [folderAnchor, setFolderAnchor] = useState<string | null>(null);
 
   // Child folders to surface as drill-in cards for the current view:
   // children of the active folder, or top-level folders on "All clips".
@@ -637,6 +639,9 @@ export default function LibraryPage() {
     const isActive = folderFilter.kind === "id" && folderFilter.id === f.id && !inTrash;
     const isRenaming = renamingFolderId === f.id;
     const isSelected = selectedFolderIds.has(f.id);
+    // The "primary" of a multi-selection (last clicked) gets a stronger
+    // marker so you can tell where the next Shift-range will anchor.
+    const isAnchor = isSelected && selectedFolderIds.size > 1 && folderAnchor === f.id;
     return (
       <li key={f.id} className="lib-folder-node">
         <div
@@ -644,6 +649,7 @@ export default function LibraryPage() {
             "lib-folder" +
             (isActive ? " active" : "") +
             (isSelected ? " multiselected" : "") +
+            (isAnchor ? " anchor" : "") +
             (folderDropHover === f.id ? " drop-hover" : "") +
             (folderReparentHover === f.id ? " reparent-hover" : "")
           }
@@ -651,19 +657,20 @@ export default function LibraryPage() {
             if (isRenaming) return;
             // Shift-click selects the range between the anchor and this
             // folder, in visible order.
-            if (e.shiftKey && folderAnchorRef.current) {
+            if (e.shiftKey && folderAnchor) {
               const order = visibleFolderOrder;
-              const a = order.indexOf(folderAnchorRef.current);
+              const a = order.indexOf(folderAnchor);
               const b = order.indexOf(f.id);
               if (a !== -1 && b !== -1) {
                 const [lo, hi] = a < b ? [a, b] : [b, a];
                 setSelectedFolderIds(new Set(order.slice(lo, hi + 1)));
+                setFolderAnchor(f.id);
                 return;
               }
             }
             // Ctrl/Cmd-click toggles this folder in the multi-selection.
             if (e.ctrlKey || e.metaKey) {
-              folderAnchorRef.current = f.id;
+              setFolderAnchor(f.id);
               setSelectedFolderIds((prev) => {
                 const next = new Set(prev);
                 if (next.has(f.id)) next.delete(f.id);
@@ -673,7 +680,7 @@ export default function LibraryPage() {
               return;
             }
             // Plain click filters + clears any multi-selection.
-            folderAnchorRef.current = f.id;
+            setFolderAnchor(f.id);
             if (selectedFolderIds.size > 0) setSelectedFolderIds(new Set());
             setInTrash(false);
             setFolderFilter({ kind: "id", id: f.id });
