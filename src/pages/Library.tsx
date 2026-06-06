@@ -146,6 +146,9 @@ export default function LibraryPage() {
   }, [expandedFolders]);
   // Reparent drag state — which folder is being dragged onto which.
   const [folderReparentHover, setFolderReparentHover] = useState<string | null>(null);
+  // 1.3.x — multi-select folders (Ctrl/Cmd-click) for bulk delete.
+  // Plain click still filters; this set only grows via modifier-click.
+  const [selectedFolderIds, setSelectedFolderIds] = useState<Set<string>>(new Set());
   // 1.3.x — resizable Library sidebar. Persisted px width.
   const [sideWidth, setSideWidth] = useState<number>(() => {
     try {
@@ -442,6 +445,27 @@ export default function LibraryPage() {
       await alertDialog(String(e), { title: "Couldn't delete folder", kind: "error" });
     }
   }
+  // 1.3.x — bulk delete folders (one confirm covering all). Children of
+  // deleted folders re-parent to top level; clips fall back to
+  // Uncategorized. See folder_delete_many.
+  async function bulkDeleteFolders() {
+    const ids = Array.from(selectedFolderIds);
+    if (ids.length === 0) return;
+    const msg = `Delete ${ids.length} folders?\n\nAny clips inside fall back to Uncategorized (files stay on disk). Subfolders move to the top level.`;
+    if (!(await confirmDialog(msg, { title: `Delete ${ids.length} folders?`, kind: "warning" })))
+      return;
+    try {
+      await invoke<number>("folder_delete_many", { ids });
+      // If the active filter pointed at a deleted folder, reset it.
+      if (folderFilter.kind === "id" && selectedFolderIds.has(folderFilter.id)) {
+        setFolderFilter({ kind: "any" });
+      }
+      setSelectedFolderIds(new Set());
+    } catch (e) {
+      await alertDialog(String(e), { title: "Couldn't delete folders", kind: "error" });
+    }
+  }
+
   // Called from inspector dropdowns (single + batch).
   async function moveSelectionToFolder(folderId: string | null) {
     const ids = Array.from(selection);
@@ -508,20 +532,34 @@ export default function LibraryPage() {
     const expanded = expandedFolders.has(f.id);
     const isActive = folderFilter.kind === "id" && folderFilter.id === f.id && !inTrash;
     const isRenaming = renamingFolderId === f.id;
+    const isSelected = selectedFolderIds.has(f.id);
     return (
       <li key={f.id} className="lib-folder-node">
         <div
           className={
             "lib-folder" +
             (isActive ? " active" : "") +
+            (isSelected ? " multiselected" : "") +
             (folderDropHover === f.id ? " drop-hover" : "") +
             (folderReparentHover === f.id ? " reparent-hover" : "")
           }
-          onClick={() => {
-            if (!isRenaming) {
-              setInTrash(false);
-              setFolderFilter({ kind: "id", id: f.id });
+          onClick={(e) => {
+            if (isRenaming) return;
+            // Ctrl/Cmd-click toggles multi-selection (for bulk delete)
+            // instead of changing the filter.
+            if (e.ctrlKey || e.metaKey) {
+              setSelectedFolderIds((prev) => {
+                const next = new Set(prev);
+                if (next.has(f.id)) next.delete(f.id);
+                else next.add(f.id);
+                return next;
+              });
+              return;
             }
+            // Plain click filters + clears any multi-selection.
+            if (selectedFolderIds.size > 0) setSelectedFolderIds(new Set());
+            setInTrash(false);
+            setFolderFilter({ kind: "id", id: f.id });
           }}
           onDoubleClick={() => {
             setRenamingFolderId(f.id);
@@ -1610,6 +1648,32 @@ export default function LibraryPage() {
               <Icon.plus width={11} height={11} />
             </button>
           </div>
+          {/* 1.3.x — folder multi-select action bar (Ctrl/Cmd-click to
+              add folders to the selection, then delete them all at once
+              with a single confirm). */}
+          {selectedFolderIds.size > 0 && (
+            <div className="lib-folder-selbar">
+              <span className="lib-folder-selbar-count mono">
+                {selectedFolderIds.size} selected
+              </span>
+              <button
+                type="button"
+                className="lib-folder-selbar-btn danger"
+                onClick={() => void bulkDeleteFolders()}
+                title="Delete selected folders"
+              >
+                <Icon.trash width={11} height={11} /> Delete
+              </button>
+              <button
+                type="button"
+                className="lib-folder-selbar-btn"
+                onClick={() => setSelectedFolderIds(new Set())}
+                title="Clear selection"
+              >
+                Clear
+              </button>
+            </div>
+          )}
           {/* 1.3.x — recursive folder tree. Top-level folders
               (parent_id === null) are the roots; renderFolderNode
               recurses into expanded children. Dropping a folder onto

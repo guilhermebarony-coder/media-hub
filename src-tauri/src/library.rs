@@ -2532,6 +2532,71 @@ pub async fn folder_delete(
     Ok(())
 }
 
+/// 1.3.x — Bulk-delete folders in one transaction (one confirm, not
+/// fifty). Direct assets in any deleted folder fall back to
+/// Uncategorized; surviving children of a deleted folder re-parent to
+/// top level (NULL) so nothing is left pointing at a dead row.
+#[tauri::command]
+pub async fn folder_delete_many(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    ids: Vec<String>,
+) -> Result<u32, String> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|e| format!("folder_delete_many begin: {e}"))?;
+
+    // Null assets that live directly in any of the deleted folders.
+    let null_sql = format!("UPDATE assets SET folder_id = NULL WHERE folder_id IN ({placeholders})");
+    let mut q = sqlx::query(&null_sql);
+    for id in &ids {
+        q = q.bind(id);
+    }
+    q.execute(&mut *tx)
+        .await
+        .map_err(|e| format!("folder_delete_many null-assets: {e}"))?;
+
+    // Reparent surviving children (parent in delete-set, child not) to
+    // top level so we never leave a dangling parent_id.
+    let reparent_sql = format!(
+        "UPDATE folders SET parent_id = NULL \
+         WHERE parent_id IN ({placeholders}) AND id NOT IN ({placeholders})"
+    );
+    let mut q = sqlx::query(&reparent_sql);
+    for id in &ids {
+        q = q.bind(id);
+    }
+    for id in &ids {
+        q = q.bind(id);
+    }
+    q.execute(&mut *tx)
+        .await
+        .map_err(|e| format!("folder_delete_many reparent: {e}"))?;
+
+    // Delete the folders.
+    let del_sql = format!("DELETE FROM folders WHERE id IN ({placeholders})");
+    let mut q = sqlx::query(&del_sql);
+    for id in &ids {
+        q = q.bind(id);
+    }
+    let res = q
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("folder_delete_many: {e}"))?;
+
+    tx.commit()
+        .await
+        .map_err(|e| format!("folder_delete_many commit: {e}"))?;
+    let _ = app.emit("library:changed", ());
+    Ok(res.rows_affected() as u32)
+}
+
 /// 1.3.x — Reparent a folder under a new parent (or to top-level when
 /// `new_parent_id` is None). Guards against cycles: a folder can't be
 /// moved into itself or any of its own descendants.

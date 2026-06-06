@@ -2374,6 +2374,7 @@ pub fn run() {
             library::folder_list,
             library::folder_rename,
             library::folder_delete,
+            library::folder_delete_many,
             library::folder_move,
             library::folder_set_color,
             library::folder_reorder,
