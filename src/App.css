@@ -1335,7 +1335,10 @@ textarea.field-input {
   padding: 4px 6px 12px;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  /* Flush rows (no gap): a dense list reads cleaner than detached
+     pills, and avoids the uneven-looking slivers the 1px gap created
+     between selected rows. */
+  gap: 0;
   border-bottom: 1px solid var(--line);
 }
 .lib-folder {
@@ -1348,7 +1351,9 @@ textarea.field-input {
      drift the eye picks up otherwise. */
   box-sizing: border-box;
   min-height: 26px;
-  border-radius: 3px;
+  /* No per-row radius — rows stack flush so consecutive selected rows
+     form one continuous highlight instead of rounded pills with gaps. */
+  border-radius: 0;
   font-size: 12px;
   color: var(--text-1);
   cursor: pointer;
@@ -1440,7 +1445,7 @@ textarea.field-input {
   margin: 0 0 0 13px;
   border-bottom: 0;
   border-left: 1px solid var(--line);
-  gap: 1px;
+  gap: 0;
 }
 .lib-folders-empty {
   font-size: 11px;
