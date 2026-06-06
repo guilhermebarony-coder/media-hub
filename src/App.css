@@ -1515,6 +1515,112 @@ textarea.field-input {
   background: color-mix(in srgb, var(--err, #e5484d) 14%, transparent);
 }
 
+/* 1.3.x — folder breadcrumb (focused-folder path). */
+.lib-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px 2px 12px;
+  font-size: 12px;
+}
+.lib-crumb-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.lib-crumb {
+  background: none;
+  border: 0;
+  padding: 2px 5px;
+  border-radius: 3px;
+  color: var(--text-2);
+  cursor: pointer;
+  font: inherit;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib-crumb:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+.lib-crumb.current {
+  color: var(--text-0);
+  font-weight: 600;
+  padding: 2px 5px;
+}
+.lib-crumb-sep {
+  color: var(--text-3);
+  transform: rotate(-90deg);
+  flex-shrink: 0;
+}
+.lib-rollup-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+}
+.lib-rollup-toggle input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* 1.3.x — subfolder drill-in cards. */
+.lib-subfolders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 0 14px;
+}
+.lib-subfolder-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 11px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text-1);
+  max-width: 220px;
+}
+.lib-subfolder-card:hover {
+  border-color: var(--line-hi);
+  background: var(--bg-2);
+}
+.lib-subfolder-card svg {
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.lib-subfolder-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.lib-subfolder-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib-subfolder-count {
+  font-size: 10.5px;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.lib-subfolder-emptyhint {
+  font-size: 12px;
+  padding: 4px 2px;
+}
+
 /* Color dot (replaces the folder glyph when a folder has an accent). */
 .lib-folder-dot {
   width: 9px;

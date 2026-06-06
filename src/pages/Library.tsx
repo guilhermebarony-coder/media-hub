@@ -149,6 +149,22 @@ export default function LibraryPage() {
   // 1.3.x — multi-select folders (Ctrl/Cmd-click) for bulk delete.
   // Plain click still filters; this set only grows via modifier-click.
   const [selectedFolderIds, setSelectedFolderIds] = useState<Set<string>>(new Set());
+  // 1.3.x — "show subfolder contents" rollup. When on and viewing a
+  // folder, the grid includes clips from all descendant folders too.
+  const [rollupSubfolders, setRollupSubfolders] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("mh.library.rollupSubfolders") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("mh.library.rollupSubfolders", rollupSubfolders ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [rollupSubfolders]);
   // 1.3.x — resizable Library sidebar. Persisted px width.
   const [sideWidth, setSideWidth] = useState<number>(() => {
     try {
@@ -322,11 +338,19 @@ export default function LibraryPage() {
   async function refresh() {
     try {
       const scopeFilter = scopeToFilter(scope);
+      // 1.3.x — when "show subfolder contents" is on and we're viewing a
+      // specific folder, expand the filter to that folder + all of its
+      // descendants (the Ids variant) so nested clips roll up into view.
+      let folderArg: FolderFilter | null =
+        inTrash || folderFilter.kind === "any" ? null : folderFilter;
+      if (folderArg && folderFilter.kind === "id" && rollupSubfolders) {
+        folderArg = { kind: "ids", ids: descendantIds(folderFilter.id) };
+      }
       const filters: LibraryFilters = {
         query: debouncedQuery || null,
         tags: inTrash ? null : activeTags.size > 0 ? Array.from(activeTags) : null,
         scope: scopeFilter,
-        folder: inTrash || folderFilter.kind === "any" ? null : folderFilter,
+        folder: folderArg,
         limit: 500,
         trashed: inTrash,
       };
@@ -510,11 +534,74 @@ export default function LibraryPage() {
     return map;
   }, [folders]);
 
+  // `descendantIds(rootId)` → [rootId, ...all nested descendant ids].
+  // Used by the "show subfolder contents" rollup filter.
+  const descendantIds = useMemo(() => {
+    return (rootId: string): string[] => {
+      const out: string[] = [];
+      const stack = [rootId];
+      while (stack.length) {
+        const cur = stack.pop()!;
+        out.push(cur);
+        for (const child of childrenByParent.get(cur) ?? []) stack.push(child.id);
+      }
+      return out;
+    };
+  }, [childrenByParent]);
+
+  // `folderById` for breadcrumb path-walking.
+  const folderById = useMemo(() => {
+    const m = new Map<string, Folder>();
+    for (const f of folders) m.set(f.id, f);
+    return m;
+  }, [folders]);
+
+  // Breadcrumb path (root → current) for the active folder filter.
+  const folderPath = useMemo((): Folder[] => {
+    if (folderFilter.kind !== "id") return [];
+    const path: Folder[] = [];
+    let cur: Folder | undefined = folderById.get(folderFilter.id);
+    const guard = new Set<string>();
+    while (cur && !guard.has(cur.id)) {
+      guard.add(cur.id);
+      path.unshift(cur);
+      cur = cur.parent_id ? folderById.get(cur.parent_id) : undefined;
+    }
+    return path;
+  }, [folderFilter, folderById]);
+
+  // Child folders to surface as drill-in cards for the current view:
+  // children of the active folder, or top-level folders on "All clips".
+  const subfolderCards = useMemo((): Folder[] => {
+    if (inTrash) return [];
+    if (folderFilter.kind === "id") return childrenByParent.get(folderFilter.id) ?? [];
+    if (folderFilter.kind === "any") return childrenByParent.get(null) ?? [];
+    return [];
+  }, [folderFilter, childrenByParent, inTrash]);
+
   function toggleExpand(id: string) {
     setExpandedFolders((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
+      return next;
+    });
+  }
+
+  // Drill into a folder (from a subfolder card or breadcrumb segment).
+  function drillIntoFolder(id: string) {
+    setInTrash(false);
+    setSelectedFolderIds(new Set());
+    setFolderFilter({ kind: "id", id });
+    // Keep the tree in sync: expand ancestors so the focused folder is
+    // visible in the sidebar too.
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      let cur = folderById.get(id);
+      while (cur?.parent_id) {
+        next.add(cur.parent_id);
+        cur = folderById.get(cur.parent_id);
+      }
       return next;
     });
   }
@@ -656,7 +743,7 @@ export default function LibraryPage() {
   useEffect(() => {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedQuery, activeTags, scope, folderFilter, inTrash]);
+  }, [debouncedQuery, activeTags, scope, folderFilter, inTrash, rollupSubfolders]);
 
   // 1.3.x — Listen for the command palette's open-asset event.
   // Switches the active scope when the target asset lives in a
@@ -1915,13 +2002,90 @@ export default function LibraryPage() {
             ref={gridScrollRef}
             onMouseDown={startBoxDrag}
           >
-            {filtered.length === 0 ? (
+            {/* 1.3.x — breadcrumb path for the focused folder. Each
+                segment re-roots the view; "Library" clears the folder
+                filter. Only shown when inside a folder. */}
+            {!inTrash && folderPath.length > 0 && (
+              <div className="lib-breadcrumb">
+                <button
+                  type="button"
+                  className="lib-crumb"
+                  onClick={() => setFolderFilter({ kind: "any" })}
+                >
+                  Library
+                </button>
+                {folderPath.map((seg, i) => (
+                  <span key={seg.id} className="lib-crumb-seg">
+                    <Icon.chev width={9} height={9} className="lib-crumb-sep" />
+                    {i === folderPath.length - 1 ? (
+                      <span className="lib-crumb current">{seg.name}</span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="lib-crumb"
+                        onClick={() => drillIntoFolder(seg.id)}
+                      >
+                        {seg.name}
+                      </button>
+                    )}
+                  </span>
+                ))}
+                {subfolderCards.length > 0 && (
+                  <label className="lib-rollup-toggle" title="Include clips from subfolders">
+                    <input
+                      type="checkbox"
+                      checked={rollupSubfolders}
+                      onChange={(e) => setRollupSubfolders(e.target.checked)}
+                    />
+                    Show subfolder contents
+                  </label>
+                )}
+              </div>
+            )}
+
+            {/* 1.3.x — subfolder drill-in cards. Children of the current
+                folder (or top-level folders on "All clips") shown as
+                clickable chips so you can navigate without the tree. */}
+            {subfolderCards.length > 0 && (
+              <div className="lib-subfolders">
+                {subfolderCards.map((sf) => (
+                  <button
+                    key={sf.id}
+                    type="button"
+                    className="lib-subfolder-card"
+                    onClick={() => drillIntoFolder(sf.id)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setFolderCtxMenu({ x: e.clientX, y: e.clientY, folder: sf });
+                    }}
+                    title={sf.name}
+                  >
+                    {sf.color ? (
+                      <span className="lib-subfolder-dot" style={{ background: sf.color }} />
+                    ) : (
+                      <Icon.folder width={14} height={14} />
+                    )}
+                    <span className="lib-subfolder-name">{sf.name}</span>
+                    <span className="lib-subfolder-count mono">{sf.asset_count}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {filtered.length === 0 && subfolderCards.length === 0 ? (
               <EmptyState
                 hasFilters={hasFilters}
                 totalCount={count}
                 scopeName={scope.kind === "project" ? scope.name : null}
                 inTrash={inTrash}
               />
+            ) : filtered.length === 0 ? (
+              <div className="lib-subfolder-emptyhint mono faint">
+                No clips directly in this folder
+                {subfolderCards.length > 0 && !rollupSubfolders
+                  ? " — open a subfolder above, or toggle “Show subfolder contents”."
+                  : "."}
+              </div>
             ) : viewMode === "list" ? (
               <div
                 className="lib-list"
