@@ -121,6 +121,51 @@ export default function LibraryPage() {
     y: number;
     folder: Folder;
   } | null>(null);
+  // 1.3.x — nesting. `expandedFolders` tracks which folders are open in
+  // the sidebar tree; persisted so the tree shape survives reloads.
+  // `createParentId` lets "New subfolder" seed folder_create with a
+  // parent (null = top-level, set via the toolbar + button).
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem("mh.library.expandedFolders");
+      if (raw) return new Set(JSON.parse(raw) as string[]);
+    } catch {
+      /* ignore */
+    }
+    return new Set();
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "mh.library.expandedFolders",
+        JSON.stringify(Array.from(expandedFolders)),
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [expandedFolders]);
+  // Reparent drag state — which folder is being dragged onto which.
+  const [folderReparentHover, setFolderReparentHover] = useState<string | null>(null);
+  // 1.3.x — resizable Library sidebar. Persisted px width.
+  const [sideWidth, setSideWidth] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem("mh.library.sideWidth");
+      if (raw) {
+        const n = parseInt(raw, 10);
+        if (Number.isFinite(n)) return Math.min(420, Math.max(170, n));
+      }
+    } catch {
+      /* ignore */
+    }
+    return 220;
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("mh.library.sideWidth", String(sideWidth));
+    } catch {
+      /* ignore */
+    }
+  }, [sideWidth]);
 
   // 1.1 Phase 3 — filter popup state. Boolean toggle; anchor element
   // ref lets the popup position relative to the trigger button so it
@@ -331,25 +376,32 @@ export default function LibraryPage() {
   // then immediately enter rename mode on it. Mirrors Eagle's flow
   // (and Finder's, and most file managers') — one click to create,
   // type to name, Enter to commit, Esc to dismiss.
-  async function createFolderInline() {
+  async function createFolderInline(parentId: string | null = null) {
     if (creatingFolder) return;
     setCreatingFolder(true);
     try {
-      // Pick a non-colliding placeholder. If "Untitled" exists, try
-      // "Untitled 2", "Untitled 3"... The Rust side would also reject
-      // dupes; doing it client-side keeps the UX snappy.
-      const existing = new Set(folders.map((f) => f.name.toLowerCase()));
+      // Pick a non-colliding placeholder scoped to the target parent.
+      // If "Untitled" exists among siblings, try "Untitled 2"...
+      const siblings = new Set(
+        folders
+          .filter((f) => (f.parent_id ?? null) === parentId)
+          .map((f) => f.name.toLowerCase()),
+      );
       let candidate = "Untitled";
       let n = 2;
-      while (existing.has(candidate.toLowerCase())) {
+      while (siblings.has(candidate.toLowerCase())) {
         candidate = `Untitled ${n}`;
         n += 1;
       }
       const created = await invoke<Folder>("folder_create", {
         name: candidate,
-        parentId: null,
+        parentId,
         color: null,
       });
+      // Make sure the new child is visible: expand its parent.
+      if (parentId) {
+        setExpandedFolders((prev) => new Set(prev).add(parentId));
+      }
       // Open the rename input on the new folder so the user can
       // type the real name immediately.
       setRenamingFolderId(created.id);
@@ -403,6 +455,165 @@ export default function LibraryPage() {
     } catch (e) {
       await alertDialog(String(e), { title: "Couldn't move to folder", kind: "error" });
     }
+  }
+
+  // 1.3.x — Reparent a folder (drag folder → folder, or context menu).
+  async function reparentFolder(id: string, newParentId: string | null) {
+    if (id === newParentId) return;
+    try {
+      await invoke("folder_move", { id, newParentId });
+      if (newParentId) {
+        setExpandedFolders((prev) => new Set(prev).add(newParentId));
+      }
+    } catch (e) {
+      await alertDialog(String(e), { title: "Couldn't move folder", kind: "error" });
+    }
+  }
+
+  // 1.3.x — Folder tree helpers. `childrenByParent` groups the flat
+  // folder list by parent_id; `descendantIds` walks the subtree (used
+  // by the "show subfolder contents" rollup + cycle-safe checks).
+  const childrenByParent = useMemo(() => {
+    const map = new Map<string | null, Folder[]>();
+    for (const f of folders) {
+      const key = f.parent_id ?? null;
+      const arr = map.get(key) ?? [];
+      arr.push(f);
+      map.set(key, arr);
+    }
+    // Each parent's children are already position-ordered by the
+    // backend query; keep that order.
+    return map;
+  }, [folders]);
+
+  function toggleExpand(id: string) {
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // 1.3.x — recursive sidebar tree node. Closes over folder state +
+  // handlers. Indentation scales with depth; a chevron toggles children;
+  // an optional color dot replaces the folder glyph. Preserves every
+  // existing per-folder behavior (click→filter, dbl-click→rename,
+  // right-click menu, data-folder-key for the clip-drop hit-test,
+  // drop-hover highlight) and adds HTML5 drag-to-reparent on top.
+  const MH_FOLDER_MIME = "application/x-mh-folder";
+  function renderFolderNode(f: Folder, depth: number): React.ReactNode {
+    const kids = childrenByParent.get(f.id) ?? [];
+    const hasKids = kids.length > 0;
+    const expanded = expandedFolders.has(f.id);
+    const isActive = folderFilter.kind === "id" && folderFilter.id === f.id && !inTrash;
+    const isRenaming = renamingFolderId === f.id;
+    return (
+      <li key={f.id} className="lib-folder-node">
+        <div
+          className={
+            "lib-folder" +
+            (isActive ? " active" : "") +
+            (folderDropHover === f.id ? " drop-hover" : "") +
+            (folderReparentHover === f.id ? " reparent-hover" : "")
+          }
+          style={{ paddingLeft: 6 + depth * 14 }}
+          onClick={() => {
+            if (!isRenaming) {
+              setInTrash(false);
+              setFolderFilter({ kind: "id", id: f.id });
+            }
+          }}
+          onDoubleClick={() => {
+            setRenamingFolderId(f.id);
+            setRenameFolderDraft(f.name);
+          }}
+          title="Click to filter · Double-click to rename · Right-click for more · Drag onto another folder to nest · Drop clips here to move"
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setFolderCtxMenu({ x: e.clientX, y: e.clientY, folder: f });
+          }}
+          data-folder-key={f.id}
+          // HTML5 drag-to-reparent (independent of the Tauri clip drag).
+          draggable={!isRenaming}
+          onDragStart={(e) => {
+            e.stopPropagation();
+            e.dataTransfer.setData(MH_FOLDER_MIME, f.id);
+            e.dataTransfer.effectAllowed = "move";
+          }}
+          onDragOver={(e) => {
+            if (e.dataTransfer.types.includes(MH_FOLDER_MIME)) {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              if (folderReparentHover !== f.id) setFolderReparentHover(f.id);
+            }
+          }}
+          onDragLeave={() => {
+            if (folderReparentHover === f.id) setFolderReparentHover(null);
+          }}
+          onDrop={(e) => {
+            const dragged = e.dataTransfer.getData(MH_FOLDER_MIME);
+            setFolderReparentHover(null);
+            if (dragged && dragged !== f.id) {
+              e.preventDefault();
+              void reparentFolder(dragged, f.id);
+            }
+          }}
+        >
+          {hasKids ? (
+            <button
+              type="button"
+              className={"lib-folder-chev" + (expanded ? " open" : "")}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleExpand(f.id);
+              }}
+              title={expanded ? "Collapse" : "Expand"}
+            >
+              <Icon.chev width={10} height={10} />
+            </button>
+          ) : (
+            <span className="lib-folder-chev-spacer" />
+          )}
+          {f.color ? (
+            <span
+              className="lib-folder-dot"
+              style={{ background: f.color }}
+              aria-hidden
+            />
+          ) : (
+            <Icon.folder width={11} height={11} />
+          )}
+          {isRenaming ? (
+            <input
+              className="lib-folder-rename"
+              value={renameFolderDraft}
+              onChange={(e) => setRenameFolderDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void renameFolder(f.id);
+                else if (e.key === "Escape") {
+                  setRenamingFolderId(null);
+                  setRenameFolderDraft("");
+                }
+              }}
+              onBlur={() => void renameFolder(f.id)}
+              onClick={(e) => e.stopPropagation()}
+              autoFocus
+              maxLength={80}
+              spellCheck={false}
+            />
+          ) : (
+            <span className="lib-folder-name">{f.name}</span>
+          )}
+          <span className="lib-folder-count mono">{f.asset_count}</span>
+        </div>
+        {hasKids && expanded && (
+          <ul className="lib-folders lib-folders-children">
+            {kids.map((c) => renderFolderNode(c, depth + 1))}
+          </ul>
+        )}
+      </li>
+    );
   }
 
   useEffect(() => {
@@ -1328,7 +1539,7 @@ export default function LibraryPage() {
       )}
 
       <div className={"lib-wrap" + (draggingCount > 0 ? " dragging" : "")}>
-        <aside className="lib-side">
+        <aside className="lib-side" style={{ width: sideWidth, flex: `0 0 ${sideWidth}px` }}>
           {/* 1.1.7 — Vault-style sidebar layout. Two sections:
               VIEWS (system pseudo-entries: All clips + Uncategorized)
               and FOLDERS (user folders with "+" to create).
@@ -1397,61 +1608,42 @@ export default function LibraryPage() {
               <Icon.plus width={11} height={11} />
             </button>
           </div>
-          <ul className="lib-folders">
-            {folders.map((f) => {
-              const isActive = folderFilter.kind === "id" && folderFilter.id === f.id && !inTrash;
-              const isRenaming = renamingFolderId === f.id;
-              return (
-                <li
-                  key={f.id}
-                  className={
-                    "lib-folder" +
-                    (isActive ? " active" : "") +
-                    (folderDropHover === f.id ? " drop-hover" : "")
-                  }
-                  onClick={() => {
-                    if (!isRenaming) {
-                      setInTrash(false);
-                      setFolderFilter({ kind: "id", id: f.id });
-                    }
-                  }}
-                  onDoubleClick={() => {
-                    setRenamingFolderId(f.id);
-                    setRenameFolderDraft(f.name);
-                  }}
-                  title="Click to filter · Double-click to rename · Right-click for more · Drop clips here to move"
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setFolderCtxMenu({ x: e.clientX, y: e.clientY, folder: f });
-                  }}
-                  data-folder-key={f.id}
-                >
-                  <Icon.folder width={11} height={11} />
-                  {isRenaming ? (
-                    <input
-                      className="lib-folder-rename"
-                      value={renameFolderDraft}
-                      onChange={(e) => setRenameFolderDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void renameFolder(f.id);
-                        else if (e.key === "Escape") {
-                          setRenamingFolderId(null);
-                          setRenameFolderDraft("");
-                        }
-                      }}
-                      onBlur={() => void renameFolder(f.id)}
-                      onClick={(e) => e.stopPropagation()}
-                      autoFocus
-                      maxLength={80}
-                      spellCheck={false}
-                    />
-                  ) : (
-                    <span className="lib-folder-name">{f.name}</span>
-                  )}
-                  <span className="lib-folder-count mono">{f.asset_count}</span>
-                </li>
-              );
-            })}
+          {/* 1.3.x — recursive folder tree. Top-level folders
+              (parent_id === null) are the roots; renderFolderNode
+              recurses into expanded children. Dropping a folder onto
+              this <ul>'s empty area (not on a child) reparents it to
+              top-level. */}
+          <ul
+            className={
+              "lib-folders" + (folderReparentHover === "__root__" ? " reparent-root" : "")
+            }
+            onDragOver={(e) => {
+              if (e.dataTransfer.types.includes(MH_FOLDER_MIME)) {
+                e.preventDefault();
+                if (folderReparentHover !== "__root__") setFolderReparentHover("__root__");
+              }
+            }}
+            onDragLeave={(e) => {
+              // Only clear when leaving the <ul> itself, not bubbling
+              // from a child row.
+              if (e.target === e.currentTarget && folderReparentHover === "__root__") {
+                setFolderReparentHover(null);
+              }
+            }}
+            onDrop={(e) => {
+              if (e.target !== e.currentTarget) return; // a child handled it
+              const dragged = e.dataTransfer.getData(MH_FOLDER_MIME);
+              setFolderReparentHover(null);
+              if (dragged) {
+                e.preventDefault();
+                void reparentFolder(dragged, null);
+              }
+            }}
+          >
+            {(childrenByParent.get(null) ?? []).map((f) => renderFolderNode(f, 0))}
+            {folders.length === 0 && (
+              <li className="lib-folders-empty mono faint">No folders yet</li>
+            )}
           </ul>
 
           {/* 1.1 Phase 2 — filter sections (Source / Tags / Added)
@@ -1459,6 +1651,28 @@ export default function LibraryPage() {
               popup in Phase 3. State + computations preserved at the
               top of LibraryPage so re-wiring is a render-only change. */}
         </aside>
+        {/* 1.3.x — sidebar resize handle. Drag to widen for deep trees. */}
+        <div
+          className="lib-side-resize"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            const startX = e.clientX;
+            const startW = sideWidth;
+            document.body.classList.add("lib-resizing-h");
+            function onMove(mv: MouseEvent) {
+              const next = Math.min(420, Math.max(170, startW + (mv.clientX - startX)));
+              setSideWidth(next);
+            }
+            function onUp() {
+              document.body.classList.remove("lib-resizing-h");
+              document.removeEventListener("mousemove", onMove);
+              document.removeEventListener("mouseup", onUp);
+            }
+            document.addEventListener("mousemove", onMove);
+            document.addEventListener("mouseup", onUp);
+          }}
+          title="Drag to resize the sidebar"
+        />
 
         <div className="lib-main">
           <div className="lib-toolbar">
@@ -1882,6 +2096,23 @@ export default function LibraryPage() {
             setFolderCtxMenu(null);
             void deleteFolder(f);
           }}
+          onNewSubfolder={() => {
+            const parent = folderCtxMenu.folder.id;
+            setFolderCtxMenu(null);
+            void createFolderInline(parent);
+          }}
+          onMoveToRoot={() => {
+            const f = folderCtxMenu.folder;
+            setFolderCtxMenu(null);
+            void reparentFolder(f.id, null);
+          }}
+          onSetColor={(color) => {
+            const id = folderCtxMenu.folder.id;
+            setFolderCtxMenu(null);
+            void invoke("folder_set_color", { id, color }).catch((e) =>
+              alertDialog(String(e), { title: "Couldn't set color", kind: "error" }),
+            );
+          }}
         />
       )}
     </div>
@@ -2056,6 +2287,17 @@ function CardContextMenu({
 // scroll / resize. Two actions for MVP; can grow (Move, Color,
 // duplicate, etc.) without changing the host wiring.
 
+// 1.3.x — Eagle-style folder accent palette. Keys are stored in
+// folders.color; we render them as small swatches in the context menu.
+const FOLDER_COLORS = [
+  "#e5484d", // red
+  "#e0792a", // orange
+  "#e0b341", // yellow
+  "#46a758", // green
+  "#3b9eff", // blue
+  "#8e4ec6", // purple
+];
+
 function FolderContextMenu({
   x,
   y,
@@ -2063,6 +2305,9 @@ function FolderContextMenu({
   onClose,
   onRename,
   onDelete,
+  onNewSubfolder,
+  onMoveToRoot,
+  onSetColor,
 }: {
   x: number;
   y: number;
@@ -2070,10 +2315,13 @@ function FolderContextMenu({
   onClose: () => void;
   onRename: () => void;
   onDelete: () => void;
+  onNewSubfolder: () => void;
+  onMoveToRoot: () => void;
+  onSetColor: (color: string | null) => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
-  const ESTIMATED_HEIGHT = 90;
-  const ESTIMATED_WIDTH = 180;
+  const ESTIMATED_HEIGHT = 200;
+  const ESTIMATED_WIDTH = 190;
   const vh = typeof window !== "undefined" ? window.innerHeight : 1000;
   const vw = typeof window !== "undefined" ? window.innerWidth : 1600;
   const adjX = Math.min(x, vw - ESTIMATED_WIDTH - 8);
@@ -2115,10 +2363,41 @@ function FolderContextMenu({
           dimmed style via .ctx-label. */}
       <div className="ctx-label">{folder.name}</div>
       <div className="ctx-sep" />
+      <button className="ctx-item" onClick={onNewSubfolder}>
+        <Icon.plus width={11} height={11} />
+        New subfolder
+      </button>
       <button className="ctx-item" onClick={onRename}>
         <Icon.folder width={11} height={11} />
         Rename
       </button>
+      {folder.parent_id && (
+        <button className="ctx-item" onClick={onMoveToRoot}>
+          <Icon.chev width={11} height={11} style={{ transform: "rotate(90deg)" }} />
+          Move to top level
+        </button>
+      )}
+      <div className="ctx-sep" />
+      {/* Color swatches — set or clear the folder's accent. */}
+      <div className="ctx-colors">
+        <button
+          className="ctx-color ctx-color-clear"
+          onClick={() => onSetColor(null)}
+          title="No color"
+        >
+          <Icon.x width={9} height={9} />
+        </button>
+        {FOLDER_COLORS.map((c) => (
+          <button
+            key={c}
+            className={"ctx-color" + (folder.color === c ? " active" : "")}
+            style={{ background: c }}
+            onClick={() => onSetColor(c)}
+            title={c}
+          />
+        ))}
+      </div>
+      <div className="ctx-sep" />
       <button className="ctx-item ctx-danger" onClick={onDelete}>
         <Icon.trash width={11} height={11} />
         Delete folder

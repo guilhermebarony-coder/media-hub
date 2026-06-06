@@ -1418,6 +1418,130 @@ textarea.field-input {
 .lib-folder.active .lib-folder-count {
   color: var(--text-1);
 }
+
+/* 1.3.x — folder nesting tree. Each node is an <li.lib-folder-node>
+   wrapping a .lib-folder row + an optional nested <ul>. */
+.lib-folder-node {
+  list-style: none;
+}
+.lib-folders-children {
+  /* Nested lists drop the section padding + bottom border the
+     top-level .lib-folders carries; indentation is handled per-row
+     via inline paddingLeft (depth-aware). */
+  padding: 0;
+  margin: 0;
+  border-bottom: 0;
+  gap: 1px;
+}
+.lib-folders-empty {
+  font-size: 11px;
+  padding: 4px 8px;
+}
+/* Chevron toggle. Rotates from ▸ (collapsed) to ▾ (expanded). */
+.lib-folder-chev {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  border-radius: 2px;
+  transform: rotate(-90deg);
+  transition: transform 90ms ease;
+}
+.lib-folder-chev.open {
+  transform: rotate(0deg);
+}
+.lib-folder-chev:hover {
+  color: var(--text-1);
+  background: var(--bg-3);
+}
+.lib-folder-chev-spacer {
+  width: 14px;
+  flex-shrink: 0;
+}
+/* Color dot (replaces the folder glyph when a folder has an accent). */
+.lib-folder-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 2.5px;
+  flex-shrink: 0;
+}
+/* Reparent drag feedback (HTML5 DnD, distinct from the clip drop). */
+.lib-folder.reparent-hover {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.lib-folders.reparent-root {
+  outline: 1px dashed var(--line-hi);
+  outline-offset: -3px;
+  border-radius: 4px;
+}
+
+/* Sidebar resize handle — sits between the aside and the main area. */
+.lib-side-resize {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: transparent;
+  margin-left: -3px;
+  z-index: 4;
+  position: relative;
+}
+.lib-side-resize::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: transparent;
+  transition: background 80ms linear;
+}
+.lib-side-resize:hover::before,
+body.lib-resizing-h .lib-side-resize::before {
+  background: var(--accent);
+}
+body.lib-resizing-h,
+body.lib-resizing-h * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+/* Folder context-menu color swatches. */
+.ctx-colors {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+}
+.ctx-color {
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  border: 1px solid var(--line-hi);
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ctx-color.active {
+  outline: 2px solid var(--text-0);
+  outline-offset: 1px;
+}
+.ctx-color-clear {
+  background: var(--bg-2);
+  color: var(--text-3);
+}
+.ctx-color-clear:hover {
+  color: var(--text-1);
+}
 .lib-folder-rename {
   flex: 1;
   background: var(--bg-0);
