@@ -502,7 +502,7 @@ export default function LibraryPage() {
   // right-click menu, data-folder-key for the clip-drop hit-test,
   // drop-hover highlight) and adds HTML5 drag-to-reparent on top.
   const MH_FOLDER_MIME = "application/x-mh-folder";
-  function renderFolderNode(f: Folder, depth: number): React.ReactNode {
+  function renderFolderNode(f: Folder): React.ReactNode {
     const kids = childrenByParent.get(f.id) ?? [];
     const hasKids = kids.length > 0;
     const expanded = expandedFolders.has(f.id);
@@ -517,7 +517,6 @@ export default function LibraryPage() {
             (folderDropHover === f.id ? " drop-hover" : "") +
             (folderReparentHover === f.id ? " reparent-hover" : "")
           }
-          style={{ paddingLeft: 6 + depth * 14 }}
           onClick={() => {
             if (!isRenaming) {
               setInTrash(false);
@@ -609,7 +608,7 @@ export default function LibraryPage() {
         </div>
         {hasKids && expanded && (
           <ul className="lib-folders lib-folders-children">
-            {kids.map((c) => renderFolderNode(c, depth + 1))}
+            {kids.map((c) => renderFolderNode(c))}
           </ul>
         )}
       </li>
@@ -1556,6 +1555,7 @@ export default function LibraryPage() {
               }}
               data-folder-key="__all__"
             >
+              <span className="lib-folder-chev-spacer" />
               <Icon.library width={11} height={11} />
               <span className="lib-folder-name">All clips</span>
               <span className="lib-folder-count mono">{count}</span>
@@ -1573,6 +1573,7 @@ export default function LibraryPage() {
               data-folder-key="__uncategorized__"
               title="Clips not assigned to any folder · drop here to clear folder"
             >
+              <span className="lib-folder-chev-spacer" />
               <Icon.folder width={11} height={11} />
               <span className="lib-folder-name">Uncategorized</span>
               {/* 1.1 Phase 2 — derive uncategorized count from
@@ -1591,6 +1592,7 @@ export default function LibraryPage() {
               data-folder-key="__trash__"
               title="Deleted clips — restore or permanently remove"
             >
+              <span className="lib-folder-chev-spacer" />
               <Icon.trash width={11} height={11} />
               <span className="lib-folder-name">Trash</span>
               <span className="lib-folder-count mono">{trashCount}</span>
@@ -1640,7 +1642,7 @@ export default function LibraryPage() {
               }
             }}
           >
-            {(childrenByParent.get(null) ?? []).map((f) => renderFolderNode(f, 0))}
+            {(childrenByParent.get(null) ?? []).map((f) => renderFolderNode(f))}
             {folders.length === 0 && (
               <li className="lib-folders-empty mono faint">No folders yet</li>
             )}

@@ -1426,11 +1426,15 @@ textarea.field-input {
 }
 .lib-folders-children {
   /* Nested lists drop the section padding + bottom border the
-     top-level .lib-folders carries; indentation is handled per-row
-     via inline paddingLeft (depth-aware). */
+     top-level .lib-folders carries. Indentation is handled HERE via a
+     left margin (not per-row padding) so a single border-left can act
+     as a guide rail spanning the whole child group — Eagle/VS Code
+     style. The small indent (12px) + rail keeps depth legible without
+     the rows running off the right edge as fast as pure whitespace. */
   padding: 0;
-  margin: 0;
+  margin: 0 0 0 13px;
   border-bottom: 0;
+  border-left: 1px solid var(--line);
   gap: 1px;
 }
 .lib-folders-empty {
