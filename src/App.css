@@ -1469,50 +1469,11 @@ textarea.field-input {
   width: 14px;
   flex-shrink: 0;
 }
-/* Multi-selected folder (Ctrl/Cmd-click) — distinct from the active
-   filter highlight so you can tell "selected for delete" from "viewing". */
+/* Multi-selected folder (Ctrl/Cmd / Shift-click). Subtle fill only —
+   no outline. The faint accent wash reads as "selected" without the
+   distracting border the earlier outline drew. */
 .lib-folder.multiselected {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  outline: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
-  outline-offset: -2px;
-}
-/* Folder multi-select action bar. */
-.lib-folder-selbar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
-  margin: 0 6px 6px;
-  background: var(--bg-2);
-  border: 1px solid var(--line-hi);
-  border-radius: 4px;
-}
-.lib-folder-selbar-count {
-  font-size: 11px;
-  color: var(--accent);
-  flex: 1;
-}
-.lib-folder-selbar-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 11px;
-  padding: 2px 7px;
-  border-radius: 3px;
-  border: 1px solid var(--line-hi);
-  background: var(--bg-1);
-  color: var(--text-1);
-  cursor: pointer;
-}
-.lib-folder-selbar-btn:hover {
-  background: var(--bg-3);
-}
-.lib-folder-selbar-btn.danger {
-  color: var(--err, #e5484d);
-  border-color: color-mix(in srgb, var(--err, #e5484d) 45%, transparent);
-}
-.lib-folder-selbar-btn.danger:hover {
-  background: color-mix(in srgb, var(--err, #e5484d) 14%, transparent);
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
 }
 
 /* 1.3.x — folder breadcrumb (focused-folder path). */
@@ -1600,12 +1561,6 @@ textarea.field-input {
   color: var(--text-3);
   flex-shrink: 0;
 }
-.lib-subfolder-dot {
-  width: 11px;
-  height: 11px;
-  border-radius: 3px;
-  flex-shrink: 0;
-}
 .lib-subfolder-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1621,13 +1576,6 @@ textarea.field-input {
   padding: 4px 2px;
 }
 
-/* Color dot (replaces the folder glyph when a folder has an accent). */
-.lib-folder-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 2.5px;
-  flex-shrink: 0;
-}
 /* Reparent drag feedback (HTML5 DnD, distinct from the clip drop). */
 .lib-folder.reparent-hover {
   outline: 1px solid var(--accent);

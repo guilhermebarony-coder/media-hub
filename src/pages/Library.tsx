@@ -570,6 +570,23 @@ export default function LibraryPage() {
     return path;
   }, [folderFilter, folderById]);
 
+  // 1.3.x — flattened folder ids in visible (expanded) display order.
+  // Drives Shift-click range selection: only currently-visible rows
+  // participate, matching what the user can actually see.
+  const visibleFolderOrder = useMemo((): string[] => {
+    const order: string[] = [];
+    const walk = (parent: string | null) => {
+      for (const f of childrenByParent.get(parent) ?? []) {
+        order.push(f.id);
+        if (expandedFolders.has(f.id)) walk(f.id);
+      }
+    };
+    walk(null);
+    return order;
+  }, [childrenByParent, expandedFolders]);
+  // Anchor for Shift-range selection (last plain/ctrl-clicked folder).
+  const folderAnchorRef = useRef<string | null>(null);
+
   // Child folders to surface as drill-in cards for the current view:
   // children of the active folder, or top-level folders on "All clips".
   const subfolderCards = useMemo((): Folder[] => {
@@ -632,9 +649,21 @@ export default function LibraryPage() {
           }
           onClick={(e) => {
             if (isRenaming) return;
-            // Ctrl/Cmd-click toggles multi-selection (for bulk delete)
-            // instead of changing the filter.
+            // Shift-click selects the range between the anchor and this
+            // folder, in visible order.
+            if (e.shiftKey && folderAnchorRef.current) {
+              const order = visibleFolderOrder;
+              const a = order.indexOf(folderAnchorRef.current);
+              const b = order.indexOf(f.id);
+              if (a !== -1 && b !== -1) {
+                const [lo, hi] = a < b ? [a, b] : [b, a];
+                setSelectedFolderIds(new Set(order.slice(lo, hi + 1)));
+                return;
+              }
+            }
+            // Ctrl/Cmd-click toggles this folder in the multi-selection.
             if (e.ctrlKey || e.metaKey) {
+              folderAnchorRef.current = f.id;
               setSelectedFolderIds((prev) => {
                 const next = new Set(prev);
                 if (next.has(f.id)) next.delete(f.id);
@@ -644,6 +673,7 @@ export default function LibraryPage() {
               return;
             }
             // Plain click filters + clears any multi-selection.
+            folderAnchorRef.current = f.id;
             if (selectedFolderIds.size > 0) setSelectedFolderIds(new Set());
             setInTrash(false);
             setFolderFilter({ kind: "id", id: f.id });
@@ -699,15 +729,11 @@ export default function LibraryPage() {
           ) : (
             <span className="lib-folder-chev-spacer" />
           )}
-          {f.color ? (
-            <span
-              className="lib-folder-dot"
-              style={{ background: f.color }}
-              aria-hidden
-            />
-          ) : (
-            <Icon.folder width={11} height={11} />
-          )}
+          <Icon.folder
+            width={11}
+            height={11}
+            style={f.color ? { color: f.color } : undefined}
+          />
           {isRenaming ? (
             <input
               className="lib-folder-rename"
@@ -1437,6 +1463,14 @@ export default function LibraryPage() {
       // — Delete now always moves files to the Recycle Bin (recoverable).
       if (e.key === "Delete" || e.key === "Backspace") {
         if (isTyping) return;
+        // Folder multi-selection takes priority: if folders are
+        // selected, Delete removes them (one confirm). Otherwise it
+        // deletes the selected clips.
+        if (selectedFolderIds.size > 0) {
+          e.preventDefault();
+          void bulkDeleteFolders();
+          return;
+        }
         if (selection.size === 0) return;
         e.preventDefault();
         void bulkDelete();
@@ -1735,32 +1769,6 @@ export default function LibraryPage() {
               <Icon.plus width={11} height={11} />
             </button>
           </div>
-          {/* 1.3.x — folder multi-select action bar (Ctrl/Cmd-click to
-              add folders to the selection, then delete them all at once
-              with a single confirm). */}
-          {selectedFolderIds.size > 0 && (
-            <div className="lib-folder-selbar">
-              <span className="lib-folder-selbar-count mono">
-                {selectedFolderIds.size} selected
-              </span>
-              <button
-                type="button"
-                className="lib-folder-selbar-btn danger"
-                onClick={() => void bulkDeleteFolders()}
-                title="Delete selected folders"
-              >
-                <Icon.trash width={11} height={11} /> Delete
-              </button>
-              <button
-                type="button"
-                className="lib-folder-selbar-btn"
-                onClick={() => setSelectedFolderIds(new Set())}
-                title="Clear selection"
-              >
-                Clear
-              </button>
-            </div>
-          )}
           {/* 1.3.x — recursive folder tree. Top-level folders
               (parent_id === null) are the roots; renderFolderNode
               recurses into expanded children. Dropping a folder onto
@@ -2060,11 +2068,11 @@ export default function LibraryPage() {
                     }}
                     title={sf.name}
                   >
-                    {sf.color ? (
-                      <span className="lib-subfolder-dot" style={{ background: sf.color }} />
-                    ) : (
-                      <Icon.folder width={14} height={14} />
-                    )}
+                    <Icon.folder
+                      width={14}
+                      height={14}
+                      style={sf.color ? { color: sf.color } : undefined}
+                    />
                     <span className="lib-subfolder-name">{sf.name}</span>
                     <span className="lib-subfolder-count mono">{sf.asset_count}</span>
                   </button>
@@ -2315,6 +2323,13 @@ export default function LibraryPage() {
           x={folderCtxMenu.x}
           y={folderCtxMenu.y}
           folder={folderCtxMenu.folder}
+          // When right-clicking a folder that's part of a multi-selection,
+          // the delete acts on the whole selection.
+          bulkCount={
+            selectedFolderIds.has(folderCtxMenu.folder.id) && selectedFolderIds.size > 1
+              ? selectedFolderIds.size
+              : 0
+          }
           onClose={() => setFolderCtxMenu(null)}
           onRename={() => {
             setRenamingFolderId(folderCtxMenu.folder.id);
@@ -2323,8 +2338,10 @@ export default function LibraryPage() {
           }}
           onDelete={() => {
             const f = folderCtxMenu.folder;
+            const bulk = selectedFolderIds.has(f.id) && selectedFolderIds.size > 1;
             setFolderCtxMenu(null);
-            void deleteFolder(f);
+            if (bulk) void bulkDeleteFolders();
+            else void deleteFolder(f);
           }}
           onNewSubfolder={() => {
             const parent = folderCtxMenu.folder.id;
@@ -2532,6 +2549,7 @@ function FolderContextMenu({
   x,
   y,
   folder,
+  bulkCount,
   onClose,
   onRename,
   onDelete,
@@ -2542,6 +2560,10 @@ function FolderContextMenu({
   x: number;
   y: number;
   folder: Folder;
+  /** >1 when the right-clicked folder is part of a multi-selection;
+   *  drives the "Delete N folders" label + skips the single-folder-only
+   *  actions (rename / new subfolder / move) that don't apply to a set. */
+  bulkCount: number;
   onClose: () => void;
   onRename: () => void;
   onDelete: () => void;
@@ -2549,6 +2571,7 @@ function FolderContextMenu({
   onMoveToRoot: () => void;
   onSetColor: (color: string | null) => void;
 }) {
+  const isBulk = bulkCount > 1;
   const menuRef = useRef<HTMLDivElement>(null);
   const ESTIMATED_HEIGHT = 200;
   const ESTIMATED_WIDTH = 190;
@@ -2591,46 +2614,50 @@ function FolderContextMenu({
           via the existing .ctx-menu CSS. The folder name shows at the
           top as a non-interactive label — same row pattern but in a
           dimmed style via .ctx-label. */}
-      <div className="ctx-label">{folder.name}</div>
+      <div className="ctx-label">{isBulk ? `${bulkCount} folders selected` : folder.name}</div>
       <div className="ctx-sep" />
-      <button className="ctx-item" onClick={onNewSubfolder}>
-        <Icon.plus width={11} height={11} />
-        New subfolder
-      </button>
-      <button className="ctx-item" onClick={onRename}>
-        <Icon.folder width={11} height={11} />
-        Rename
-      </button>
-      {folder.parent_id && (
-        <button className="ctx-item" onClick={onMoveToRoot}>
-          <Icon.chev width={11} height={11} style={{ transform: "rotate(90deg)" }} />
-          Move to top level
-        </button>
+      {!isBulk && (
+        <>
+          <button className="ctx-item" onClick={onNewSubfolder}>
+            <Icon.plus width={11} height={11} />
+            New subfolder
+          </button>
+          <button className="ctx-item" onClick={onRename}>
+            <Icon.folder width={11} height={11} />
+            Rename
+          </button>
+          {folder.parent_id && (
+            <button className="ctx-item" onClick={onMoveToRoot}>
+              <Icon.chev width={11} height={11} style={{ transform: "rotate(90deg)" }} />
+              Move to top level
+            </button>
+          )}
+          <div className="ctx-sep" />
+          {/* Color swatches — set or clear the folder's accent. */}
+          <div className="ctx-colors">
+            <button
+              className="ctx-color ctx-color-clear"
+              onClick={() => onSetColor(null)}
+              title="No color"
+            >
+              <Icon.x width={9} height={9} />
+            </button>
+            {FOLDER_COLORS.map((c) => (
+              <button
+                key={c}
+                className={"ctx-color" + (folder.color === c ? " active" : "")}
+                style={{ background: c }}
+                onClick={() => onSetColor(c)}
+                title={c}
+              />
+            ))}
+          </div>
+          <div className="ctx-sep" />
+        </>
       )}
-      <div className="ctx-sep" />
-      {/* Color swatches — set or clear the folder's accent. */}
-      <div className="ctx-colors">
-        <button
-          className="ctx-color ctx-color-clear"
-          onClick={() => onSetColor(null)}
-          title="No color"
-        >
-          <Icon.x width={9} height={9} />
-        </button>
-        {FOLDER_COLORS.map((c) => (
-          <button
-            key={c}
-            className={"ctx-color" + (folder.color === c ? " active" : "")}
-            style={{ background: c }}
-            onClick={() => onSetColor(c)}
-            title={c}
-          />
-        ))}
-      </div>
-      <div className="ctx-sep" />
       <button className="ctx-item ctx-danger" onClick={onDelete}>
         <Icon.trash width={11} height={11} />
-        Delete folder
+        {isBulk ? `Delete ${bulkCount} folders` : "Delete folder"}
       </button>
     </div>
   );
