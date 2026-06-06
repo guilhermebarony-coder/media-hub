@@ -308,6 +308,7 @@ pub async fn init(app: &AppHandle) -> Result<LibraryState, String> {
         include_str!("../migrations/008_asset_kind.sql"),
         include_str!("../migrations/009_project_root.sql"),
         include_str!("../migrations/010_trash.sql"),
+        include_str!("../migrations/011_folder_nesting.sql"),
     ] {
         for stmt in split_sql_statements(schema) {
             if let Err(e) = sqlx::query(&stmt).execute(&pool).await {
@@ -324,7 +325,105 @@ pub async fn init(app: &AppHandle) -> Result<LibraryState, String> {
         }
     }
 
+    // 1.3.x — folder-nesting structural migration that can't run in the
+    // naive idempotent loop above (it drops a column constraint, which
+    // requires a table rebuild). Guarded: only rebuilds when migration
+    // 007's global UNIQUE on folders.name is still present. Always
+    // ensures the nesting indexes exist (idempotent).
+    migrate_folders_for_nesting(&pool).await?;
+
     Ok(LibraryState { pool })
+}
+
+/// Drop migration 007's global `UNIQUE` on `folders.name` (incompatible
+/// with nesting — same name is fine under different parents) and ensure
+/// the nesting indexes exist.
+///
+/// SQLite can't drop a column constraint in place, so we rebuild the
+/// table. The rebuild is guarded behind a check of the live schema so it
+/// runs exactly once: if `folders`' CREATE SQL no longer contains the
+/// global UNIQUE, we skip straight to ensuring indexes.
+async fn migrate_folders_for_nesting(pool: &sqlx::SqlitePool) -> Result<(), String> {
+    // Read the table's current DDL from sqlite_master.
+    let ddl: Option<(String,)> =
+        sqlx::query_as("SELECT sql FROM sqlite_master WHERE type='table' AND name='folders'")
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("folder-nesting: read schema: {e}"))?;
+
+    // The old (migration 007) DDL declared `name TEXT NOT NULL UNIQUE
+    // COLLATE NOCASE`. The rebuilt table drops that inline UNIQUE. We
+    // detect the old shape by the column-level UNIQUE on name.
+    let needs_rebuild = ddl
+        .as_ref()
+        .map(|(sql,)| sql.to_uppercase().contains("UNIQUE"))
+        .unwrap_or(false);
+
+    if needs_rebuild {
+        // Rebuild inside a transaction. FK enforcement is off by default
+        // on the connection, so dropping/renaming won't trip references.
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|e| format!("folder-nesting: begin tx: {e}"))?;
+
+        // New table: same columns, NO global UNIQUE on name.
+        sqlx::query(
+            r#"CREATE TABLE folders_new (
+                 id         TEXT PRIMARY KEY,
+                 name       TEXT NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 parent_id  TEXT REFERENCES folders_new(id) ON DELETE SET NULL,
+                 color      TEXT,
+                 position   INTEGER NOT NULL DEFAULT 0
+               )"#,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("folder-nesting: create new table: {e}"))?;
+
+        sqlx::query(
+            r#"INSERT INTO folders_new (id, name, created_at, parent_id, color, position)
+               SELECT id, name, created_at, parent_id, color, position FROM folders"#,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("folder-nesting: copy rows: {e}"))?;
+
+        sqlx::query("DROP TABLE folders")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("folder-nesting: drop old table: {e}"))?;
+
+        sqlx::query("ALTER TABLE folders_new RENAME TO folders")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("folder-nesting: rename: {e}"))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("folder-nesting: commit: {e}"))?;
+    }
+
+    // Ensure nesting indexes (idempotent — runs every launch).
+    for stmt in [
+        "CREATE INDEX IF NOT EXISTS idx_folders_parent_id ON folders(parent_id)",
+        "CREATE INDEX IF NOT EXISTS idx_folders_parent_position \
+           ON folders(parent_id, position, name COLLATE NOCASE)",
+        // Per-parent case-insensitive name uniqueness. COALESCE folds
+        // top-level folders (NULL parent) onto a single sentinel so
+        // root siblings are also de-duped (SQLite treats NULLs as
+        // distinct in UNIQUE otherwise).
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_parent_name_unique \
+           ON folders(COALESCE(parent_id, ''), name COLLATE NOCASE)",
+    ] {
+        sqlx::query(stmt)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("folder-nesting: index: {e}"))?;
+    }
+
+    Ok(())
 }
 
 // =====================================================================
@@ -456,6 +555,11 @@ pub enum FolderFilter {
     Any,
     Uncategorized,
     Id { id: String },
+    /// 1.3.x — match any of several folders at once. The frontend uses
+    /// this for the "show subfolder contents" rollup: it passes the
+    /// selected folder id plus all of its descendant ids (it owns the
+    /// tree, so the walk is cheap and avoids a recursive SQL CTE here).
+    Ids { ids: Vec<String> },
 }
 
 #[tauri::command]
@@ -529,6 +633,19 @@ pub async fn library_list(
             FolderFilter::Id { id } => {
                 where_clauses.push("a.folder_id = ?".into());
                 bindings.push(id);
+            }
+            FolderFilter::Ids { ids } => {
+                if ids.is_empty() {
+                    // No folders selected → match nothing (avoids an
+                    // empty `IN ()` which is a SQL syntax error).
+                    where_clauses.push("0 = 1".into());
+                } else {
+                    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                    where_clauses.push(format!("a.folder_id IN ({placeholders})"));
+                    for id in ids {
+                        bindings.push(id);
+                    }
+                }
             }
         }
     }
@@ -2185,9 +2302,18 @@ pub struct Folder {
     pub id: String,
     pub name: String,
     pub created_at: i64,
-    /// Count of assets currently in this folder. Computed in
-    /// folder_list via LEFT JOIN; not stored on the row.
+    /// Count of assets DIRECTLY in this folder (not descendants).
+    /// Computed in folder_list via LEFT JOIN; not stored on the row.
+    /// The frontend rolls up descendant totals itself from the tree
+    /// when the "show subfolder contents" toggle is on.
     pub asset_count: i64,
+    /// 1.3.x — nesting. NULL = top-level folder.
+    pub parent_id: Option<String>,
+    /// Optional Eagle-style accent color (palette key or hex). NULL =
+    /// default neutral icon.
+    pub color: Option<String>,
+    /// Manual sort order within the parent. Lower = higher in the list.
+    pub position: i64,
 }
 
 #[tauri::command]
@@ -2195,6 +2321,8 @@ pub async fn folder_create(
     app: AppHandle,
     state: State<'_, LibraryState>,
     name: String,
+    parent_id: Option<String>,
+    color: Option<String>,
 ) -> Result<Folder, String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -2203,31 +2331,67 @@ pub async fn folder_create(
     if trimmed.len() > 80 {
         return Err("folder name exceeds 80 chars".into());
     }
-    // Case-insensitive dupe pre-check for a friendlier error.
-    let dupe: Option<(i64,)> =
-        sqlx::query_as("SELECT 1 FROM folders WHERE name = ? COLLATE NOCASE LIMIT 1")
-            .bind(trimmed)
+    // Validate the parent exists (if given) so we don't create orphans.
+    if let Some(pid) = &parent_id {
+        let exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM folders WHERE id = ? LIMIT 1")
+            .bind(pid)
             .fetch_optional(&state.pool)
             .await
-            .map_err(|e| format!("folder_create dupe-check: {e}"))?;
-    if dupe.is_some() {
-        return Err(format!("folder named \"{trimmed}\" already exists"));
+            .map_err(|e| format!("folder_create parent-check: {e}"))?;
+        if exists.is_none() {
+            return Err(format!("parent folder {pid} not found"));
+        }
     }
+    // Case-insensitive dupe pre-check scoped to the SAME parent, for a
+    // friendlier error than the DB unique-index violation.
+    let dupe: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM folders \
+         WHERE name = ? COLLATE NOCASE \
+           AND COALESCE(parent_id, '') = COALESCE(?, '') LIMIT 1",
+    )
+    .bind(trimmed)
+    .bind(&parent_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| format!("folder_create dupe-check: {e}"))?;
+    if dupe.is_some() {
+        return Err(format!(
+            "a folder named \"{trimmed}\" already exists here"
+        ));
+    }
+    // New folder sorts to the end of its parent's list.
+    let next_pos: (i64,) = sqlx::query_as(
+        "SELECT COALESCE(MAX(position) + 1, 0) FROM folders \
+         WHERE COALESCE(parent_id, '') = COALESCE(?, '')",
+    )
+    .bind(&parent_id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| format!("folder_create position: {e}"))?;
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp();
-    sqlx::query("INSERT INTO folders (id, name, created_at) VALUES (?, ?, ?)")
-        .bind(&id)
-        .bind(trimmed)
-        .bind(now)
-        .execute(&state.pool)
-        .await
-        .map_err(|e| format!("folder_create: {e}"))?;
+    sqlx::query(
+        "INSERT INTO folders (id, name, created_at, parent_id, color, position) \
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(trimmed)
+    .bind(now)
+    .bind(&parent_id)
+    .bind(&color)
+    .bind(next_pos.0)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| format!("folder_create: {e}"))?;
     let _ = app.emit("library:changed", ());
     Ok(Folder {
         id,
         name: trimmed.to_string(),
         created_at: now,
         asset_count: 0,
+        parent_id,
+        color,
+        position: next_pos.0,
     })
 }
 
@@ -2235,28 +2399,35 @@ pub async fn folder_create(
 pub async fn folder_list(state: State<'_, LibraryState>) -> Result<Vec<Folder>, String> {
     // LEFT JOIN keeps zero-asset folders visible (you just made one,
     // it should appear immediately even before you assign anything).
-    // ORDER BY name COLLATE NOCASE for predictable alphabetical
-    // sorting — matches Eagle's default and is easier to scan than
-    // creation order once you have more than a handful.
-    let rows = sqlx::query_as::<_, (String, String, i64, i64)>(
+    // asset_count is DIRECT items only — the frontend builds the tree
+    // and rolls up descendants itself when needed. Order by manual
+    // position first, then name — the frontend re-groups by parent_id
+    // to build the tree, so a flat global order is fine here.
+    let rows = sqlx::query_as::<_, (String, String, i64, i64, Option<String>, Option<String>, i64)>(
         r#"SELECT f.id, f.name, f.created_at,
-                  COALESCE(COUNT(a.id), 0) AS asset_count
+                  COALESCE(COUNT(a.id), 0) AS asset_count,
+                  f.parent_id, f.color, f.position
            FROM folders f
            LEFT JOIN assets a ON a.folder_id = f.id
            GROUP BY f.id
-           ORDER BY f.name COLLATE NOCASE ASC"#,
+           ORDER BY f.position ASC, f.name COLLATE NOCASE ASC"#,
     )
     .fetch_all(&state.pool)
     .await
     .map_err(|e| format!("folder_list: {e}"))?;
     Ok(rows
         .into_iter()
-        .map(|(id, name, created_at, asset_count)| Folder {
-            id,
-            name,
-            created_at,
-            asset_count,
-        })
+        .map(
+            |(id, name, created_at, asset_count, parent_id, color, position)| Folder {
+                id,
+                name,
+                created_at,
+                asset_count,
+                parent_id,
+                color,
+                position,
+            },
+        )
         .collect())
 }
 
@@ -2274,15 +2445,22 @@ pub async fn folder_rename(
     if trimmed.len() > 80 {
         return Err("folder name exceeds 80 chars".into());
     }
-    let dupe: Option<(i64,)> =
-        sqlx::query_as("SELECT 1 FROM folders WHERE name = ? COLLATE NOCASE AND id != ? LIMIT 1")
-            .bind(trimmed)
-            .bind(&id)
-            .fetch_optional(&state.pool)
-            .await
-            .map_err(|e| format!("folder_rename dupe-check: {e}"))?;
+    // Dupe-check scoped to the folder's own parent (siblings only).
+    let dupe: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM folders \
+         WHERE name = ? COLLATE NOCASE AND id != ? \
+           AND COALESCE(parent_id, '') = \
+               COALESCE((SELECT parent_id FROM folders WHERE id = ?), '') \
+         LIMIT 1",
+    )
+    .bind(trimmed)
+    .bind(&id)
+    .bind(&id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| format!("folder_rename dupe-check: {e}"))?;
     if dupe.is_some() {
-        return Err(format!("folder named \"{trimmed}\" already exists"));
+        return Err(format!("a folder named \"{trimmed}\" already exists here"));
     }
     let res = sqlx::query("UPDATE folders SET name = ? WHERE id = ?")
         .bind(trimmed)
@@ -2303,17 +2481,177 @@ pub async fn folder_delete(
     state: State<'_, LibraryState>,
     id: String,
 ) -> Result<(), String> {
-    // Assets in this folder fall back to Uncategorized via the
-    // FK ON DELETE SET NULL declared in migration 007. No need to
-    // explicitly NULL them here.
-    let res = sqlx::query("DELETE FROM folders WHERE id = ?")
+    // We do the re-parenting + asset-nulling EXPLICITLY rather than rely
+    // on the FK ON DELETE clauses: SQLite enforces foreign keys only
+    // when `PRAGMA foreign_keys = ON`, which is off by default per
+    // connection. Explicit statements are correct regardless.
+    //
+    // Children re-parent to the deleted folder's OWN parent (so a deep
+    // subtree collapses up one level rather than scattering to root).
+    // Direct assets fall back to Uncategorized (NULL).
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|e| format!("folder_delete begin: {e}"))?;
+
+    // Look up the deleted folder's parent (NULL if top-level).
+    let parent: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT parent_id FROM folders WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| format!("folder_delete lookup: {e}"))?;
+    let Some((grandparent,)) = parent else {
+        return Err(format!("folder {id} not found"));
+    };
+
+    sqlx::query("UPDATE folders SET parent_id = ? WHERE parent_id = ?")
+        .bind(&grandparent)
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("folder_delete reparent: {e}"))?;
+
+    sqlx::query("UPDATE assets SET folder_id = NULL WHERE folder_id = ?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("folder_delete null-assets: {e}"))?;
+
+    sqlx::query("DELETE FROM folders WHERE id = ?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("folder_delete: {e}"))?;
+
+    tx.commit()
+        .await
+        .map_err(|e| format!("folder_delete commit: {e}"))?;
+    let _ = app.emit("library:changed", ());
+    Ok(())
+}
+
+/// 1.3.x — Reparent a folder under a new parent (or to top-level when
+/// `new_parent_id` is None). Guards against cycles: a folder can't be
+/// moved into itself or any of its own descendants.
+#[tauri::command]
+pub async fn folder_move(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    id: String,
+    new_parent_id: Option<String>,
+) -> Result<(), String> {
+    if Some(&id) == new_parent_id.as_ref() {
+        return Err("can't move a folder into itself".into());
+    }
+    // Cycle guard: walk up from new_parent_id to the root; if we hit
+    // `id` along the way, the move would create a loop.
+    if let Some(target) = &new_parent_id {
+        let mut cursor = Some(target.clone());
+        while let Some(cur) = cursor {
+            if cur == id {
+                return Err("can't move a folder into its own subfolder".into());
+            }
+            let row: Option<(Option<String>,)> =
+                sqlx::query_as("SELECT parent_id FROM folders WHERE id = ?")
+                    .bind(&cur)
+                    .fetch_optional(&state.pool)
+                    .await
+                    .map_err(|e| format!("folder_move cycle-check: {e}"))?;
+            match row {
+                Some((parent,)) => cursor = parent,
+                None => return Err(format!("target folder {cur} not found")),
+            }
+        }
+    }
+    // Name-collision guard within the destination parent.
+    let dupe: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM folders \
+         WHERE id != ? AND name = (SELECT name FROM folders WHERE id = ?) COLLATE NOCASE \
+           AND COALESCE(parent_id, '') = COALESCE(?, '') LIMIT 1",
+    )
+    .bind(&id)
+    .bind(&id)
+    .bind(&new_parent_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| format!("folder_move dupe-check: {e}"))?;
+    if dupe.is_some() {
+        return Err("a folder with that name already exists in the destination".into());
+    }
+    // Append to the end of the destination's order.
+    let next_pos: (i64,) = sqlx::query_as(
+        "SELECT COALESCE(MAX(position) + 1, 0) FROM folders \
+         WHERE COALESCE(parent_id, '') = COALESCE(?, '')",
+    )
+    .bind(&new_parent_id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| format!("folder_move position: {e}"))?;
+    let res = sqlx::query("UPDATE folders SET parent_id = ?, position = ? WHERE id = ?")
+        .bind(&new_parent_id)
+        .bind(next_pos.0)
         .bind(&id)
         .execute(&state.pool)
         .await
-        .map_err(|e| format!("folder_delete: {e}"))?;
+        .map_err(|e| format!("folder_move: {e}"))?;
     if res.rows_affected() == 0 {
         return Err(format!("folder {id} not found"));
     }
+    let _ = app.emit("library:changed", ());
+    Ok(())
+}
+
+/// 1.3.x — Set (or clear, with None) a folder's accent color.
+#[tauri::command]
+pub async fn folder_set_color(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    id: String,
+    color: Option<String>,
+) -> Result<(), String> {
+    let res = sqlx::query("UPDATE folders SET color = ? WHERE id = ?")
+        .bind(&color)
+        .bind(&id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("folder_set_color: {e}"))?;
+    if res.rows_affected() == 0 {
+        return Err(format!("folder {id} not found"));
+    }
+    let _ = app.emit("library:changed", ());
+    Ok(())
+}
+
+/// 1.3.x — Persist a manual ordering for a set of sibling folders. The
+/// frontend passes the ordered id list for one parent after a drag; we
+/// write each id's index as its `position`.
+#[tauri::command]
+pub async fn folder_reorder(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    ordered_ids: Vec<String>,
+) -> Result<(), String> {
+    if ordered_ids.is_empty() {
+        return Ok(());
+    }
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|e| format!("folder_reorder begin: {e}"))?;
+    for (idx, fid) in ordered_ids.iter().enumerate() {
+        sqlx::query("UPDATE folders SET position = ? WHERE id = ?")
+            .bind(idx as i64)
+            .bind(fid)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("folder_reorder: {e}"))?;
+    }
+    tx.commit()
+        .await
+        .map_err(|e| format!("folder_reorder commit: {e}"))?;
     let _ = app.emit("library:changed", ());
     Ok(())
 }

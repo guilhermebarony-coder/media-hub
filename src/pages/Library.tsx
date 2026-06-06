@@ -345,7 +345,11 @@ export default function LibraryPage() {
         candidate = `Untitled ${n}`;
         n += 1;
       }
-      const created = await invoke<Folder>("folder_create", { name: candidate });
+      const created = await invoke<Folder>("folder_create", {
+        name: candidate,
+        parentId: null,
+        color: null,
+      });
       // Open the rename input on the new folder so the user can
       // type the real name immediately.
       setRenamingFolderId(created.id);

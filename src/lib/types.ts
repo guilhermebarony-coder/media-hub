@@ -310,7 +310,10 @@ export type LibraryScope =
 export type FolderFilter =
   | { kind: "any" }
   | { kind: "uncategorized" }
-  | { kind: "id"; id: string };
+  | { kind: "id"; id: string }
+  /** 1.3.x — match any of several folders (a folder + its descendants),
+   *  used by the "show subfolder contents" rollup toggle. */
+  | { kind: "ids"; ids: string[] };
 
 export type LibraryFilters = {
   query?: string | null;
@@ -332,5 +335,12 @@ export type Folder = {
   id: string;
   name: string;
   created_at: number;
+  /** DIRECT asset count (not descendants). The tree rolls up totals. */
   asset_count: number;
+  /** 1.3.x — nesting. null = top-level folder. */
+  parent_id: string | null;
+  /** Optional Eagle-style accent color (palette key or hex). */
+  color: string | null;
+  /** Manual sort order within the parent. */
+  position: number;
 };
