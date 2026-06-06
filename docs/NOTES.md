@@ -23,6 +23,47 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-06-04 — Nested folders (Eagle-style hybrid)
+
+Shipped the full folder-nesting feature in four commits (P1 data model,
+P2 sidebar tree, P2.1 alignment+rails, P3 drill-in, + multi-select).
+
+**Model:** migration 011 adds `parent_id`/`color`/`position` to folders;
+a guarded Rust step (`migrate_folders_for_nesting`) rebuilds the table
+once to drop migration 007's global UNIQUE on name (incompatible with
+nesting), replaced by a per-`(parent, name)` unique index. New commands:
+`folder_move` (cycle-guarded reparent), `folder_set_color`,
+`folder_reorder`, `folder_delete_many` (bulk, one tx). `folder_delete`
+re-parents children + nulls assets explicitly (FK enforcement is OFF by
+default in SQLite). `library_list` FolderFilter gained an `Ids` variant
+for the descendant rollup.
+
+**UX (hybrid, per the research):** the two halves that together solve
+deep nesting —
+- *Sidebar tree*: recursive render, chevron expand/collapse (persisted),
+  guide-rail indentation (nested-`ul` border-left, not per-row padding,
+  so depth stays cheap), color dots, drag-to-reparent (HTML5 DnD, custom
+  mime so it doesn't collide with the Tauri clip-drag), resizable
+  sidebar. Views rows share the chevron gutter so icons align.
+- *Content drill-in*: breadcrumb path + subfolder cards above the grid +
+  "show subfolder contents" rollup toggle. This is the escape hatch for
+  arbitrary depth — you re-root instead of indenting forever.
+
+**Multi-select:** Ctrl/Cmd-click toggles folders into a selection (plain
+click still filters); a selection bar offers bulk delete with ONE
+confirm (was: 50 folders = 50 popups).
+
+Research refs that shaped the depth approach: UX Planet sidebar guide,
+Hagan Rivers "Interaction Design for Trees", ishadeed treeview
+indentation (rails + GitHub's `max()` indent). Eagle only does
+indentation → runs off the right edge; we added the drill-in so depth
+doesn't require horizontal runway. Notes in ROADMAP decision log.
+
+Next: nothing outstanding on folders. Eagle integration is still the big
+queued item.
+
+---
+
 ## 2026-06-04 — 1.3.1 → 1.3.3: palette, list view, background mode, dialogs
 
 Multi-session sweep. Everything below shipped + released.
