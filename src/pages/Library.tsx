@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTauriEvent } from "../lib/useTauriEvent";
 import { Icon } from "../lib/icons";
 import { fmtBytes, fmtDuration } from "../lib/format";
-import { attachLocalThumbnail, openExternalUrl, openFileInDefaultApp, revealFile, thumbnailSrc } from "../lib/library";
+import { attachLocalThumbnail, eagleDetect, EAGLE_NOT_RUNNING, openExternalUrl, openFileInDefaultApp, revealFile, sendToEagle, thumbnailSrc } from "../lib/library";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -248,6 +248,13 @@ export default function LibraryPage() {
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const [anchor, setAnchor] = useState<string | null>(null);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  // 1.4 — Eagle integration. `eagleRunning` dims the "Send to Eagle"
+  // actions when Eagle isn't reachable; refreshed on mount + window
+  // focus (cheap probe, no tight polling). `toast` is a transient,
+  // non-blocking status line for send results.
+  const [eagleRunning, setEagleRunning] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<number | null>(null);
   // 1.3.0 — in-app Trash view. When active, the grid shows trashed clips
   // (deleted_at NOT NULL) and a Restore/Empty toolbar replaces the normal
   // chrome. trashCount drives the sidebar badge in any view.
@@ -1312,6 +1319,54 @@ export default function LibraryPage() {
     }
   }
 
+  // 1.4 — show a transient toast that auto-dismisses. Replaces any
+  // in-flight toast so rapid actions don't stack.
+  function flashToast(msg: string) {
+    if (toastTimer.current != null) window.clearTimeout(toastTimer.current);
+    setToast(msg);
+    toastTimer.current = window.setTimeout(() => setToast(null), 2800);
+  }
+
+  // 1.4 — probe Eagle on mount + whenever the window regains focus, so
+  // the "Send to Eagle" buttons reflect whether Eagle is open without a
+  // tight polling loop.
+  useEffect(() => {
+    let alive = true;
+    const probe = () => {
+      void eagleDetect().then((s) => {
+        if (alive) setEagleRunning(s.running);
+      });
+    };
+    probe();
+    window.addEventListener("focus", probe);
+    return () => {
+      alive = false;
+      window.removeEventListener("focus", probe);
+    };
+  }, []);
+
+  // 1.4 — "Send to Eagle" for one or many assets. Eagle being closed is
+  // an actionable state → friendly dialog; success → non-blocking toast.
+  async function handleSendToEagle(ids: string[]) {
+    if (ids.length === 0) return;
+    try {
+      const sent = await sendToEagle(ids);
+      setEagleRunning(true);
+      flashToast(sent === 1 ? "Sent 1 clip to Eagle" : `Sent ${sent} clips to Eagle`);
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes(EAGLE_NOT_RUNNING)) {
+        setEagleRunning(false);
+        await alertDialog(
+          "Eagle isn't running. Open Eagle and try again.",
+          { title: "Eagle not found", kind: "warning" },
+        );
+      } else {
+        await alertDialog(msg, { title: "Couldn't send to Eagle", kind: "error" });
+      }
+    }
+  }
+
   // 1.1 — box-drag selection. Listens for mousedown on the grid
   // scroll container; if the target isn't a card itself, starts a
   // marquee. The handler chain is:
@@ -2199,6 +2254,7 @@ export default function LibraryPage() {
           knownTags={allTags}
           folders={folders}
           bulkDeleting={bulkDeleting}
+          eagleRunning={eagleRunning}
           onClearSelection={() => setSelection(new Set())}
           onSelectOne={(id) => {
             setSelection(new Set([id]));
@@ -2206,6 +2262,7 @@ export default function LibraryPage() {
           }}
           onBulkDelete={() => void bulkDelete()}
           onMoveToFolder={(folderId) => void moveSelectionToFolder(folderId)}
+          onSendToEagle={(ids) => void handleSendToEagle(ids)}
         />
       </div>
 
@@ -2224,6 +2281,9 @@ export default function LibraryPage() {
         />
       )}
 
+      {/* 1.4 — transient non-blocking status toast (e.g. Eagle send). */}
+      {toast && <div className="lib-toast" role="status">{toast}</div>}
+
       {contextMenu && (
         <CardContextMenu
           x={contextMenu.x}
@@ -2238,10 +2298,12 @@ export default function LibraryPage() {
               : [contextMenu.asset.id]
           }
           inTrash={inTrash}
+          eagleRunning={eagleRunning}
           onClose={() => setContextMenu(null)}
           onMoveToTrash={(ids) => void moveToTrash(ids)}
           onRestore={(ids) => void restoreFromTrash(ids)}
           onDeleteForever={(ids) => void emptyTrash(ids)}
+          onSendToEagle={(ids) => void handleSendToEagle(ids)}
         />
       )}
 
@@ -2396,10 +2458,12 @@ function CardContextMenu({
   asset,
   selectionIds,
   inTrash,
+  eagleRunning,
   onClose,
   onMoveToTrash,
   onRestore,
   onDeleteForever,
+  onSendToEagle,
 }: {
   x: number;
   y: number;
@@ -2413,10 +2477,14 @@ function CardContextMenu({
   selectionIds: string[];
   /** When true, swaps Move-to-Trash for Restore/Delete-forever. */
   inTrash: boolean;
+  /** 1.4 — whether Eagle is reachable; dims the Send-to-Eagle item. */
+  eagleRunning: boolean;
   onClose: () => void;
   onMoveToTrash: (ids: string[]) => void | Promise<void>;
   onRestore: (ids: string[]) => void | Promise<void>;
   onDeleteForever: (ids: string[]) => void | Promise<void>;
+  /** 1.4 — push the whole selection to the open Eagle library. */
+  onSendToEagle: (ids: string[]) => void | Promise<void>;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
   // Adjust position to fit in viewport. ResizeObserver / layout effect
@@ -2499,6 +2567,19 @@ function CardContextMenu({
       <button className="ctx-item" onClick={withClose(() => copyToClipboard(asset.file_path))}>
         Copy file path
       </button>
+      {!inTrash && (
+        <>
+          <div className="ctx-sep" />
+          <button
+            className={"ctx-item" + (eagleRunning ? "" : " ctx-dim")}
+            onClick={withClose(() => onSendToEagle(selectionIds))}
+            title={eagleRunning ? "Add to your open Eagle library" : "Eagle isn't running"}
+          >
+            <Icon.eagle width={12} height={12} />
+            Send to Eagle{suffix}
+          </button>
+        </>
+      )}
       <div className="ctx-sep" />
       {/* Destructive actions: act on the whole selection. Branch on
           where we are — Library vs the Trash view get different verbs. */}
@@ -3525,10 +3606,12 @@ function InspectorPanel({
   knownTags,
   folders,
   bulkDeleting,
+  eagleRunning,
   onClearSelection,
   onSelectOne,
   onBulkDelete,
   onMoveToFolder,
+  onSendToEagle,
 }: {
   selection: Set<string>;
   assets: Asset[];
@@ -3536,12 +3619,15 @@ function InspectorPanel({
   knownTags: TagCount[];
   folders: Folder[];
   bulkDeleting: boolean;
+  eagleRunning: boolean;
   onClearSelection: () => void;
   onSelectOne: (id: string) => void;
   onBulkDelete: () => void;
   /** 1.1 Phase 2 — move the entire current selection to a folder.
    *  null = Uncategorized (clear folder assignment). */
   onMoveToFolder: (folderId: string | null) => void;
+  /** 1.4 — push the selection to the open Eagle library. */
+  onSendToEagle: (ids: string[]) => void;
 }) {
   const selectedAssets = useMemo(() => {
     if (selection.size === 0) return [];
@@ -3559,8 +3645,10 @@ function InspectorPanel({
           folders={folders}
           knownTagsForInspector={knownTags}
           bulkDeleting={bulkDeleting}
+          eagleRunning={eagleRunning}
           onMoveToFolder={onMoveToFolder}
           onDelete={onBulkDelete}
+          onSendToEagle={() => onSendToEagle(selectedAssets.map((a) => a.id))}
         />
       )}
       {selection.size > 1 && (
@@ -3569,10 +3657,12 @@ function InspectorPanel({
           folders={folders}
           knownTags={knownTags}
           bulkDeleting={bulkDeleting}
+          eagleRunning={eagleRunning}
           onClear={onClearSelection}
           onSelectOne={onSelectOne}
           onBulkDelete={onBulkDelete}
           onMoveToFolder={onMoveToFolder}
+          onSendToEagle={() => onSendToEagle(selectedAssets.map((a) => a.id))}
         />
       )}
     </aside>
@@ -3599,15 +3689,19 @@ function InspectorSingle({
   folders,
   knownTagsForInspector,
   bulkDeleting,
+  eagleRunning,
   onMoveToFolder,
   onDelete,
+  onSendToEagle,
 }: {
   asset: Asset | undefined;
   folders: Folder[];
   knownTagsForInspector: TagCount[];
   bulkDeleting: boolean;
+  eagleRunning: boolean;
   onMoveToFolder: (folderId: string | null) => void;
   onDelete: () => void;
+  onSendToEagle: () => void;
 }) {
   if (!asset) return <InspectorEmpty />;
   const currentFolder = asset.folder_id
@@ -3704,6 +3798,14 @@ function InspectorSingle({
           <Icon.folder width={18} height={18} />
         </button>
         <button
+          className={"btn btn-secondary insp-action-btn" + (eagleRunning ? "" : " insp-action-dim")}
+          onClick={onSendToEagle}
+          title={eagleRunning ? "Send to Eagle" : "Send to Eagle (Eagle isn't running)"}
+          aria-label="Send to Eagle"
+        >
+          <Icon.eagle width={17} height={17} />
+        </button>
+        <button
           className="btn btn-danger insp-action-btn"
           onClick={onDelete}
           disabled={bulkDeleting}
@@ -3765,19 +3867,23 @@ function InspectorBatch({
   folders,
   knownTags,
   bulkDeleting,
+  eagleRunning,
   onClear,
   onSelectOne,
   onBulkDelete,
   onMoveToFolder,
+  onSendToEagle,
 }: {
   selected: Asset[];
   folders: Folder[];
   knownTags: TagCount[];
   bulkDeleting: boolean;
+  eagleRunning: boolean;
   onClear: () => void;
   onSelectOne: (id: string) => void;
   onBulkDelete: () => void;
   onMoveToFolder: (folderId: string | null) => void;
+  onSendToEagle: () => void;
 }) {
   // If every selected asset shares the same folder_id, surface it as
   // the current value of the batch dropdown; otherwise show a "mixed"
@@ -3849,6 +3955,14 @@ function InspectorBatch({
       <BatchTagEditor selected={selected} knownTags={knownTags} />
 
       <div className="insp-actions insp-actions-icon" style={{ flexDirection: "column", alignItems: "stretch" }}>
+        <button
+          className={"btn btn-secondary insp-action-btn" + (eagleRunning ? "" : " insp-action-dim")}
+          onClick={onSendToEagle}
+          title={eagleRunning ? "Add the selection to your open Eagle library" : "Send to Eagle (Eagle isn't running)"}
+        >
+          <Icon.eagle width={16} height={16} />
+          {`Send ${selected.length} to Eagle`}
+        </button>
         <button
           className="btn btn-danger insp-action-btn"
           onClick={onBulkDelete}

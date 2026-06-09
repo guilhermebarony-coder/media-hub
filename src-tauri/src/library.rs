@@ -309,6 +309,7 @@ pub async fn init(app: &AppHandle) -> Result<LibraryState, String> {
         include_str!("../migrations/009_project_root.sql"),
         include_str!("../migrations/010_trash.sql"),
         include_str!("../migrations/011_folder_nesting.sql"),
+        include_str!("../migrations/012_eagle.sql"),
     ] {
         for stmt in split_sql_statements(schema) {
             if let Err(e) = sqlx::query(&stmt).execute(&pool).await {
@@ -432,7 +433,7 @@ async fn migrate_folders_for_nesting(pool: &sqlx::SqlitePool) -> Result<(), Stri
 
 /// Fetch tags for a set of asset ids in one query, returning a map.
 /// Keeps `library_list` to two queries regardless of asset count.
-async fn load_tags_for(
+pub async fn load_tags_for(
     pool: &SqlitePool,
     ids: &[String],
 ) -> Result<std::collections::HashMap<String, Vec<String>>, sqlx::Error> {

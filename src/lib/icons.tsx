@@ -136,6 +136,15 @@ export const Icon = {
       <path d="M4.5 3v10l8-5z" />
     </svg>
   ),
+  // 1.4 — "Send to Eagle". A soaring-bird silhouette evoking the Eagle
+  // (eagle.cool) brand, kept monochromatic + filled so it reads as a
+  // distinct glyph next to the stroked Open/Reveal/Trash actions in the
+  // inspector row. Tooltip carries the "Send to Eagle" label.
+  eagle: (p: P = {}) => (
+    <svg viewBox="0 0 24 24" fill="currentColor" {...p}>
+      <path d="M12 5c.7 0 1.3.5 1.5 1.2l.4 1.4 4.6-1.2c.5-.13.9.42.6.85l-2.6 3.5c1.6.5 3 1.6 3.9 3.1.27.45-.1 1-.6.86l-3.5-.95a5.5 5.5 0 0 1-5 3.24 5.5 5.5 0 0 1-5-3.24l-3.5.95c-.5.14-.87-.41-.6-.86a6.5 6.5 0 0 1 3.9-3.1L3.4 7.25c-.3-.43.1-.98.6-.85L8.6 7.6 9 6.2C9.2 5.5 9.8 5 10.5 5z" />
+    </svg>
+  ),
   tag: (p: P = {}) => (
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinejoin="round" {...p}>
       <path d="M2 2v6l6 6 6-6-6-6H2z" />

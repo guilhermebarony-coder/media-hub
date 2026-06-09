@@ -15,6 +15,38 @@ export async function openExternalUrl(url: string): Promise<void> {
   }
 }
 
+// =====================================================================
+// Eagle (eagle.cool) integration — one-way push.
+// =====================================================================
+
+export type EagleStatus = { running: boolean; version: string | null };
+
+/** Marker the backend returns when Eagle isn't reachable. */
+export const EAGLE_NOT_RUNNING = "__eagle_not_running__";
+
+/**
+ * Probe whether Eagle is running. Never throws — a closed Eagle is a
+ * normal state reported as `{ running: false }`.
+ */
+export async function eagleDetect(): Promise<EagleStatus> {
+  try {
+    return await invoke<EagleStatus>("eagle_detect");
+  } catch {
+    return { running: false, version: null };
+  }
+}
+
+/**
+ * Push the given assets into the open Eagle library. Returns the count
+ * sent. Throws `EAGLE_NOT_RUNNING` when Eagle is closed so the caller
+ * can show the "open Eagle" dialog; other errors surface as their
+ * message string.
+ */
+export async function sendToEagle(assetIds: string[]): Promise<number> {
+  const res = await invoke<{ sent: number }>("eagle_send", { assetIds });
+  return res.sent;
+}
+
 /**
  * Record an asset row in the SQLite library and return its id. Wrapped
  * so callers don't need to remember the command name and so we can

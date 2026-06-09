@@ -163,22 +163,40 @@
    */
   function trackVideo(video, btn) {
     let pendingFrame = null;
-    let lastVisible = false;
 
     const positionBtn = () => {
       pendingFrame = null;
       const r = video.getBoundingClientRect();
+      // A true modal (Twitter's fullscreen photo/media viewer uses
+      // aria-modal="true") covers the page. Any video NOT inside that
+      // modal is behind it — its rect often collapses toward the
+      // top-left, which would park the pill in the corner over the
+      // lightbox. Hide buttons for videos the modal covers; the video
+      // INSIDE the modal (the fullscreen player) still gets its button.
+      const modal = document.querySelector('[aria-modal="true"]');
+      const coveredByModal = !!modal && !modal.contains(video);
+      // Minimum real-player size. Twitter (and others) keep collapsed
+      // ~0–1px <video> ghosts in the DOM — for preloading, or the
+      // element left behind when the photo/media lightbox opens. Those
+      // ghosts sit at the top-left origin, so without a size floor the
+      // pill glues itself to the corner over whatever's on screen. Real
+      // players are always far larger than this.
+      const bigEnough = r.width >= 80 && r.height >= 80;
       const visible =
-        r.width > 0 &&
-        r.height > 0 &&
+        !coveredByModal &&
+        bigEnough &&
         r.bottom > 0 &&
         r.top < window.innerHeight &&
         r.right > 0 &&
         r.left < window.innerWidth;
-      if (visible !== lastVisible) {
-        btn.style.display = visible ? "" : "none";
-        lastVisible = visible;
-      }
+      // Always apply display from the CURRENT visibility — never
+      // gate it behind a "changed" check. The button starts hidden
+      // (set at attach time); a "not visible" video must explicitly
+      // KEEP it hidden, otherwise it falls back to its CSS default
+      // position (top-left corner) and lingers there at opacity:0,
+      // revealing on any hover over that corner. This was the root
+      // cause of the always-present corner ghost.
+      btn.style.display = visible ? "" : "none";
       if (!visible) return;
       // top-right of video — the universal CSS adds translateY(-50%)
       // so the center of the pill lands on the video's top edge.
@@ -204,12 +222,27 @@
     });
     io.observe(video);
 
+    // Idle re-check tick. A video can collapse / get covered (Twitter's
+    // photo lightbox opening, then the page going quiet) without firing
+    // scroll / resize / RO / IO — leaving a stale button frozen on
+    // screen until some unrelated reflow (e.g. opening DevTools) clears
+    // it. A slow poll re-runs the visibility check so the button hides
+    // on its own. ~300ms is imperceptible; one getBoundingClientRect
+    // per video is negligible.
+    const tick = window.setInterval(schedule, 300);
+
     // Watch for video removal — site SPAs virtualize / unmount
     // <video> as the user scrolls past.
     const cleanupObs = new MutationObserver(() => {
       if (!document.body.contains(video)) {
         cleanup();
+        return;
       }
+      // DOM churn includes a modal (photo/media viewer) opening or
+      // closing — which doesn't fire scroll/resize. Reschedule so the
+      // covered-by-modal check re-runs and the button hides/shows.
+      // schedule() coalesces to one reposition per frame.
+      schedule();
     });
     cleanupObs.observe(document.body, { childList: true, subtree: true });
 
@@ -219,6 +252,7 @@
       ro.disconnect();
       io.disconnect();
       cleanupObs.disconnect();
+      window.clearInterval(tick);
       if (btn.parentNode) btn.parentNode.removeChild(btn);
       if (pendingFrame !== null) cancelAnimationFrame(pendingFrame);
     }
@@ -242,6 +276,11 @@
    */
   function attachPortalButton({ video, targetUrl, source, hoverContainer, mode }) {
     const btn = makeButton({ targetUrl, mode, source });
+    // Start hidden — trackVideo's first positionBtn() reveals it only
+    // if the video is actually a visible, real-sized player. Prevents
+    // the button flashing at its CSS-default corner before the first
+    // geometry check runs.
+    btn.style.display = "none";
     ensureLayer().appendChild(btn);
 
     const show = () => btn.classList.add("mh-visible");

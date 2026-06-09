@@ -1,0 +1,75 @@
+name: Release
+
+# Cut a release by pushing a version tag, e.g.:
+#   git tag v1.4.0 && git push origin v1.4.0
+#
+# Builds macOS (Apple Silicon) + Windows in parallel, signs the updater
+# artifacts, and uploads everything to a DRAFT GitHub release named for
+# the tag. Review the draft, add notes, then publish.
+#
+# Required repo secrets (Settings -> Secrets and variables -> Actions):
+#   TAURI_SIGNING_PRIVATE_KEY           contents of ~/.tauri/media-hub.key
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  the key password (empty for ours)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+jobs:
+  build:
+    permissions:
+      contents: write # create/upload the release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-14 # Apple Silicon runner
+            rust_target: aarch64-apple-darwin
+            tauri_args: "--target aarch64-apple-darwin"
+            fetch_sidecars: bash scripts/fetch-sidecars-mac.sh
+          - platform: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            tauri_args: ""
+            fetch_sidecars: pwsh scripts/fetch-sidecars.ps1
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Fetch sidecars (yt-dlp + ffmpeg)
+        run: ${{ matrix.fetch_sidecars }}
+
+      - name: Build + release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Media Hub ${{ github.ref_name }}"
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.tauri_args }}

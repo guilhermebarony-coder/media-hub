@@ -5,6 +5,7 @@
 
 mod bridge;
 mod direct;
+mod eagle;
 mod library;
 mod settings;
 mod tray;
@@ -2392,6 +2393,8 @@ pub fn run() {
             tray::app_enter_background,
             tray::app_exit_background,
             tray::app_set_tray_tooltip,
+            eagle::eagle_detect,
+            eagle::eagle_send,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
