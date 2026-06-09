@@ -47,7 +47,21 @@ pub enum CookiesSource {
 #[serde(default)]
 pub struct Settings {
     // Sources — 0.8.B will surface this in the UI.
+    /// Default cookie source, applied to any site without a specific
+    /// override below. Most users leave this `None` (most public videos
+    /// work without cookies, and the WRONG cookies — e.g. a logged-in
+    /// YouTube jar — often break sites that would otherwise succeed).
     pub cookies_source: CookiesSource,
+
+    /// 1.4.x — Per-platform cookie overrides. Key is the platform name
+    /// from `detect_platform` ("youtube", "instagram", "tiktok",
+    /// "twitter", "reddit", "pinterest", "facebook"). When a download/
+    /// fetch URL matches a platform with an entry here, that source is
+    /// used INSTEAD of `cookies_source`. This is the fix for "I need
+    /// Instagram cookies but they break YouTube" — set the default to
+    /// None and add instagram -> browser. Empty by default.
+    #[serde(default)]
+    pub cookies_overrides: HashMap<String, CookiesSource>,
 
     // Library — 0.8.C / 0.8.B mix.
     /// Override of the default `~/Media Hub/` root. NULL = default.
@@ -154,6 +168,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             cookies_source: CookiesSource::None,
+            cookies_overrides: HashMap::new(),
             library_root: None,
             rename_template: String::new(),
             download_concurrency: 3,
@@ -741,12 +756,54 @@ pub fn cookies_validate(path: String) -> CookiesFileStatus {
     validate_cookies_file(&path)
 }
 
-pub fn cookies_args(state: &SettingsState) -> Vec<String> {
-    let guard = match state.inner.lock() {
-        Ok(g) => g,
-        Err(_) => return Vec::new(),
-    };
-    let args = match &guard.cookies_source {
+/// Map a URL to a coarse platform name used to look up a per-platform
+/// cookie override. Returns None for anything we don't have a bucket
+/// for (those fall through to the default `cookies_source`).
+///
+/// Substring match on the host is deliberately loose — it has to catch
+/// `youtu.be`, `m.youtube.com`, `x.com`, regional Pinterest TLDs, etc.
+/// without a brittle exact-host list.
+pub fn detect_platform(url: &str) -> Option<&'static str> {
+    // Lowercase host (or the whole string if URL parsing is overkill).
+    let u = url.trim().to_ascii_lowercase();
+    let host = u
+        .split("://")
+        .nth(1)
+        .unwrap_or(&u)
+        .split('/')
+        .next()
+        .unwrap_or(&u);
+    // Order matters only where one token is a substring of another;
+    // none of these collide, so first match wins.
+    const TABLE: &[(&str, &str)] = &[
+        ("youtube", "youtube"),
+        ("youtu.be", "youtube"),
+        ("instagram", "instagram"),
+        ("tiktok", "tiktok"),
+        ("twitter", "twitter"),
+        ("x.com", "twitter"),
+        ("reddit", "reddit"),
+        ("redd.it", "reddit"),
+        ("pinterest", "pinterest"),
+        ("pin.it", "pinterest"),
+        ("facebook", "facebook"),
+        ("fb.watch", "facebook"),
+        ("fb.com", "facebook"),
+    ];
+    for (needle, platform) in TABLE {
+        if host.contains(needle) {
+            return Some(platform);
+        }
+    }
+    None
+}
+
+/// Turn one `CookiesSource` into the yt-dlp arg pair (or empty for
+/// None / invalid). All the validation that used to live in
+/// `cookies_args` now lives here so both the default source and every
+/// per-platform override get the same guards.
+fn source_to_args(source: &CookiesSource) -> Vec<String> {
+    match source {
         CookiesSource::None => Vec::new(),
         CookiesSource::Browser { browser } => {
             const ALLOWED: &[&str] = &[
@@ -767,7 +824,7 @@ pub fn cookies_args(state: &SettingsState) -> Vec<String> {
             // its PyInstaller bootloader with the cryptic
             // `[PYI-...:ERROR] Failed to execute script '__main__'`
             // (no Python traceback because the bootloader dies
-             // before Python init completes). Real-world cause:
+            // before Python init completes). Real-world cause:
             // user picks "File" in the Settings cookies picker but
             // hasn't selected a path yet. Treat as No cookies.
             let trimmed = path.trim();
@@ -784,14 +841,32 @@ pub fn cookies_args(state: &SettingsState) -> Vec<String> {
             }
             vec!["--cookies".to_string(), trimmed.to_string()]
         }
+    }
+}
+
+/// Resolve the cookie args for a SPECIFIC url: a per-platform override
+/// if one is configured for the URL's platform, otherwise the default
+/// `cookies_source`. This is the fix for cross-site cookie bleed
+/// (Instagram cookies breaking YouTube downloads, etc.).
+pub fn cookies_args_for(state: &SettingsState, url: &str) -> Vec<String> {
+    let guard = match state.inner.lock() {
+        Ok(g) => g,
+        Err(_) => return Vec::new(),
     };
-    // Diagnostic line — shows what we're actually passing to yt-dlp.
-    // Visible in the `npm run tauri dev` terminal so the user can
-    // verify their settings are taking effect.
+    let platform = detect_platform(url);
+    let (source, origin): (&CookiesSource, String) = match platform
+        .and_then(|p| guard.cookies_overrides.get(p).map(|s| (s, p)))
+    {
+        Some((s, p)) => (s, format!("override:{p}")),
+        None => (&guard.cookies_source, "default".to_string()),
+    };
+    let args = source_to_args(source);
+    // Diagnostic — shows which rule won and what we're passing.
+    // Visible in the `npm run tauri dev` terminal.
     if args.is_empty() {
-        eprintln!("[cookies] none configured — yt-dlp will run without cookies");
+        eprintln!("[cookies] {origin} -> none; yt-dlp runs without cookies");
     } else {
-        eprintln!("[cookies] passing to yt-dlp: {args:?}");
+        eprintln!("[cookies] {origin} -> {args:?}");
     }
     args
 }

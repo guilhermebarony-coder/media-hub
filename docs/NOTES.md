@@ -23,6 +23,32 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-06-09 — v1.5.0: per-site cookies + retry-without-cookies fallback
+
+Fixes cross-site cookie bleed: one global cookie source was applied to
+every yt-dlp call, so setting Instagram/browser cookies broke YouTube
+(logged-in jar → "Sign in to confirm you're not a bot").
+
+**Per-site rules.** New `cookies_overrides: HashMap<String, CookiesSource>`
+in Settings (default empty) layered over the existing default
+`cookies_source`. `settings::detect_platform(url)` buckets a URL by host
+(youtube / instagram / tiktok / twitter / reddit / pinterest / facebook);
+`cookies_args_for(state, url)` returns the override for that platform if
+present, else the default. Wired into ALL four yt-dlp call sites
+(metadata, playlist, download, scrubber stream-resolve). Settings →
+Sources grew a "Per-site rules" editor below the default picker.
+Typical fix: default None + Instagram→browser.
+
+**Retry fallback.** `yt_dlp_capture(app, opts, cookie_args, url)` runs a
+capture command and, if it fails *with cookies applied*, retries once
+*without* cookies. Applied to the three capture commands (metadata,
+playlist, stream-resolve). NOT applied to the streaming download — re-
+running that mid-flight (progress polling + segment trim) is risky and
+the per-site rule already makes its cookies deterministic. The retry is
+what rescues the "fetching feels broken on YouTube" case.
+
+Extension unchanged (stays 1.4.0). App + Cargo + tauri.conf → 1.5.0.
+
 ## 2026-06-09 — v1.4.0: macOS shipping + CI release pipeline + Eagle P1
 
 First multi-platform release, first CI-built release. Three things

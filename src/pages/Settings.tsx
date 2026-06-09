@@ -199,7 +199,185 @@ function SourcesSection() {
           <CookiesFileStatus path={src.path} />
         </>
       )}
+
+      <div className="settings-divider" />
+      <OverridesEditor />
     </section>
+  );
+}
+
+// =====================================================================
+// Per-site cookie overrides (1.4.x)
+// =====================================================================
+//
+// The default cookie source above applies to every site. That's a
+// problem when one site NEEDS cookies (Instagram login) and another
+// BREAKS with the wrong ones (a logged-in YouTube jar trips "Sign in
+// to confirm you're not a bot"). These per-platform rules let the user
+// scope a cookie source to a specific site; the backend matches the
+// download/fetch URL's host (settings::detect_platform) and uses the
+// override instead of the default.
+
+const PLATFORMS = [
+  ["youtube", "YouTube"],
+  ["instagram", "Instagram"],
+  ["tiktok", "TikTok"],
+  ["twitter", "Twitter / X"],
+  ["reddit", "Reddit"],
+  ["pinterest", "Pinterest"],
+  ["facebook", "Facebook"],
+] as const;
+
+function OverridesEditor() {
+  const { settings, save } = useSettings();
+  const overrides = settings.cookies_overrides ?? {};
+  const used = new Set(Object.keys(overrides));
+  const available = PLATFORMS.filter(([id]) => !used.has(id));
+  const active = PLATFORMS.filter(([id]) => used.has(id));
+
+  function setOverride(platform: string, source: CookiesSource) {
+    void save((s) => ({
+      ...s,
+      cookies_overrides: { ...s.cookies_overrides, [platform]: source },
+    }));
+  }
+  function removeOverride(platform: string) {
+    void save((s) => {
+      const next = { ...s.cookies_overrides };
+      delete next[platform];
+      return { ...s, cookies_overrides: next };
+    });
+  }
+
+  return (
+    <div className="settings-subsection">
+      <div className="settings-row">
+        <span className="settings-label">Per-site rules</span>
+        <span className="hint-text faint">
+          Override the default for specific platforms. Typical setup:
+          default <strong>None</strong>, then add{" "}
+          <strong>Instagram → From browser</strong> — Instagram uses
+          your login, YouTube stays cookie-free (logged-in cookies often
+          break YouTube). The right cookies go to the right site
+          automatically, based on the URL.
+        </span>
+      </div>
+
+      {active.length === 0 && (
+        <p className="hint faint" style={{ margin: "2px 0 8px" }}>
+          No per-site rules yet — every site uses the default above.
+        </p>
+      )}
+
+      {active.map(([id, label]) => {
+        const ov = overrides[id];
+        return (
+          <div key={id} className="cookie-override-row">
+            <span className="cookie-override-platform">{label}</span>
+            <select
+              className="field-select"
+              value={ov.kind}
+              onChange={(e) => {
+                const k = e.target.value as CookiesSource["kind"];
+                if (k === "none") setOverride(id, { kind: "none" });
+                else if (k === "browser")
+                  setOverride(id, { kind: "browser", browser: BROWSERS[0] });
+                else setOverride(id, { kind: "file", path: "" });
+              }}
+            >
+              <option value="none">None</option>
+              <option value="browser">From browser</option>
+              <option value="file">From file</option>
+            </select>
+
+            {ov.kind === "browser" && (
+              <select
+                className="field-select"
+                value={ov.browser}
+                onChange={(e) =>
+                  setOverride(id, { kind: "browser", browser: e.target.value })
+                }
+              >
+                {BROWSERS.map((b) => (
+                  <option key={b} value={b}>
+                    {b[0].toUpperCase() + b.slice(1)}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {ov.kind === "file" && (
+              <>
+                <input
+                  className="field-input"
+                  type="text"
+                  placeholder="C:\path\to\cookies.txt"
+                  value={ov.path}
+                  onChange={(e) =>
+                    setOverride(id, { kind: "file", path: e.target.value })
+                  }
+                  spellCheck={false}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={async () => {
+                    try {
+                      const picked = await openDialog({
+                        directory: false,
+                        multiple: false,
+                        title: `Choose cookies.txt for ${label}`,
+                        filters: [
+                          { name: "cookies.txt", extensions: ["txt"] },
+                          { name: "All files", extensions: ["*"] },
+                        ],
+                      });
+                      if (typeof picked === "string")
+                        setOverride(id, { kind: "file", path: picked });
+                    } catch (e) {
+                      console.warn("file picker failed:", e);
+                    }
+                  }}
+                >
+                  <Icon.folder width={12} height={12} /> Browse…
+                </button>
+              </>
+            )}
+
+            <button
+              type="button"
+              className="btn btn-ghost cookie-override-remove"
+              onClick={() => removeOverride(id)}
+              title={`Remove ${label} rule`}
+            >
+              <Icon.x width={13} height={13} />
+            </button>
+          </div>
+        );
+      })}
+
+      {available.length > 0 && (
+        <div className="cookie-override-add">
+          <select
+            className="field-select"
+            value=""
+            onChange={(e) => {
+              const id = e.target.value;
+              // New rules default to "From browser" — the reason you add
+              // a rule is almost always to supply cookies for a site.
+              if (id) setOverride(id, { kind: "browser", browser: BROWSERS[0] });
+            }}
+          >
+            <option value="">+ Add site rule…</option>
+            {available.map(([id, label]) => (
+              <option key={id} value={id}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+    </div>
   );
 }
 

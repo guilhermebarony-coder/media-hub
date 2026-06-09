@@ -282,6 +282,51 @@ fn project_format(f: RawFormat) -> Option<FormatOption> {
     })
 }
 
+/// Run yt-dlp to completion capturing its output, with an automatic
+/// "retry without cookies" fallback.
+///
+/// `opts` is every yt-dlp option EXCEPT cookies and the trailing
+/// `-- <url>` (this helper appends both). The first attempt runs with
+/// `cookie_args`; if it exits non-zero AND cookies were actually
+/// applied, we retry once with no cookies. That rescues the common
+/// failure where a stale / wrong cookie jar (e.g. a logged-in YouTube
+/// session, or Instagram cookies bleeding onto a YouTube URL) breaks a
+/// fetch that would have succeeded anonymously. When `cookie_args` is
+/// empty there's nothing to fall back from, so the first result stands.
+async fn yt_dlp_capture(
+    app: &AppHandle,
+    opts: &[String],
+    cookie_args: &[String],
+    url: &str,
+) -> Result<tauri_plugin_shell::process::Output, String> {
+    let build = |with_cookies: bool| -> Vec<String> {
+        let mut a: Vec<String> = opts.to_vec();
+        if with_cookies {
+            a.extend_from_slice(cookie_args);
+        }
+        a.push("--".to_string()); // end of options; URL is positional
+        a.push(url.to_string());
+        a
+    };
+
+    let out = updater::resolve_yt_dlp(app)?
+        .args(build(true))
+        .output()
+        .await
+        .map_err(|e| format!("spawn failed: {e}"))?;
+
+    if out.status.success() || cookie_args.is_empty() {
+        return Ok(out);
+    }
+
+    eprintln!("[cookies] capture failed with cookies applied — retrying without cookies");
+    updater::resolve_yt_dlp(app)?
+        .args(build(false))
+        .output()
+        .await
+        .map_err(|e| format!("spawn failed: {e}"))
+}
+
 #[tauri::command]
 async fn yt_fetch_metadata(
     app: AppHandle,
@@ -293,39 +338,25 @@ async fn yt_fetch_metadata(
         return Err("URL is empty".into());
     }
 
-    // 1.2.16 — prefer the auto-updated managed binary, fall back to the
-    // bundled sidecar. See updater::resolve_yt_dlp.
-    let cmd = updater::resolve_yt_dlp(&app)?;
-
-    // Cookies extras (0.8.B): empty when source is None, otherwise
-    // adds --cookies-from-browser <name> or --cookies <path>.
-    // Owned strings because .args() needs &str references that outlive
-    // the call.
-    let cookies = settings::cookies_args(&settings);
+    // Cookies extras (0.8.B / 1.4.x per-site): empty when the resolved
+    // source is None, otherwise --cookies-from-browser <name> or
+    // --cookies <path>. cookies_args_for picks a per-platform override
+    // (e.g. instagram) if configured, else the default source.
+    let cookies = settings::cookies_args_for(&settings, trimmed);
     // 1.0.3 — TV client first, web fallback. Lets a chunk of
     // age-restricted videos resolve metadata without cookies at all.
     let yt_args = settings::youtube_extractor_args();
-    let mut args: Vec<&str> = vec![
-        "-j",                  // dump single JSON object, no download
-        "--no-playlist",       // never expand playlists at this stage
-        "--no-warnings",       // keep stderr clean
-        "--no-call-home",      // be polite, skip telemetry
-        "--socket-timeout", "15",
+    let mut opts: Vec<String> = vec![
+        "-j".into(),             // dump single JSON object, no download
+        "--no-playlist".into(),  // never expand playlists at this stage
+        "--no-warnings".into(),  // keep stderr clean
+        "--no-call-home".into(), // be polite, skip telemetry
+        "--socket-timeout".into(), "15".into(),
     ];
-    for c in &cookies {
-        args.push(c.as_str());
-    }
-    for a in &yt_args {
-        args.push(a.as_str());
-    }
-    args.push("--");           // end of options, URL is positional
-    args.push(trimmed);
+    opts.extend(yt_args.iter().cloned());
 
-    let out = cmd
-        .args(args)
-        .output()
-        .await
-        .map_err(|e| format!("spawn failed: {e}"))?;
+    // 1.4.x — auto-retry without cookies if the cookie'd attempt fails.
+    let out = yt_dlp_capture(&app, &opts, &cookies, trimmed).await?;
 
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -488,35 +519,22 @@ async fn yt_fetch_playlist(
         return Err("URL is empty".into());
     }
 
-    // 1.2.16 — prefer the auto-updated managed binary (see updater).
-    let cmd = updater::resolve_yt_dlp(&app)?;
-
     // Same cookies + extractor-args plumbing as the metadata fetch so
     // private / members-only / region-flavored playlists work the same
-    // way as the rest of the app.
-    let cookies = settings::cookies_args(&settings);
+    // way as the rest of the app. cookies_args_for applies the per-site
+    // rule; yt_dlp_capture adds the retry-without-cookies fallback.
+    let cookies = settings::cookies_args_for(&settings, trimmed);
     let yt_args = settings::youtube_extractor_args();
-    let mut args: Vec<&str> = vec![
-        "-J",                  // dump as single JSON object (playlist + entries)
-        "--flat-playlist",     // skip per-video format extraction (huge speedup)
-        "--no-warnings",
-        "--no-call-home",
-        "--socket-timeout", "30",
+    let mut opts: Vec<String> = vec![
+        "-J".into(),             // dump as single JSON object (playlist + entries)
+        "--flat-playlist".into(),// skip per-video format extraction (huge speedup)
+        "--no-warnings".into(),
+        "--no-call-home".into(),
+        "--socket-timeout".into(), "30".into(),
     ];
-    for c in &cookies {
-        args.push(c.as_str());
-    }
-    for a in &yt_args {
-        args.push(a.as_str());
-    }
-    args.push("--");
-    args.push(trimmed);
+    opts.extend(yt_args.iter().cloned());
 
-    let out = cmd
-        .args(args)
-        .output()
-        .await
-        .map_err(|e| format!("spawn failed: {e}"))?;
+    let out = yt_dlp_capture(&app, &opts, &cookies, trimmed).await?;
 
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -858,8 +876,13 @@ async fn yt_download(
         args.push("--ffmpeg-location");
         args.push(ff.as_str());
     }
-    // Cookies extras (0.8.B) for age-restricted / following-only content.
-    let cookies = settings::cookies_args(&settings);
+    // Cookies extras (0.8.B / 1.4.x per-site) for age-restricted /
+    // following-only content. Per-platform override resolved from the
+    // URL so e.g. Instagram cookies don't bleed onto a YouTube download.
+    // (No auto-retry here — the streaming spawn isn't cheap to re-run;
+    // the per-site rule is the deterministic fix. Capture-based fetches
+    // get the retry fallback.)
+    let cookies = settings::cookies_args_for(&settings, trimmed);
     for c in &cookies {
         args.push(c.as_str());
     }
@@ -1826,31 +1849,21 @@ async fn yt_resolve_stream_url(
     let format_spec =
         "best[ext=mp4][height<=720]/best[ext=mp4]/best[height<=720]/best";
 
-    let cookies = settings::cookies_args(&settings);
+    let cookies = settings::cookies_args_for(&settings, trimmed);
     // 1.0.3 — TV-client-first. Scrubber stream resolution benefits
     // from the same age-gate bypass as the main download flow.
     let yt_args = settings::youtube_extractor_args();
-    let mut args: Vec<&str> = vec![
-        "-g",
-        "--no-warnings",
-        "--no-playlist",
-        "-f",
-        format_spec,
+    let mut opts: Vec<String> = vec![
+        "-g".into(),
+        "--no-warnings".into(),
+        "--no-playlist".into(),
+        "-f".into(),
+        format_spec.into(),
     ];
-    for c in &cookies {
-        args.push(c.as_str());
-    }
-    for a in &yt_args {
-        args.push(a.as_str());
-    }
-    args.push(trimmed);
+    opts.extend(yt_args.iter().cloned());
 
-    // 1.2.16 — prefer the auto-updated managed binary (see updater).
-    let output = updater::resolve_yt_dlp(&app)?
-        .args(args)
-        .output()
-        .await
-        .map_err(|e| format!("yt-dlp -g failed: {e}"))?;
+    // 1.4.x — per-site cookies + retry-without-cookies fallback.
+    let output = yt_dlp_capture(&app, &opts, &cookies, trimmed).await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

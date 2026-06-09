@@ -179,7 +179,15 @@ export type CookiesSource =
   | { kind: "file"; path: string };
 
 export type Settings = {
+  /** Default cookie source, applied to any site without a per-platform
+   *  override below. Usually "none". */
   cookies_source: CookiesSource;
+  /** 1.4.x — Per-platform cookie overrides. Key = platform id
+   *  ("youtube", "instagram", "tiktok", "twitter", "reddit",
+   *  "pinterest", "facebook"); value = the cookie source to use for
+   *  URLs on that platform INSTEAD of cookies_source. Fixes cross-site
+   *  cookie bleed (e.g. Instagram cookies breaking YouTube). */
+  cookies_overrides: Record<string, CookiesSource>;
   library_root: string | null;
   rename_template: string;
   download_concurrency: number;
@@ -215,6 +223,7 @@ export type Settings = {
 
 export const DEFAULT_SETTINGS: Settings = {
   cookies_source: { kind: "none" },
+  cookies_overrides: {},
   library_root: null,
   rename_template: "",
   download_concurrency: 3,

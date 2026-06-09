@@ -2775,6 +2775,47 @@ body.lib-resizing-h * {
   font-family: var(--mono);
 }
 
+/* 1.4.x — per-site cookie overrides editor. */
+.settings-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 14px 0 10px;
+  border: 0;
+}
+.settings-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cookie-override-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 0;
+}
+.cookie-override-platform {
+  flex: 0 0 96px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.cookie-override-row .field-input {
+  flex: 1 1 220px;
+  min-width: 160px;
+}
+.cookie-override-remove {
+  margin-left: auto;
+  padding: 4px 6px;
+  color: var(--text-3);
+}
+.cookie-override-remove:hover {
+  color: var(--danger, #ff6363);
+}
+.cookie-override-add {
+  padding: 4px 0 2px;
+}
+
 /* 1.2.2 — Bridge section additions. Pill-style toggle that scans
    nicely next to the URL/Port/Token rows. */
 .switch {
