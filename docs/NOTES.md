@@ -23,6 +23,48 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-06-09 — v1.4.0: macOS shipping + CI release pipeline + Eagle P1
+
+First multi-platform release, first CI-built release. Three things
+landed together under tag `v1.4.0`.
+
+**CI release pipeline** (`.github/workflows/release.yml`): pushing a
+`v*` tag now builds **macOS-14 (aarch64) + windows-latest in parallel**
+via `tauri-apps/tauri-action`, signs the updater artifacts (secrets
+`TAURI_SIGNING_PRIVATE_KEY` + `..._PASSWORD` live in repo Actions
+secrets, set from `~/.tauri/media-hub.key`), and uploads to one **draft**
+release. Big win: tauri-action **auto-generates + merges `latest.json`**
+across both platform jobs — the hand-built manifest dance from the
+manual Windows flow is gone. Review the draft → publish.
+
+**macOS specifics:**
+- Can't cross-compile from Windows (needs Xcode/macOS SDK) — hence CI.
+- Sidecars: `scripts/fetch-sidecars-mac.sh` (mirror of the PS1) pulls
+  `yt-dlp_macos` (universal2) + a **static** arm64 ffmpeg from
+  `ffmpeg.martin-riedl.de` (static = no Homebrew dylib deps, bundles
+  clean), named `{yt-dlp,ffmpeg}-aarch64-apple-darwin`. Gitignore's
+  existing `yt-dlp*`/`ffmpeg*` globs already cover them.
+- `.gitattributes` forces `*.sh` to LF so the shebang survives the mac
+  runner (CRLF → "bad interpreter").
+- **Unsigned for now** (no Apple Developer ID): testers right-click →
+  Open once per install to clear Gatekeeper. Notarization is the next
+  step before any wide release.
+- Targeting Apple Silicon only (aarch64). Intel/universal deferred —
+  testers are all M-series.
+
+**Eagle P1** (manual send): `eagle.rs` + migration 012. Detects Eagle's
+local API (`http://localhost:41595`), sends selected assets via
+`addFromPaths` mapping tags→tags, source_url→website, title→name.
+"Send to Eagle" in card context menu + inspector (single + batch),
+live running-probe, toast feedback. **P2 (folder mirroring + id map)
+and the auto-send toggle remain designed-but-unbuilt.**
+
+**Extension corner-ghost fix** (`content-portal.js`): the overlay pill
+was parked top-left the whole time at opacity:0, revealing on corner
+hover. Root cause: `display` was gated behind a `visible !== lastVisible`
+check that never fired on first paint. Fix: always apply `display` from
+current visibility + start the button hidden at attach.
+
 ## 2026-06-04 — Nested folders (Eagle-style hybrid)
 
 Shipped the full folder-nesting feature in four commits (P1 data model,

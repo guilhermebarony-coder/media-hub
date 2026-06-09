@@ -86,13 +86,18 @@ What's live right now:
   updater (silent, 24h-throttled).
 
 What's next (priority order):
-1. **Nested folder structure** — folders-in-folders. Needs `parent_id` on
-   the folders table + recursive CRUD + sidebar tree UI + DnD reparent.
-2. **Eagle integration investigation** — export/sync to an Eagle library
-   (see decision-log entry 2026-06-04 below).
+1. ✅ **Nested folder structure** — shipped 2026-06-04 (migration 011).
+2. 🟡 **Eagle integration** — **P1 shipped** (v1.4.0): manual "Send to
+   Eagle" (single + batch) via `addFromPaths`, tags→tags /
+   source_url→website / title→name. **P2 (folder mirroring + Eagle
+   id-map for dedup) and the auto-send toggle** remain — designed, not
+   built. See NOTES 2026-06-09 + decision-log 2026-06-04.
 3. App health checkup carryover (was 0.9 plan) — still owed before 2.0.
-4. Release automation — `scripts/release.*` to generate `latest.json` +
-   upload in one command (see NOTES gotcha 2026-06-04).
+4. ✅ **Release automation + macOS** — shipped 2026-06-09 (v1.4.0):
+   GitHub Actions `release.yml` builds mac (aarch64) + Windows on a
+   `v*` tag, tauri-action auto-generates `latest.json`. macOS ships
+   **unsigned** (Gatekeeper right-click-Open); notarization still owed
+   before wide release.
 
 The "Path to 1.0" table below is HISTORICAL — keeping it for archeology.
 
