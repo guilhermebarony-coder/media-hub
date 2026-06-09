@@ -42,3 +42,6 @@ src-tauri/target.lnk
 # ~/.tauri/media-hub.key{,.pub}. This catches accidental copies.
 *.key
 *.key.pub
+
+# Packaged extension artifact (build output, not source)
+*.rar
