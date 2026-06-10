@@ -23,6 +23,39 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-06-09 — v1.6.0: folder fixes (multi-select, delete, nesting UX)
+
+Tester-driven batch of folder-sidebar fixes.
+
+**Multi-select range bug.** Shift-click re-ranges from the original
+anchor now (Library.tsx) — the handler used to move the anchor to the
+just-clicked row each time, so repeated Shift-clicks scrambled the
+selection. Removed the stray `setFolderAnchor` in the shift branch.
+
+**Delete parent folder failed with UNIQUE error.** Root cause: schema
+has `foreign_keys = ON` + `folders.parent_id … ON DELETE SET NULL`
+(migration 011), so deleting a parent auto-nulled its children's
+parent_id, colliding with `idx_folders_parent_name_unique` when a same-
+named top-level folder existed. Fix: `folder_delete` / `folder_delete_many`
+now CASCADE the whole subtree, deleting **leaf-first** (recursive CTE +
+`ORDER BY depth DESC`) so a parent is always childless when removed and
+the SET NULL action never fires on a survivor. Clips in any deleted
+folder fall back to Uncategorized via their own FK (files stay on disk).
+Confirm copy reworded ("…and any subfolders inside it").
+
+**Drag-to-folder highlight legibility.** `.lib-folder.drop-hover` now
+uses bright name + accent-green icon (matches the `.active` look)
+instead of dark-on-green that washed to grey.
+
+**Per-row "+" for subfolders.** Header "+" stays top-level; each folder
+row gets a "+" (absolutely positioned in the count's column, swaps in on
+hover so there's no reserved gap). Aligned to the header "+" (right:8 /
+width:22) and the count is `pointer-events:none` so the button's whole
+hitbox highlights (was only catching the edges — the count box overlapped
+and ate the center hover). Child creation reuses `createFolderInline(parentId)`.
+
+Extension unchanged (1.4.0). App + Cargo + tauri.conf → 1.6.0.
+
 ## 2026-06-09 — v1.5.0: per-site cookies + retry-without-cookies fallback
 
 Fixes cross-site cookie bleed: one global cookie source was applied to

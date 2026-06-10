@@ -2482,49 +2482,67 @@ pub async fn folder_delete(
     state: State<'_, LibraryState>,
     id: String,
 ) -> Result<(), String> {
-    // We do the re-parenting + asset-nulling EXPLICITLY rather than rely
-    // on the FK ON DELETE clauses: SQLite enforces foreign keys only
-    // when `PRAGMA foreign_keys = ON`, which is off by default per
-    // connection. Explicit statements are correct regardless.
+    // CASCADE delete: remove the folder AND its entire subtree of
+    // descendants in one transaction. Clips anywhere in that subtree
+    // fall back to Uncategorized (NULL) — files stay on disk.
     //
-    // Children re-parent to the deleted folder's OWN parent (so a deep
-    // subtree collapses up one level rather than scattering to root).
-    // Direct assets fall back to Uncategorized (NULL).
+    // Why cascade rather than reparent-children-up: reparenting a child
+    // to the grandparent can collide with the per-(parent, name) UNIQUE
+    // index when a same-named folder already exists there (e.g. two
+    // "Untitled"s), which used to fail the whole delete. Cascade also
+    // matches the user's mental model — "delete this folder and what's
+    // in it" — the way Finder / Explorer behave.
+    //
+    // The recursive CTE walks parent_id links from `id` down through
+    // every descendant. SQLite enforces FKs only with PRAGMA
+    // foreign_keys = ON (off by default per connection), so we do the
+    // asset-nulling + folder delete explicitly.
     let mut tx = state
         .pool
         .begin()
         .await
         .map_err(|e| format!("folder_delete begin: {e}"))?;
 
-    // Look up the deleted folder's parent (NULL if top-level).
-    let parent: Option<(Option<String>,)> =
-        sqlx::query_as("SELECT parent_id FROM folders WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| format!("folder_delete lookup: {e}"))?;
-    let Some((grandparent,)) = parent else {
+    // Guard: confirm the folder exists (preserves the old not-found error).
+    let exists: Option<(String,)> = sqlx::query_as("SELECT id FROM folders WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| format!("folder_delete lookup: {e}"))?;
+    if exists.is_none() {
         return Err(format!("folder {id} not found"));
-    };
+    }
 
-    sqlx::query("UPDATE folders SET parent_id = ? WHERE parent_id = ?")
-        .bind(&grandparent)
-        .bind(&id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| format!("folder_delete reparent: {e}"))?;
+    // Collect the subtree with depth, then delete DEEPEST-FIRST. This is
+    // the crucial detail: folders.parent_id has ON DELETE SET NULL and
+    // foreign_keys is ON, so deleting a parent while it still has children
+    // fires SET NULL on those children — which can collide with the
+    // per-(parent, name) unique index (e.g. a child "Untitled" being
+    // pushed to top-level where an "Untitled" already exists). Deleting
+    // leaves first means every folder is childless by the time it's
+    // removed, so the SET NULL action never runs on a surviving row.
+    // (Assets fall back to NULL automatically via their own FK as each
+    // folder goes — no unique index on assets, so that's always safe.)
+    let subtree: Vec<(String,)> = sqlx::query_as(
+        "WITH RECURSIVE subtree(id, depth) AS (\
+           SELECT id, 0 FROM folders WHERE id = ?1 \
+           UNION ALL \
+           SELECT f.id, s.depth + 1 FROM folders f JOIN subtree s ON f.parent_id = s.id\
+         ) \
+         SELECT id FROM subtree ORDER BY depth DESC",
+    )
+    .bind(&id)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|e| format!("folder_delete subtree: {e}"))?;
 
-    sqlx::query("UPDATE assets SET folder_id = NULL WHERE folder_id = ?")
-        .bind(&id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| format!("folder_delete null-assets: {e}"))?;
-
-    sqlx::query("DELETE FROM folders WHERE id = ?")
-        .bind(&id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| format!("folder_delete: {e}"))?;
+    for (fid,) in &subtree {
+        sqlx::query("DELETE FROM folders WHERE id = ?")
+            .bind(fid)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("folder_delete: {e}"))?;
+    }
 
     tx.commit()
         .await
@@ -2553,49 +2571,45 @@ pub async fn folder_delete_many(
         .await
         .map_err(|e| format!("folder_delete_many begin: {e}"))?;
 
-    // Null assets that live directly in any of the deleted folders.
-    let null_sql = format!("UPDATE assets SET folder_id = NULL WHERE folder_id IN ({placeholders})");
-    let mut q = sqlx::query(&null_sql);
-    for id in &ids {
-        q = q.bind(id);
-    }
-    q.execute(&mut *tx)
-        .await
-        .map_err(|e| format!("folder_delete_many null-assets: {e}"))?;
-
-    // Reparent surviving children (parent in delete-set, child not) to
-    // top level so we never leave a dangling parent_id.
-    let reparent_sql = format!(
-        "UPDATE folders SET parent_id = NULL \
-         WHERE parent_id IN ({placeholders}) AND id NOT IN ({placeholders})"
+    // CASCADE, deepest-first. Same reasoning as folder_delete: the
+    // ON DELETE SET NULL on folders.parent_id (with foreign_keys ON) will
+    // collide with the per-(parent, name) unique index if a parent is
+    // removed while children survive, so we gather the combined subtree
+    // ordered by depth and delete leaves first. Seeding the CTE from ALL
+    // selected ids at once means picking a parent and a child together is
+    // harmless — the subtree just overlaps (DISTINCT de-dupes).
+    let subtree_sql = format!(
+        "WITH RECURSIVE subtree(id, depth) AS (\
+           SELECT id, 0 FROM folders WHERE id IN ({placeholders}) \
+           UNION ALL \
+           SELECT f.id, s.depth + 1 FROM folders f JOIN subtree s ON f.parent_id = s.id\
+         ) \
+         SELECT id FROM subtree GROUP BY id ORDER BY MAX(depth) DESC"
     );
-    let mut q = sqlx::query(&reparent_sql);
+    let mut q = sqlx::query_as::<_, (String,)>(&subtree_sql);
     for id in &ids {
         q = q.bind(id);
     }
-    for id in &ids {
-        q = q.bind(id);
-    }
-    q.execute(&mut *tx)
+    let subtree: Vec<(String,)> = q
+        .fetch_all(&mut *tx)
         .await
-        .map_err(|e| format!("folder_delete_many reparent: {e}"))?;
+        .map_err(|e| format!("folder_delete_many subtree: {e}"))?;
 
-    // Delete the folders.
-    let del_sql = format!("DELETE FROM folders WHERE id IN ({placeholders})");
-    let mut q = sqlx::query(&del_sql);
-    for id in &ids {
-        q = q.bind(id);
+    let mut deleted: u64 = 0;
+    for (fid,) in &subtree {
+        let res = sqlx::query("DELETE FROM folders WHERE id = ?")
+            .bind(fid)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("folder_delete_many: {e}"))?;
+        deleted += res.rows_affected();
     }
-    let res = q
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| format!("folder_delete_many: {e}"))?;
 
     tx.commit()
         .await
         .map_err(|e| format!("folder_delete_many commit: {e}"))?;
     let _ = app.emit("library:changed", ());
-    Ok(res.rows_affected() as u32)
+    Ok(deleted as u32)
 }
 
 /// 1.3.x — Reparent a folder under a new parent (or to top-level when

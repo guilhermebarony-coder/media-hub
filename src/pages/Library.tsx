@@ -463,8 +463,8 @@ export default function LibraryPage() {
   async function deleteFolder(folder: Folder) {
     const msg =
       folder.asset_count > 0
-        ? `Delete folder "${folder.name}"?\n\n${folder.asset_count} ${folder.asset_count === 1 ? "clip" : "clips"} will fall back to Uncategorized (files stay where they are).`
-        : `Delete folder "${folder.name}"?`;
+        ? `Delete folder "${folder.name}" and any subfolders inside it?\n\n${folder.asset_count} ${folder.asset_count === 1 ? "clip" : "clips"} (plus any in subfolders) fall back to Uncategorized — files stay where they are.`
+        : `Delete folder "${folder.name}" and any subfolders inside it?`;
     if (!(await confirmDialog(msg, { title: "Delete folder?", kind: "warning" }))) return;
     try {
       await invoke("folder_delete", { id: folder.id });
@@ -482,7 +482,7 @@ export default function LibraryPage() {
   async function bulkDeleteFolders() {
     const ids = Array.from(selectedFolderIds);
     if (ids.length === 0) return;
-    const msg = `Delete ${ids.length} folders?\n\nAny clips inside fall back to Uncategorized (files stay on disk). Subfolders move to the top level.`;
+    const msg = `Delete ${ids.length} folders?\n\nAny subfolders inside are deleted too. Clips fall back to Uncategorized (files stay on disk).`;
     if (!(await confirmDialog(msg, { title: `Delete ${ids.length} folders?`, kind: "warning" })))
       return;
     try {
@@ -671,7 +671,10 @@ export default function LibraryPage() {
               if (a !== -1 && b !== -1) {
                 const [lo, hi] = a < b ? [a, b] : [b, a];
                 setSelectedFolderIds(new Set(order.slice(lo, hi + 1)));
-                setFolderAnchor(f.id);
+                // Anchor intentionally stays put — a Shift-click re-ranges
+                // from the ORIGINAL anchor (Explorer / Finder behavior).
+                // Moving it here made each subsequent Shift-click recompute
+                // from the last-clicked row, randomly shrinking the range.
                 return;
               }
             }
@@ -768,6 +771,20 @@ export default function LibraryPage() {
             />
           ) : (
             <span className="lib-folder-name">{f.name}</span>
+          )}
+          {!isRenaming && (
+            <button
+              type="button"
+              className="lib-folder-subadd"
+              title={`New subfolder in "${f.name}"`}
+              disabled={creatingFolder}
+              onClick={(e) => {
+                e.stopPropagation();
+                void createFolderInline(f.id);
+              }}
+            >
+              <Icon.plus width={10} height={10} />
+            </button>
           )}
           <span className="lib-folder-count mono">{f.asset_count}</span>
         </div>

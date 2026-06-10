@@ -1342,6 +1342,7 @@ textarea.field-input {
   border-bottom: 1px solid var(--line);
 }
 .lib-folder {
+  position: relative; /* anchor for the hover "+" that swaps with the count */
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1372,16 +1373,19 @@ textarea.field-input {
    default text-3 (gray) washed into the lime background and made
    them invisible. */
 .lib-folder.drop-hover {
-  background: color-mix(in srgb, var(--accent) 32%, transparent);
-  color: var(--bg-0);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  /* Bright name + accent icon (matches the .active "All clips" look) —
+     reads far better than the old dark-on-green text, which washed out
+     to a muddy grey. The dashed outline still signals "release here". */
+  color: var(--text-0);
   outline: 1px dashed var(--accent);
   outline-offset: -2px;
 }
-.lib-folder.drop-hover svg,
-.lib-folder.drop-hover .lib-folder-count {
-  color: var(--bg-0);
+.lib-folder.drop-hover svg {
+  color: var(--accent);
 }
 .lib-folder.drop-hover .lib-folder-count {
+  color: var(--text-1);
   opacity: 0.7; /* count slightly recessed so it doesn't fight the name */
 }
 
@@ -1411,6 +1415,61 @@ textarea.field-input {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 1.5.x — per-row "+" to create a child folder. It's absolutely
+   positioned over the count's corner and OUT of the flex flow, so it
+   never reserves a gap. On row hover the count fades out and the "+"
+   fades in over the same spot — a clean swap, no layout shift. Header
+   "+" still makes top-level; this is the nesting affordance that avoids
+   leaving the current folder. */
+.lib-folder-subadd {
+  position: absolute;
+  /* right:8 matches the row's right padding, parking the "+" in the same
+     column as the count (and therefore under the header "+", which is
+     width-matched to the count). width:22 matches the header button so
+     the icons line up exactly. */
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none; /* unreachable until revealed, so it never eats clicks */
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+.lib-folder:hover .lib-folder-subadd {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* Swap: the count yields to the "+" on hover so they share the corner.
+   pointer-events:none is the fix for the "+" only highlighting at its
+   edges — the count box overlaps the button's center and, painting above
+   the absolute button, was swallowing hover there. The count is never
+   interactive, so dropping it from hit-testing is free. */
+.lib-folder-count {
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+.lib-folder:hover .lib-folder-subadd ~ .lib-folder-count,
+.lib-folder:hover .lib-folder-count {
+  opacity: 0;
+}
+.lib-folder-subadd:hover {
+  background: var(--bg-3);
+  color: var(--accent);
+}
+.lib-folder-subadd:disabled {
+  opacity: 0;
+  pointer-events: none;
 }
 .lib-folder-count {
   font-size: 10px;
