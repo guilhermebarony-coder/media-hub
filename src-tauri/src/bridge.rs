@@ -44,8 +44,54 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tower_http::cors::{AllowOrigin, CorsLayer};
+
+/// Path of the per-platform cookie cache the extension pushes over the
+/// bridge: `<home>/Media Hub/.cookies/<platform>.txt`. Read by
+/// `resolve_cookie_args` in lib.rs when no explicit cookie source is set
+/// for that platform, so restricted downloads use an always-fresh session
+/// with zero manual setup. Returns None only if the home dir won't resolve.
+pub fn cookie_cache_path(app: &AppHandle, platform: &str) -> Option<std::path::PathBuf> {
+    let home = app.path().home_dir().ok()?;
+    Some(
+        home.join("Media Hub")
+            .join(".cookies")
+            .join(format!("{platform}.txt")),
+    )
+}
+
+/// Atomically (temp + rename) write a Netscape cookies blob to the
+/// per-platform cache. Best-effort: logs and returns on any error rather
+/// than failing the enqueue. Tightens perms to user-only on unix.
+fn cache_cookies(app: &AppHandle, platform: &str, blob: &str) {
+    let Some(path) = cookie_cache_path(app, platform) else {
+        eprintln!("[bridge] cookie cache: no home dir; skipping");
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("[bridge] cookie cache: mkdir failed: {e}");
+            return;
+        }
+    }
+    let tmp = path.with_extension("txt.tmp");
+    if let Err(e) = std::fs::write(&tmp, blob) {
+        eprintln!("[bridge] cookie cache: write failed: {e}");
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    if let Err(e) = std::fs::rename(&tmp, &path) {
+        eprintln!("[bridge] cookie cache: rename failed: {e}");
+        let _ = std::fs::remove_file(&tmp);
+        return;
+    }
+    eprintln!("[bridge] cached fresh cookies for platform '{platform}'");
+}
 
 /// Snapshot of the data the bridge needs from settings. Cloned at
 /// spawn time so the long-lived axum handlers don't have to take the
@@ -74,6 +120,12 @@ struct EnqueueBody {
     /// extension" etc.). Defaults to "extension" when omitted.
     #[serde(default)]
     source: Option<String>,
+    /// Optional — a Netscape cookies.txt blob the extension harvested for
+    /// this URL's site (via chrome.cookies). When present we cache it
+    /// per-platform (see cache_cookies) so this and future downloads of
+    /// the same site use a fresh logged-in session. Never logged.
+    #[serde(default)]
+    cookies: Option<String>,
 }
 
 /// Event payload the frontend listens for. Mirrors `enqueueUrls`'s
@@ -175,6 +227,18 @@ async fn enqueue_handler(
         .map(str::trim)
         .filter(|s| matches!(*s, "mp3" | "m4a" | "flac"))
         .map(|s| s.to_string());
+
+    // Extension cookie-bridge: if a fresh cookies blob rode along, cache
+    // it per-platform so the download picks up a live logged-in session
+    // (resolve_cookie_args reads the cache). Best-effort, never blocks.
+    if let Some(blob) = body.cookies.as_deref() {
+        let blob = blob.trim();
+        if !blob.is_empty() {
+            if let Some(platform) = crate::settings::detect_platform(&url) {
+                cache_cookies(&state.app, platform, blob);
+            }
+        }
+    }
 
     let payload = EnqueueEvent {
         url,

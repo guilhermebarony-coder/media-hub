@@ -86,6 +86,12 @@ runtime.
 hardens normal YouTube) → ② browser-API cookie harvest (§4 Option A/B,
 for the auth gate) → ③ PO-token sidecar only if bot checks bite.
 
+**STATUS (2026-06-13):** ① **shipped in v1.7.0** (Deno sidecar). ②
+**shipped in v1.8.0** — Option A (extension cookie-bridge), verified
+end-to-end (restricted video downloaded with Settings=None off the live
+extension cache). ③ not needed so far. Option B (in-app WebView login)
+remains available as a future self-contained path for non-extension users.
+
 ---
 
 ## 1. Frame the problem: two separate axes

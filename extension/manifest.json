@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Media Hub — Send to App",
   "short_name": "Media Hub",
-  "version": "1.4.0",
+  "version": "1.8.0",
   "description": "Send the current tab (or any link/video) straight into Media Hub's download queue. Pairs with the desktop app via localhost.",
 
   "permissions": [
@@ -11,7 +11,8 @@
     "storage",
     "notifications",
     "tabs",
-    "webRequest"
+    "webRequest",
+    "cookies"
   ],
 
   "host_permissions": [

@@ -367,6 +367,36 @@ fn js_runtime_args() -> Vec<String> {
     }
 }
 
+/// Resolve cookie args for a yt-dlp invocation, in priority order:
+///   1. An explicit per-site / default cookie source from Settings.
+///   2. The per-platform cache the browser extension pushes over the
+///      bridge (always-fresh logged-in session, zero manual setup).
+///   3. Nothing.
+///
+/// The extension cache (2) only fills the gap when Settings resolves to
+/// no cookies for this URL, so an explicit user choice always wins. This
+/// is what makes restricted downloads "just work" once the extension has
+/// sent the site's cookies at least once — see bridge::cache_cookies.
+fn resolve_cookie_args(
+    app: &AppHandle,
+    settings: &settings::SettingsState,
+    url: &str,
+) -> Vec<String> {
+    let explicit = settings::cookies_args_for(settings, url);
+    if !explicit.is_empty() {
+        return explicit;
+    }
+    if let Some(platform) = settings::detect_platform(url) {
+        if let Some(path) = bridge::cookie_cache_path(app, platform) {
+            if path.exists() {
+                eprintln!("[cookies] using extension cache for '{platform}'");
+                return vec!["--cookies".to_string(), path.to_string_lossy().to_string()];
+            }
+        }
+    }
+    Vec::new()
+}
+
 #[tauri::command]
 async fn yt_fetch_metadata(
     app: AppHandle,
@@ -382,7 +412,7 @@ async fn yt_fetch_metadata(
     // source is None, otherwise --cookies-from-browser <name> or
     // --cookies <path>. cookies_args_for picks a per-platform override
     // (e.g. instagram) if configured, else the default source.
-    let cookies = settings::cookies_args_for(&settings, trimmed);
+    let cookies = resolve_cookie_args(&app, &settings, trimmed);
     // 1.0.3 — TV client first, web fallback. Lets a chunk of
     // age-restricted videos resolve metadata without cookies at all.
     let yt_args = settings::youtube_extractor_args();
@@ -564,7 +594,7 @@ async fn yt_fetch_playlist(
     // private / members-only / region-flavored playlists work the same
     // way as the rest of the app. cookies_args_for applies the per-site
     // rule; yt_dlp_capture adds the retry-without-cookies fallback.
-    let cookies = settings::cookies_args_for(&settings, trimmed);
+    let cookies = resolve_cookie_args(&app, &settings, trimmed);
     let yt_args = settings::youtube_extractor_args();
     let mut opts: Vec<String> = vec![
         "-J".into(),             // dump as single JSON object (playlist + entries)
@@ -924,7 +954,7 @@ async fn yt_download(
     // (No auto-retry here — the streaming spawn isn't cheap to re-run;
     // the per-site rule is the deterministic fix. Capture-based fetches
     // get the retry fallback.)
-    let cookies = settings::cookies_args_for(&settings, trimmed);
+    let cookies = resolve_cookie_args(&app, &settings, trimmed);
     for c in &cookies {
         args.push(c.as_str());
     }
@@ -1897,7 +1927,7 @@ async fn yt_resolve_stream_url(
     let format_spec =
         "best[ext=mp4][height<=720]/best[ext=mp4]/best[height<=720]/best";
 
-    let cookies = settings::cookies_args_for(&settings, trimmed);
+    let cookies = resolve_cookie_args(&app, &settings, trimmed);
     // 1.0.3 — TV-client-first. Scrubber stream resolution benefits
     // from the same age-gate bypass as the main download flow.
     let yt_args = settings::youtube_extractor_args();

@@ -23,6 +23,39 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-06-13 — Extension cookie-bridge (Option A): always-fresh cookies
+
+The durable fix for the auth gate (age/private). A static cookies.txt
+rots in ~1-2 weeks; this reads cookies live from the browser at send
+time, so they're never stale and never need re-export. Combined with the
+Deno JS runtime (below), restricted YouTube now works with zero manual
+cookie setup. Verified end-to-end: a restricted video downloaded with
+Settings → Sources = None, purely off the extension cache.
+
+**Flow:** extension `harvestCookies(target)` reads the site's cookies via
+`chrome.cookies.getAll` (incl. httpOnly auth tokens document.cookie can't
+see — confirmed SID/SAPISID/__Secure-*PSID landed) → serializes Netscape
+cookies.txt → POSTs as `cookies` on `/enqueue` → bridge caches atomically
+to `<home>/Media Hub/.cookies/<platform>.txt` (user-only perms, never
+logged) → `resolve_cookie_args` (lib.rs) uses it when Settings resolves
+to no cookies for that URL.
+
+**Key details / gotchas:**
+- Harvest lives in `bridge.js::enqueue` (not per-call-site) so EVERY send
+  path benefits — popup, context menu, hotkey, overlay. First attempt
+  wired only background.js's two paths and the popup send sent no cookies;
+  centralizing in enqueue fixed it.
+- The extension reads cookies from the browser IT RUNS IN. You must be
+  logged into the site in that browser (tester was logged into YouTube in
+  Brave, not the Chrome where they first tried).
+- YouTube auth tokens also live on `.google.com`, so harvest grabs those
+  too for youtube/youtu.be URLs — without them login doesn't take.
+- Precedence: explicit Settings cookie source > extension cache > none.
+  So an explicit user choice always wins; the cache fills the gap.
+- bumped extension + app to 1.8.0. **Testers must update the unpacked
+  extension manually** (app auto-updates; the extension does not) and
+  accept the new `cookies` permission.
+
 ## 2026-06-13 — Bundled Deno JS runtime (fixes "no formats on restricted")
 
 Diagnosed the long-standing "age-restricted / restricted videos show no
