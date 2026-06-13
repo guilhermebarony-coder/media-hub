@@ -128,6 +128,16 @@ struct EnqueueBody {
     cookies: Option<String>,
 }
 
+/// Body for POST /cookies — the extension's "Sync cookies" button. Warms
+/// the per-platform cache WITHOUT enqueuing a download. `url` is any URL
+/// on the target site (used to derive the platform); `cookies` is the
+/// Netscape blob.
+#[derive(Deserialize, Debug)]
+struct CookiesBody {
+    url: String,
+    cookies: String,
+}
+
 /// Event payload the frontend listens for. Mirrors `enqueueUrls`'s
 /// shape in downloads.tsx but transport-agnostic — we forward only
 /// what the bridge accepts, no transcode preset (extension flows
@@ -231,12 +241,18 @@ async fn enqueue_handler(
     // Extension cookie-bridge: if a fresh cookies blob rode along, cache
     // it per-platform so the download picks up a live logged-in session
     // (resolve_cookie_args reads the cache). Best-effort, never blocks.
+    // Gated on the user's consent — if the cookie system is off we never
+    // even write their cookies to disk.
     if let Some(blob) = body.cookies.as_deref() {
         let blob = blob.trim();
-        if !blob.is_empty() {
+        let consented =
+            crate::settings::cookies_enabled(&state.app.state::<crate::settings::SettingsState>());
+        if consented && !blob.is_empty() {
             if let Some(platform) = crate::settings::detect_platform(&url) {
                 cache_cookies(&state.app, platform, blob);
             }
+        } else if !blob.is_empty() && !consented {
+            eprintln!("[bridge] cookies received but consent is OFF — discarding, not caching");
         }
     }
 
@@ -266,6 +282,49 @@ async fn enqueue_handler(
     Ok((StatusCode::ACCEPTED, Json(EnqueueResponse { ok: true })))
 }
 
+/// POST /cookies — the extension's "Sync cookies" button. Caches a fresh
+/// cookies blob per-platform without enqueuing anything, so a later
+/// in-app paste of that site uses a live session. Auth + consent gated.
+async fn cookies_handler(
+    State(state): State<Arc<BridgeState>>,
+    headers: HeaderMap,
+    Json(body): Json<CookiesBody>,
+) -> Result<(StatusCode, Json<EnqueueResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let provided = extract_bearer(&headers).unwrap_or("");
+    if !token_matches(provided, &state.token) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse { ok: false, error: "invalid token".into() }),
+        ));
+    }
+    if !crate::settings::cookies_enabled(&state.app.state::<crate::settings::SettingsState>()) {
+        // Consent is off app-side — refuse rather than silently storing.
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                ok: false,
+                error: "cookie use is disabled in Media Hub settings".into(),
+            }),
+        ));
+    }
+    let url = body.url.trim();
+    let blob = body.cookies.trim();
+    let platform = crate::settings::detect_platform(url);
+    match platform {
+        Some(p) if !blob.is_empty() => {
+            cache_cookies(&state.app, p, blob);
+            Ok((StatusCode::OK, Json(EnqueueResponse { ok: true })))
+        }
+        _ => Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                ok: false,
+                error: "unsupported site or empty cookies".into(),
+            }),
+        )),
+    }
+}
+
 /// Build the axum router. Pulled out so we could test it standalone
 /// without spinning a real TCP listener.
 fn build_app(state: Arc<BridgeState>) -> Router {
@@ -292,6 +351,7 @@ fn build_app(state: Arc<BridgeState>) -> Router {
     Router::new()
         .route("/health", get(health_handler))
         .route("/enqueue", post(enqueue_handler))
+        .route("/cookies", post(cookies_handler))
         .with_state(state)
         .layer(cors)
 }

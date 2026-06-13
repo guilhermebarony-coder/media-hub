@@ -66,6 +66,33 @@
         <span class="msg-body" id="msg-body"></span>
       </div>
 
+      <!-- 1.8.x — cookie sync. One click pushes your logged-in cookies
+           for supported sites to Media Hub so restricted videos you PASTE
+           into the app (not just send from here) work. Auto-send already
+           covers the send button; this is for the paste-in-app flow. -->
+      <section class="cookies-row" id="cookies-row">
+        <button class="link-btn" id="sync-cookies-btn"
+                title="Send your logged-in cookies to Media Hub so it can download restricted/private videos you paste into the app">
+          ↻ Sync browser logins
+        </button>
+        <span class="cookie-sync-status mono" id="cookie-sync-status"></span>
+      </section>
+
+      <div class="cookie-consent hidden" id="cookie-consent">
+        <p class="cookie-consent-text">
+          Media Hub will read your login cookies for supported sites you're
+          signed into (YouTube, Instagram, X, …) and send them to the
+          desktop app, so it can download restricted or private videos.
+          Your cookies stay on your machine, used only for your downloads.
+        </p>
+        <div class="cookie-consent-actions">
+          <button class="send-btn" id="cookie-consent-allow">
+            <span class="send-label">Allow</span>
+          </button>
+          <button class="link-btn" id="cookie-consent-deny">Not now</button>
+        </div>
+      </div>
+
       <div class="actions">
         <button class="link-btn" id="options-btn">Options</button>
         <button class="link-btn" id="launch-btn" hidden>Try launching app</button>

@@ -23,6 +23,37 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-06-13 — Cookie consent + "Sync browser logins" button (v1.9.0)
+
+Two additions on top of the cookie-bridge: explicit consent (cookies =
+credentials) and a way to warm the cache for the paste-in-app flow
+without sending a download. (We considered Option B — an in-app WebView
+login — but dropped it: Google blocks embedded-webview sign-in, which is
+the exact case we'd need. The sync button is simpler and works for
+Chromium browsers via the extension.)
+
+**Consent (default OFF, non-blocking, two surfaces):**
+- App: new `cookies_enabled` setting (+ `cookies_consent_seen`). Gates
+  the bridge cache write AND `resolve_cookie_args` use — when off,
+  cookies are never stored or used. Surfaced as a Settings → Sources
+  "Browser login" toggle + a one-time first-run dialog (after onboarding,
+  `CookieConsentPrompt` in App.tsx). Decline → downloads still work
+  cookie-free; the friendly restricted-video error explains the fix.
+- Extension: `harvestCookies` refuses until `chrome.storage.cookieConsent`
+  is set; first-run consent panel in the popup. So nothing is read until
+  the user opts in on BOTH sides.
+
+**Sync button:** popup "↻ Sync browser logins" → harvests cookies for
+every supported site the user is logged into (SYNC_SITES) → POSTs to the
+new bridge `POST /cookies` endpoint, which caches per-platform WITHOUT
+enqueuing. Fills the gap where you copy a link and paste it in the app
+(vs. sending from the extension, which already auto-harvests on send).
+
+**Gotchas:** harvest is centralized in `bridge.js::enqueue` +
+`harvestCookies`, so the consent gate covers ALL send paths uniformly
+(overlay pill, popup, context menu, hotkey). `/cookies` is auth + consent
+gated (403 if the app toggle is off). App + extension → 1.9.0.
+
 ## 2026-06-13 — Extension cookie-bridge (Option A): always-fresh cookies
 
 The durable fix for the auth gate (age/private). A static cookies.txt

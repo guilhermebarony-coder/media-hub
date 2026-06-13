@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { Shell } from "./shell/Shell";
@@ -218,6 +218,43 @@ function OrphanScanner() {
 /* 1.1.6 — CloseGuard fully deleted. See the comment in DownloadsHost
    above for the design history + why it's gone. */
 
+/**
+ * 1.8.x — One-time, non-blocking consent for the browser-login cookie
+ * system. Shows once (after onboarding, gated by cookies_consent_seen).
+ * "Enable" turns the cookie system on; "Not now" leaves it off. Either
+ * way the flag is set so it never asks again — the Settings → Sources
+ * toggle is the control thereafter. Not a blocker: downloads work
+ * regardless, and the friendly restricted-video error explains the fix
+ * if the user declined and later hits the wall.
+ */
+function CookieConsentPrompt() {
+  const { settings, ready, save } = useSettings();
+  const asked = useRef(false);
+  useEffect(() => {
+    if (!ready || asked.current) return;
+    if (settings.cookies_consent_seen) return;
+    if (!settings.onboarding_complete) return; // let onboarding finish first
+    asked.current = true;
+    (async () => {
+      const ok = await confirmDialog(
+        "Media Hub can use your browser login — synced through the Media Hub browser extension — to download age-restricted or private videos. Your cookies stay on this machine and are only used for your own downloads.\n\nEnable it now? You can change this anytime in Settings → Sources.",
+        {
+          title: "Use your browser login?",
+          kind: "info",
+          confirmLabel: "Enable",
+          cancelLabel: "Not now",
+        },
+      );
+      void save((s) => ({
+        ...s,
+        cookies_enabled: ok,
+        cookies_consent_seen: true,
+      }));
+    })();
+  }, [ready, settings.cookies_consent_seen, settings.onboarding_complete, save]);
+  return null;
+}
+
 export default function App() {
   return (
     <SettingsProvider>
@@ -247,6 +284,7 @@ export default function App() {
       {/* 1.3.x — in-app dialog renderer (replaces native OS dialogs).
           Mounted at root so confirm/alert modals overlay everything. */}
       <DialogHost />
+      <CookieConsentPrompt />
     </SettingsProvider>
   );
 }

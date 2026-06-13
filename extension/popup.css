@@ -463,3 +463,49 @@ body.has-streams {
   text-decoration: underline;
 }
 .link-btn:hover { color: var(--accent); }
+
+/* 1.8.x — cookie sync row + first-time consent panel. */
+.cookies-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0 2px;
+  flex-wrap: wrap;
+}
+#sync-cookies-btn {
+  white-space: nowrap;
+}
+.cookie-sync-status {
+  font-size: 11px;
+  color: var(--text-2);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cookie-consent {
+  margin: 6px 0 2px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-2);
+}
+.cookie-consent.hidden {
+  display: none;
+}
+.cookie-consent-text {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-1);
+}
+.cookie-consent-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cookie-consent-actions .send-btn {
+  width: auto;
+  padding: 6px 14px;
+}

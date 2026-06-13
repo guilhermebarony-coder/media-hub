@@ -386,11 +386,15 @@ fn resolve_cookie_args(
     if !explicit.is_empty() {
         return explicit;
     }
-    if let Some(platform) = settings::detect_platform(url) {
-        if let Some(path) = bridge::cookie_cache_path(app, platform) {
-            if path.exists() {
-                eprintln!("[cookies] using extension cache for '{platform}'");
-                return vec!["--cookies".to_string(), path.to_string_lossy().to_string()];
+    // The extension cache is only consulted with the user's consent
+    // (the master cookie switch). Explicit picks above are independent.
+    if settings::cookies_enabled(settings) {
+        if let Some(platform) = settings::detect_platform(url) {
+            if let Some(path) = bridge::cookie_cache_path(app, platform) {
+                if path.exists() {
+                    eprintln!("[cookies] using extension cache for '{platform}'");
+                    return vec!["--cookies".to_string(), path.to_string_lossy().to_string()];
+                }
             }
         }
     }

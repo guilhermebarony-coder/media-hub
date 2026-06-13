@@ -188,6 +188,13 @@ export type Settings = {
    *  URLs on that platform INSTEAD of cookies_source. Fixes cross-site
    *  cookie bleed (e.g. Instagram cookies breaking YouTube). */
   cookies_overrides: Record<string, CookiesSource>;
+  /** 1.8.x — Master consent switch for the automatic browser-login
+   *  cookie system (extension harvest → cache → use). Default false;
+   *  nothing is cached or used until the user opts in. Explicit
+   *  cookies_source / cookies_overrides picks are independent. */
+  cookies_enabled: boolean;
+  /** 1.8.x — Whether the one-time consent prompt has been shown. */
+  cookies_consent_seen: boolean;
   library_root: string | null;
   rename_template: string;
   download_concurrency: number;
@@ -224,6 +231,8 @@ export type Settings = {
 export const DEFAULT_SETTINGS: Settings = {
   cookies_source: { kind: "none" },
   cookies_overrides: {},
+  cookies_enabled: false,
+  cookies_consent_seen: false,
   library_root: null,
   rename_template: "",
   download_concurrency: 3,

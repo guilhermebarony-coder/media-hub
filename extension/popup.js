@@ -17,6 +17,7 @@ import {
   pingHealth,
   enqueue,
   buildDeepLink,
+  syncCookies,
 } from "./bridge.js";
 
 let currentTab = null;
@@ -57,6 +58,17 @@ async function init() {
   $("options-btn").addEventListener("click", () => chrome.runtime.openOptionsPage());
   $("launch-btn").addEventListener("click", handleLaunchFallback);
 
+  // 1.8.x — cookie sync wiring.
+  $("sync-cookies-btn").addEventListener("click", handleSyncCookies);
+  $("cookie-consent-allow").addEventListener("click", async () => {
+    await chrome.storage.local.set({ cookieConsent: true });
+    $("cookie-consent").classList.add("hidden");
+    await runSync();
+  });
+  $("cookie-consent-deny").addEventListener("click", () => {
+    $("cookie-consent").classList.add("hidden");
+  });
+
   await refreshStatus();
 
   // Enable the button iff token configured + tab has a usable URL.
@@ -93,6 +105,42 @@ async function init() {
   // for its in-memory list (we can't share state with the popup
   // directly — they're separate JS contexts).
   await refreshStreams();
+}
+
+// 1.8.x — "Sync browser logins" button. First click (no consent yet)
+// shows the consent panel; the Allow handler then calls runSync. Once
+// consented, clicks sync directly.
+async function handleSyncCookies() {
+  const { cookieConsent } = await chrome.storage.local.get("cookieConsent");
+  if (!cookieConsent) {
+    $("cookie-consent").classList.remove("hidden");
+    return;
+  }
+  await runSync();
+}
+
+async function runSync() {
+  const status = $("cookie-sync-status");
+  if (!cfg?.token) {
+    status.textContent = "set token in Options first";
+    return;
+  }
+  status.textContent = "syncing…";
+  try {
+    const r = await syncCookies({ url: cfg.url, token: cfg.token });
+    if (r.offline) {
+      status.textContent = "app offline";
+    } else if (r.error) {
+      status.textContent = r.error;
+    } else if (r.synced && r.synced.length) {
+      status.textContent = `synced: ${r.synced.join(", ")} ✓`;
+    } else {
+      status.textContent = "no logged-in sites found";
+    }
+  } catch (e) {
+    status.textContent = "sync failed";
+    console.warn("[mh] sync failed:", e);
+  }
 }
 
 async function refreshStreams() {

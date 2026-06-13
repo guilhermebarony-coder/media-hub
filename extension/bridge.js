@@ -29,6 +29,11 @@ export const DEFAULT_URL = "http://127.0.0.1:47821";
 export async function harvestCookies(target) {
   try {
     if (!chrome?.cookies || !/^https?:/i.test(target)) return "";
+    // Consent gate — we never read the user's login cookies until they've
+    // opted in (popup first-run consent / Sync button). Until then every
+    // send goes cookie-free.
+    const { cookieConsent } = await chrome.storage.local.get("cookieConsent");
+    if (!cookieConsent) return "";
     let host = "";
     try {
       host = new URL(target).hostname.toLowerCase();
@@ -143,6 +148,47 @@ export async function enqueue({ url, token, target, audioFormat, projectId, sour
     // resolves even when the app is offline.
     return { ok: false, error: String(e?.message || e), offline: true };
   }
+}
+
+// Supported sites the "Sync cookies" button warms in one click. Each is
+// a representative URL we harvest cookies for.
+export const SYNC_SITES = [
+  ["YouTube", "https://www.youtube.com/"],
+  ["Instagram", "https://www.instagram.com/"],
+  ["Twitter / X", "https://x.com/"],
+  ["TikTok", "https://www.tiktok.com/"],
+  ["Reddit", "https://www.reddit.com/"],
+  ["Pinterest", "https://www.pinterest.com/"],
+  ["Facebook", "https://www.facebook.com/"],
+];
+
+/** Harvest cookies for every supported site the user is logged into and
+ *  push them to the desktop cache (POST /cookies) — no download. Returns
+ *  { synced: [labels], offline?: bool }. The caller must have granted
+ *  cookieConsent first (harvestCookies enforces it). */
+export async function syncCookies({ url, token }) {
+  if (!url || !token) return { synced: [], error: "bridge not configured" };
+  const synced = [];
+  let offline = false;
+  for (const [label, siteUrl] of SYNC_SITES) {
+    const blob = await harvestCookies(siteUrl);
+    if (!blob) continue; // not logged in / no cookies / no consent
+    try {
+      const res = await fetch(`${url}/cookies`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ url: siteUrl, cookies: blob }),
+      });
+      if (res.ok) synced.push(label);
+    } catch {
+      offline = true;
+      break;
+    }
+  }
+  return { synced, offline };
 }
 
 /** Build a mediahub:// deep-link URL the OS can launch even when the

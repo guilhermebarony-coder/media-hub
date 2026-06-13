@@ -63,6 +63,20 @@ pub struct Settings {
     #[serde(default)]
     pub cookies_overrides: HashMap<String, CookiesSource>,
 
+    /// 1.8.x — Master consent switch for the automatic browser-login
+    /// cookie system (extension harvest → per-platform cache → use).
+    /// Default OFF: nothing is cached or used until the user opts in
+    /// (via the first-run prompt or the Settings toggle). Explicit
+    /// `cookies_source` / `cookies_overrides` picks are independent —
+    /// choosing those is itself consent — so this only gates the
+    /// automatic extension cache. See resolve_cookie_args + bridge.
+    #[serde(default)]
+    pub cookies_enabled: bool,
+    /// 1.8.x — Whether the one-time "use your browser login?" consent
+    /// prompt has been shown. Drives the frontend's first-run dialog.
+    #[serde(default)]
+    pub cookies_consent_seen: bool,
+
     // Library — 0.8.C / 0.8.B mix.
     /// Override of the default `~/Media Hub/` root. NULL = default.
     /// Phase B+ uses this in `resolve_download_dir`.
@@ -169,6 +183,8 @@ impl Default for Settings {
         Self {
             cookies_source: CookiesSource::None,
             cookies_overrides: HashMap::new(),
+            cookies_enabled: false,
+            cookies_consent_seen: false,
             library_root: None,
             rename_template: String::new(),
             download_concurrency: 3,
@@ -842,6 +858,15 @@ fn source_to_args(source: &CookiesSource) -> Vec<String> {
             vec!["--cookies".to_string(), trimmed.to_string()]
         }
     }
+}
+
+/// Whether the user has consented to the automatic browser-login cookie
+/// system (extension harvest → cache → use). Gates both the bridge's
+/// caching and `resolve_cookie_args`'s use of the cache. Lock-poison and
+/// missing-state both read as `false` (fail closed — never use cookies
+/// the user didn't agree to).
+pub fn cookies_enabled(state: &SettingsState) -> bool {
+    state.inner.lock().map(|g| g.cookies_enabled).unwrap_or(false)
 }
 
 /// Resolve the cookie args for a SPECIFIC url: a per-platform override

@@ -96,6 +96,33 @@ function SourcesSection() {
         leave at <strong>None</strong> if you don't hit the wall.
       </p>
 
+      {/* 1.8.x — master consent switch for the automatic browser-login
+          cookie system (extension harvest → cache → use). Off by default;
+          this is the always-available on/off control + the "lose faith,
+          flip it off" lever. */}
+      <div className="bar">
+        <span className="settings-label">Browser login</span>
+        <label className="switch">
+          <input
+            type="checkbox"
+            checked={settings.cookies_enabled}
+            onChange={(e) =>
+              void save((s) => ({
+                ...s,
+                cookies_enabled: e.target.checked,
+                cookies_consent_seen: true,
+              }))
+            }
+          />
+          <span className="switch-slider" />
+        </label>
+        <span className="hint-text">
+          {settings.cookies_enabled
+            ? "Media Hub uses cookies the extension syncs from your browser, for restricted downloads."
+            : "Off — restricted/private videos may fail until you enable this (or pick a source below)."}
+        </span>
+      </div>
+
       <div className="settings-row">
         <span className="settings-label">Mode</span>
         <div className="settings-radio-group">
