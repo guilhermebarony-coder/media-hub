@@ -327,6 +327,46 @@ async fn yt_dlp_capture(
         .map_err(|e| format!("spawn failed: {e}"))
 }
 
+/// Resolve the bundled Deno sidecar and return the yt-dlp args that point
+/// YouTube's JS (sig/nsig) challenge solver at it.
+///
+/// Required since yt-dlp 2025.11 moved cipher solving to an EXTERNAL JS
+/// runtime ("EJS"). Our yt-dlp is a frozen PyInstaller binary with no JS
+/// engine, so without this the solver fails and age-restricted (and
+/// increasingly normal) YouTube videos return no real formats — only
+/// storyboards. Deno is the runtime yt-dlp prefers; we ship it as a
+/// sidecar next to the app (see externalBin + fetch-sidecars scripts).
+///
+/// Returns empty when the sidecar isn't found, so yt-dlp gracefully
+/// falls back to its built-in Python solver (still handles some videos)
+/// instead of erroring. Harmless for non-YouTube extractors — they just
+/// never invoke the runtime. Added to the shared `opts`, so the cookie
+/// retry-without-cookies fallback (yt_dlp_capture) keeps it on both
+/// attempts.
+fn js_runtime_args() -> Vec<String> {
+    let deno = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .map(|dir| {
+            if cfg!(windows) {
+                dir.join("deno.exe")
+            } else {
+                dir.join("deno")
+            }
+        })
+        .filter(|p| p.exists());
+    match deno {
+        Some(p) => vec![
+            "--js-runtimes".to_string(),
+            format!("deno:{}", p.to_string_lossy()),
+        ],
+        None => {
+            eprintln!("[js-runtime] deno sidecar not found — yt-dlp will use its built-in solver");
+            Vec::new()
+        }
+    }
+}
+
 #[tauri::command]
 async fn yt_fetch_metadata(
     app: AppHandle,
@@ -354,6 +394,7 @@ async fn yt_fetch_metadata(
         "--socket-timeout".into(), "15".into(),
     ];
     opts.extend(yt_args.iter().cloned());
+    opts.extend(js_runtime_args()); // Deno JS runtime for sig/nsig solving
 
     // 1.4.x — auto-retry without cookies if the cookie'd attempt fails.
     let out = yt_dlp_capture(&app, &opts, &cookies, trimmed).await?;
@@ -533,6 +574,7 @@ async fn yt_fetch_playlist(
         "--socket-timeout".into(), "30".into(),
     ];
     opts.extend(yt_args.iter().cloned());
+    opts.extend(js_runtime_args()); // Deno JS runtime for sig/nsig solving
 
     let out = yt_dlp_capture(&app, &opts, &cookies, trimmed).await?;
 
@@ -890,6 +932,12 @@ async fn yt_download(
     // doc for why. Owned outside the loop so the &str references survive.
     let yt_args = settings::youtube_extractor_args();
     for a in &yt_args {
+        args.push(a.as_str());
+    }
+    // Deno JS runtime for YouTube sig/nsig solving (see js_runtime_args).
+    // Owned outside the loop so the &str references outlive the spawn.
+    let js_args = js_runtime_args();
+    for a in &js_args {
         args.push(a.as_str());
     }
     // Bandwidth throttle (0.8.C). Empty when unlimited (default);
@@ -1861,6 +1909,7 @@ async fn yt_resolve_stream_url(
         format_spec.into(),
     ];
     opts.extend(yt_args.iter().cloned());
+    opts.extend(js_runtime_args()); // Deno JS runtime for sig/nsig solving
 
     // 1.4.x — per-site cookies + retry-without-cookies fallback.
     let output = yt_dlp_capture(&app, &opts, &cookies, trimmed).await?;

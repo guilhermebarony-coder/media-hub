@@ -53,6 +53,22 @@ chmod +x "$FF_OUT"
 rm -rf "$FF_ZIP" "$FF_EXTRACT"
 echo "      -> $FF_OUT"
 
+# ---------- deno ----------
+# JS runtime for yt-dlp's YouTube sig/nsig challenge solving (required
+# since yt-dlp 2025.11). Deno ships release assets named by target-triple.
+DENO_ZIP="$(mktemp -t deno-mh-XXXX).zip"
+DENO_EXTRACT="$(mktemp -d -t deno-mh-XXXX)"
+DENO_OUT="$BIN_DIR/deno-$TARGET"
+echo "[3/3] Fetching deno (JS runtime, ~40 MB)..."
+curl -L --fail --retry 3 \
+  -o "$DENO_ZIP" \
+  "https://github.com/denoland/deno/releases/latest/download/deno-$TARGET.zip"
+unzip -o -q "$DENO_ZIP" -d "$DENO_EXTRACT"
+cp "$DENO_EXTRACT/deno" "$DENO_OUT"
+chmod +x "$DENO_OUT"
+rm -rf "$DENO_ZIP" "$DENO_EXTRACT"
+echo "      -> $DENO_OUT"
+
 echo ""
 echo "Sidecars ready. Verify with:"
 echo "  \"$YTDLP_OUT\" --version"

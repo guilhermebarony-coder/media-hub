@@ -23,6 +23,44 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-06-13 — Bundled Deno JS runtime (fixes "no formats on restricted")
+
+Diagnosed the long-standing "age-restricted / restricted videos show no
+formats" bug. It was NOT cookies and NOT PO tokens (see
+COOKIES_RESEARCH.md §0 for the live diagnostic). Real cause: yt-dlp
+**2025.11+** moved YouTube's `sig`/`nsig` cipher solving to an **external
+JS runtime ("EJS")**. Our yt-dlp is a frozen PyInstaller binary with no JS
+engine → signature solving fails → only storyboards survive. Proven fix:
+cookies (pass the age gate) **+** a JS runtime (`--js-runtimes node`
+returned the full 1080p list in testing).
+
+**Implementation:**
+- Bundle **Deno** as a third sidecar (alongside yt-dlp + ffmpeg). Deno
+  ships release assets already named by target-triple, so it drops into
+  the existing pattern: added to `fetch-sidecars.ps1` +
+  `fetch-sidecars-mac.sh`, `tauri.conf.json` externalBin, and
+  `.gitignore` (`binaries/deno*`).
+- New `js_runtime_args()` in lib.rs resolves the Deno sidecar next to the
+  exe (mirrors the ffmpeg-location resolution) and emits
+  `--js-runtimes deno:<path>`. Empty + warns if missing → yt-dlp falls
+  back to its built-in Python solver (graceful, no error).
+- Wired into all four yt-dlp call sites. For the three capture commands
+  it goes into the shared `opts`, so the cookie retry-without-cookies
+  fallback (`yt_dlp_capture`) keeps the runtime on both attempts.
+
+**Caveat / future:** Deno is ~100 MB, which adds to an already-large
+bundle (ffmpeg is ~200 MB) and therefore to every auto-update download.
+Consistent with the current bundle-everything approach, but the eventual
+fix for installer/update bloat is **lazy-download** of ffmpeg + deno on
+first run into appdata (reuse the yt-dlp managed-binary pattern in
+updater.rs) rather than bundling. Tracked as a follow-up.
+
+**Next:** cookies still need to be *fresh* for the auth gate, and a
+static cookies.txt rots in ~1-2 weeks (YouTube rotates them). The durable
+answer is the **extension cookie-bridge (Option A)** — read cookies live
+from the browser at download time so they're always fresh. See
+COOKIES_RESEARCH.md §4.
+
 ## 2026-06-09 — v1.6.0: folder fixes (multi-select, delete, nesting UX)
 
 Tester-driven batch of folder-sidebar fixes.

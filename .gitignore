@@ -27,6 +27,7 @@ dist-ssr
 src-tauri/binaries/*.exe
 src-tauri/binaries/yt-dlp*
 src-tauri/binaries/ffmpeg*
+src-tauri/binaries/deno*
 
 # Rust build artifacts
 src-tauri/target/
@@ -45,3 +46,8 @@ src-tauri/target.lnk
 
 # Packaged extension artifact (build output, not source)
 *.rar
+
+# Cookie / session files (credentials — NEVER commit)
+*cookies*.txt
+cookies*.txt
+*.cookies

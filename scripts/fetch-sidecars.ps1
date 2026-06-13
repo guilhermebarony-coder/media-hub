@@ -44,6 +44,26 @@ Remove-Item -Force $ffZip
 Remove-Item -Recurse -Force $ffExtract
 Write-Host "      -> $ffOut" -ForegroundColor Green
 
+# ---------- deno ----------
+# JavaScript runtime for yt-dlp's YouTube sig/nsig challenge solving
+# (required since yt-dlp 2025.11 — without it, restricted/age-gated and
+# increasingly normal YouTube videos return no real formats). Deno ships
+# release assets already named by target-triple.
+$denoZip = Join-Path $env:TEMP 'deno-mh.zip'
+$denoExtract = Join-Path $env:TEMP 'deno-mh'
+$denoOut = Join-Path $binDir "deno-$target.exe"
+
+Write-Host "[3/3] Fetching deno (JS runtime, ~40 MB)..." -ForegroundColor Cyan
+Invoke-WebRequest `
+  -Uri "https://github.com/denoland/deno/releases/latest/download/deno-$target.zip" `
+  -OutFile $denoZip
+if (Test-Path $denoExtract) { Remove-Item -Recurse -Force $denoExtract }
+Expand-Archive -Path $denoZip -DestinationPath $denoExtract
+Copy-Item -Path (Join-Path $denoExtract 'deno.exe') -Destination $denoOut -Force
+Remove-Item -Force $denoZip
+Remove-Item -Recurse -Force $denoExtract
+Write-Host "      -> $denoOut" -ForegroundColor Green
+
 Write-Host ""
 Write-Host "Sidecars ready. Verify with:" -ForegroundColor Yellow
 Write-Host "  & '$ytdlpOut' --version"
