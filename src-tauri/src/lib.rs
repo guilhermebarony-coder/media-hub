@@ -945,19 +945,23 @@ async fn preview_proxy(
             }
         })
         .filter(|p| p.exists());
-    // Prefer H.264 at the target height (fastest hardware decode →
-    // smoothest scrub) + m4a audio; fall back to muxed 22, any merge at
-    // the height, then 18.
-    let format_spec = if h <= 360 {
-        "18/best[ext=mp4][height<=360]/best[ext=mp4][height<=480]".to_string()
-    } else {
-        format!(
-            "bestvideo[height<={h}][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/22/bestvideo[height<={h}]+bestaudio/18/best[height<={h}]"
-        )
-    };
+    // Always use DASH (separate video+audio, merged) rather than the
+    // progressive muxed format 18: progressive is a single HTTP stream
+    // that YouTube throttles to ~playback rate, so an 800 MB file can
+    // take ~10 min. DASH + --concurrent-fragments uses many connections
+    // and bypasses the per-connection throttle (same trick the main
+    // downloader uses). Prefer H.264 (fastest hardware decode for smooth
+    // scrub) + m4a audio; fall back to any merge at the height, then 18.
+    let format_spec = format!(
+        "bestvideo[height<={h}][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<={h}]+bestaudio/best[ext=mp4][height<={h}]/18"
+    );
     let mut opts: Vec<String> = vec![
         "-f".into(),
         format_spec,
+        // Parallel fragments — the speed fix for throttled progressive
+        // downloads (see comment above).
+        "--concurrent-fragments".into(),
+        "16".into(),
         "--merge-output-format".into(),
         "mp4".into(),
         "--no-playlist".into(),
