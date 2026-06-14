@@ -3388,14 +3388,35 @@ body.lib-resizing-h * {
   position: absolute;
   bottom: calc(100% - 2px);
   transform: translateX(-50%);
-  padding: 1px 5px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 2px 7px;
   font-size: 10px;
-  background: rgba(0, 0, 0, 0.8);
-  color: #fff;
-  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.82);
+  color: rgba(255, 255, 255, 0.7);
+  border-radius: 4px;
   white-space: nowrap;
   pointer-events: none;
   z-index: 7;
+}
+.scrubber-hover-chapter {
+  color: #fff;
+  font-weight: 500;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* YouTube-style chapter hover — the pointed-at chapter lifts + brightens. */
+.scrubber-bar-chapterhover {
+  position: absolute;
+  top: 10px;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 3px;
+  pointer-events: none;
+  z-index: 1;
 }
 
 /* Tier 1 — chapters / markers list. */

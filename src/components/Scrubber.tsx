@@ -714,6 +714,22 @@ export function Scrubber(props: ScrubberProps) {
 
   const chapterList = chapters ?? [];
 
+  // Which chapter the hover (or playhead) falls in, plus its span on the
+  // bar — drives the YouTube-style highlight + the title in the bubble.
+  function chapterAt(time: number) {
+    if (chapterList.length === 0) return null;
+    let idx = -1;
+    for (let i = 0; i < chapterList.length; i++) {
+      if (chapterList[i].start_sec <= time + 0.001) idx = i;
+      else break;
+    }
+    if (idx < 0) return null;
+    const ch = chapterList[idx];
+    const end = idx + 1 < chapterList.length ? chapterList[idx + 1].start_sec : duration;
+    return { idx, title: ch.title, start: ch.start_sec, end };
+  }
+  const hoverChapter = hover ? chapterAt(hover.time) : null;
+
   // Compute on-bar regions for each committed segment. Multiple bands
   // can render side-by-side or even overlap (we don't validate
   // overlapping segments — user can do what they want).
@@ -976,6 +992,18 @@ export function Scrubber(props: ScrubberProps) {
         aria-valuenow={currentTime}
       >
         <div className="scrubber-bar-track" />
+        {/* Tier 1 — chapter hover highlight (YouTube-style): the chapter
+            under the cursor lifts + brightens so it's clear which one
+            you're pointing at. */}
+        {duration > 0 && hoverChapter && (
+          <div
+            className="scrubber-bar-chapterhover"
+            style={{
+              left: posPct(hoverChapter.start) ?? "0%",
+              width: `${Math.max(0, ((hoverChapter.end - hoverChapter.start) / duration) * 100)}%`,
+            }}
+          />
+        )}
         {/* Tier 1 — chapter ticks. */}
         {duration > 0 &&
           chapterList.map((ch, i) => (
@@ -996,6 +1024,9 @@ export function Scrubber(props: ScrubberProps) {
                 style={{ left: hover.x }}
               >
                 {fmtDuration(hover.time)}
+                {hoverChapter && (
+                  <span className="scrubber-hover-chapter">{hoverChapter.title}</span>
+                )}
               </div>
             );
             if (!tile) return bubble;
