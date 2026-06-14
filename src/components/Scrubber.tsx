@@ -1000,10 +1000,10 @@ export function Scrubber(props: ScrubberProps) {
             key={hoverChapter.idx}
             className="scrubber-bar-chapterhover"
             style={{
-              // Inset 2px each side so the fill sits between the chapter
-              // notches instead of running under them.
-              left: `calc(${posPct(hoverChapter.start) ?? "0%"} + 2px)`,
-              width: `calc(${Math.max(0, ((hoverChapter.end - hoverChapter.start) / duration) * 100)}% - 4px)`,
+              // Inset 1px each side (the notch is 2px wide, centered, so
+              // it reaches 1px past each boundary) — clears it with no gap.
+              left: `calc(${posPct(hoverChapter.start) ?? "0%"} + 1px)`,
+              width: `calc(${Math.max(0, ((hoverChapter.end - hoverChapter.start) / duration) * 100)}% - 2px)`,
             }}
           />
         )}
