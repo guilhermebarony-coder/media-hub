@@ -852,6 +852,44 @@ struct PreviewProxy {
     cached: bool,
 }
 
+/// Cap for the preview-proxy cache. Oldest files are evicted after each
+/// new proxy is written so the cache can't grow without bound. 2 GB ≈ a
+/// dozen 720p proxies of typical B-roll length.
+const PREVIEW_CACHE_CAP_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Evict oldest files in `dir` until the total is under `cap_bytes`.
+/// Best-effort: IO errors are ignored (a stuck file just isn't reclaimed
+/// this pass). Never touches anything outside `dir`.
+fn prune_preview_cache(dir: &std::path::Path, cap_bytes: u64) {
+    let mut files: Vec<(std::path::PathBuf, u64, std::time::SystemTime)> =
+        match std::fs::read_dir(dir) {
+            Ok(rd) => rd
+                .filter_map(|e| e.ok())
+                .filter_map(|e| {
+                    let m = e.metadata().ok()?;
+                    if !m.is_file() {
+                        return None;
+                    }
+                    Some((e.path(), m.len(), m.modified().ok()?))
+                })
+                .collect(),
+            Err(_) => return,
+        };
+    let mut total: u64 = files.iter().map(|f| f.1).sum();
+    if total <= cap_bytes {
+        return;
+    }
+    files.sort_by_key(|f| f.2); // oldest first
+    for (path, len, _) in files {
+        if total <= cap_bytes {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(len);
+        }
+    }
+}
+
 #[tauri::command]
 async fn preview_proxy(
     app: AppHandle,
@@ -951,6 +989,8 @@ async fn preview_proxy(
             .ok_or("preview output not found")?
     };
     std::fs::rename(&produced, &out).map_err(|e| format!("finalize preview: {e}"))?;
+    // Keep the cache bounded — evict oldest proxies past the cap.
+    prune_preview_cache(&dir, PREVIEW_CACHE_CAP_BYTES);
     Ok(PreviewProxy {
         path: out.to_string_lossy().to_string(),
         cached: false,
