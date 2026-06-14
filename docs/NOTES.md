@@ -23,6 +23,111 @@ decision log for the mapping if a milestone number reads weird.
 
 ---
 
+## 2026-06-13 — Faster downloads: native progress + concurrent fragments + aria2c (v1.10.0)
+
+Shipped the top-2 perf items from `IMPROVEMENTS.md` §1.
+
+**1. Native progress + 4 concurrent fragments (`yt_download`, lib.rs).**
+The download used to pin `--concurrent-fragments 1` purely so the
+filesystem `.part` poll had discrete checkpoints — which throttled
+segmented sources (most of YouTube/Twitter) to ~1/4–1/5 their possible
+speed. Now:
+- `--concurrent-fragments 4` (the actual speed win).
+- `--newline --progress-template "download:[mh-progress]%(progress.speed)s|%(progress.eta)s"`,
+  parsed off the event stream (checked both stdout AND stderr — yt-dlp
+  routes it by tty detection) into two shared atomics.
+- **Hybrid, single-emitter design:** the filesystem poll STAYS as the
+  source of `downloaded_bytes`/`percent` (it's naturally cumulative
+  across the video+audio streams of a `<id>+bestaudio` spec — yt-dlp's
+  own `downloaded_bytes` resets to 0 at the audio stream, which would
+  jump the bar backwards). The native numbers only drive `speed_bps`/
+  `eta_sec`. The poll task is the ONLY thing that emits → no two-writer
+  race on the bar.
+- Why this is safe (the old code blamed PyInstaller stdout block-
+  buffering): smoke-tested 2026-06-13 — with `--newline` the frozen
+  binary streams progress live every ~100–200 ms. Verified the exact
+  template output is `[mh-progress]<speed_float>|<eta_int>` and early
+  frames are `NA|NA` (parser: NA → keep window-derived speed, eta = -1).
+
+**Progress denominator fix (same release).** Symptom reported during
+testing: bar shoots to ~95% in ~2s on a long video then crawls (looks
+like it's "stuck muxing" — it isn't; the live speed counter proves it's
+still downloading). Root cause: the bar's "100%" was the frontend's
+upfront `filesize_bytes` = `filesize.or(filesize_approx)` (Download.tsx /
+downloads.tsx), and for YouTube DASH `filesize` is often null so we fall
+back to `filesize_approx` (tbr×duration/8), which can UNDER-estimate. A
+too-small denominator makes `bytes/total` saturate early. Fix: the
+progress template now also carries `total_bytes|total_bytes_estimate`;
+the poll uses `best_total = native_total.max(hint)` floored by
+`bytes_now` as the denominator, and emits that as `total_bytes` too so
+the "X / Y MB" readout matches. yt-dlp's live `total_bytes` is exact
+(verified 124386876 == real file), so the bar can no longer overshoot.
+Safe for the genuine burst-then-throttle case too (total == estimate →
+no change).
+
+**2. aria2c external downloader (opt-in, lazy-downloaded — aria2.rs).**
+`--downloader <path> --downloader-args "aria2c:-x16 -s16 -k1M …"`.
+- **Not bundled.** There's no official static macOS arm64 aria2c, so it
+  can't go in `externalBin` (mac CI build would fail on the missing
+  file). Instead it's lazy-downloaded to `<app_data>/bin/` on first
+  enable (Windows: official 1.37.0 win-64 zip; extracted via the OS
+  `tar`/bsdtar so we add no Rust zip dep). Also keeps the installer +
+  every auto-update artifact ~3 MB lighter for the 99% who never enable.
+- macOS: `archive_url()` returns Err → the Settings toggle shows a
+  friendly "unavailable, keeping built-in engine" and stays off.
+- Fail-safe everywhere: if the binary isn't present, `downloader_args`
+  returns empty → silent fallback to yt-dlp's native downloader. The
+  filesystem poll is the progress source under aria2c too (it emits no
+  template lines), which is the OTHER reason the poll earns its keep.
+- New commands: `aria2_status` (toggle initial state), `aria2_ensure`
+  (download-on-enable; UI reverts the toggle + alerts on failure).
+- Setting: `use_aria2c` (default false). Settings → Downloads → "Fast
+  downloads" toggle.
+
+Single code path: batch queue + single-URL both go through `yt_download`,
+so both get the speedup. No extension change → manifest stays 1.9.0.
+
+### 1.10.1 follow-up — aria2c progress bar was lying ("instant 95% then crawl")
+
+Tester reported aria downloads rocket to ~94% then crawl. **Root-caused
+it via heavy instrumentation (2026-06-14), NOT a YouTube throttle** (my
+first guess — wrong; corrected by the tester's screenshots showing it's
+aria-only while native is smooth/linear):
+
+- aria2c downloads 16 segments in parallel scattered across the file.
+  Our progress numerator was `sum_live_dir_bytes` (file end-offset via
+  seek), which jumps to ~full-size almost immediately under aria's
+  scattered writes → bar shoots to ~94%, then "crawls" as the middle
+  gaps fill. Native writes front-to-back so its file-poll bar is fine.
+- yt-dlp emits **no** `--progress-template` lines when an external
+  downloader is active (upstream yt-dlp#16753 to parse aria's output is
+  still open), so our native-progress path never kicked in for aria.
+
+**Fix:** parse aria2c's own console readout. Verified empirically:
+- yt-dlp forwards aria's readout `[#hash 187MiB/679MiB(27%) CN:16
+  DL:27MiB ETA:18s]` to our captured stream as **`\n`-terminated lines**
+  (confirmed with xxd: each ends in `0a`), so our existing line reader
+  surfaces them live.
+- `parse_aria` (lib.rs) extracts cumulative downloaded/total bytes +
+  speed + ETA. Cross-stream monotonicity (video→audio) is handled by the
+  readout's **`#hash` changing** per stream: on hash change we bank the
+  finished stream's total into a `base`. Validated against a real
+  `399+bestaudio` capture: 2 streams, cum_dl 0→118→147 MB, **0
+  monotonic violations**, ends exactly at the merged file size.
+- Needed `--console-log-level=notice` (not `warn`) in the downloader-args
+  or aria suppresses the readout.
+
+`yt_download` now: aria active → bar uses `aria_dl`/`aria_total`; else →
+filesystem poll (unchanged native path). Also hardened `extract_zip`
+(aria2.rs) to call System32\tar.exe by absolute path (Git's GNU tar on
+PATH can't read zip) with a PowerShell Expand-Archive fallback.
+
+Speed sanity (679 MB 4K, stable connection): native ~24.8 MB/s vs aria
+~26.5 MB/s — comparable when YouTube isn't throttling; aria's real win is
+throttle days (measured 39 MB/s aria vs 42 KB/s single-connection).
+
+---
+
 ## 2026-06-13 — Cookie consent + "Sync browser logins" button (v1.9.0)
 
 Two additions on top of the cookie-bridge: explicit consent (cookies =

@@ -744,6 +744,44 @@ function DownloadsSection() {
     setLimitDraft(limited ? String(limit) : "");
   }, [limit, limited]);
 
+  // 1.10.0 — aria2c external downloader. The binary is lazy-downloaded
+  // on first enable, so the toggle has a "fetching…" state and can fail
+  // (no internet, unsupported OS) — in which case we revert it.
+  const [aria2Busy, setAria2Busy] = useState(false);
+  const [aria2Installed, setAria2Installed] = useState<boolean | null>(null);
+  useEffect(() => {
+    invoke<boolean>("aria2_status")
+      .then(setAria2Installed)
+      .catch(() => setAria2Installed(false));
+  }, []);
+
+  async function toggleAria2(on: boolean) {
+    if (!on) {
+      void save((s) => ({ ...s, use_aria2c: false }));
+      return;
+    }
+    // Turning on: make sure the binary is present first.
+    if (aria2Installed) {
+      void save((s) => ({ ...s, use_aria2c: true }));
+      return;
+    }
+    setAria2Busy(true);
+    try {
+      await invoke<string>("aria2_ensure");
+      setAria2Installed(true);
+      void save((s) => ({ ...s, use_aria2c: true }));
+    } catch (e) {
+      // Leave the toggle off and explain — never a blocker.
+      await alertDialog(
+        `Couldn't set up the faster downloader:\n\n${String(e)}\n\n` +
+          `Downloads will keep using the built-in engine.`,
+        { title: "aria2c unavailable", kind: "warning" },
+      );
+    } finally {
+      setAria2Busy(false);
+    }
+  }
+
   function setConcurrency(n: number) {
     const clamped = Math.max(1, Math.min(6, Math.round(n)));
     void save((s) => ({ ...s, download_concurrency: clamped }));
@@ -885,6 +923,28 @@ function DownloadsSection() {
         <span className="hint-text faint">
           KiB/s per worker. Off = unlimited. e.g. <code>5000</code> ≈ 5
           MB/s per parallel download.
+        </span>
+      </div>
+
+      {/* 1.10.0 — aria2c external downloader. Opt-in; the binary is
+          fetched on first enable. Off by default. */}
+      <div className="settings-row">
+        <span className="settings-label">Fast downloads</span>
+        <label className="switch" style={{ flex: "0 0 auto" }}>
+          <input
+            type="checkbox"
+            checked={settings.use_aria2c}
+            disabled={aria2Busy}
+            onChange={(e) => void toggleAria2(e.target.checked)}
+          />
+          <span className="switch-slider" />
+        </label>
+        <span className="hint-text faint">
+          {aria2Busy
+            ? "Downloading the aria2c engine…"
+            : settings.use_aria2c
+              ? "aria2c opens many parallel connections per file — faster on large or streaming (HLS/DASH) sources."
+              : "Use aria2c (parallel connections) for a big speedup on large/streaming downloads. Fetched once on enable (~3 MB). Falls back to the built-in engine if unavailable (e.g. macOS)."}
         </span>
       </div>
 

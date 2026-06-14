@@ -3,6 +3,7 @@
 // Milestone 0.1: `binaries_version` smoke test (proves sidecar pipeline).
 // Milestone 0.2 in progress: `yt_fetch_metadata` (paste URL → metadata card).
 
+mod aria2;
 mod bridge;
 mod direct;
 mod eagle;
@@ -769,6 +770,62 @@ fn sum_live_dir_bytes(dir: &std::path::Path, video_id: &str) -> u64 {
         .unwrap_or(0)
 }
 
+/// Parse aria2c's human-readable size tokens ("19MiB", "1.27GiB",
+/// "832KiB", "0B", "9.9MiB") into bytes. aria2c always uses binary
+/// (1024) units with the `i` infix. Returns None on anything unexpected
+/// so callers can skip the line rather than emit a bogus number.
+fn parse_human_size(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (num, mult): (&str, u64) = if let Some(p) = s.strip_suffix("TiB") {
+        (p, 1024u64 * 1024 * 1024 * 1024)
+    } else if let Some(p) = s.strip_suffix("GiB") {
+        (p, 1024 * 1024 * 1024)
+    } else if let Some(p) = s.strip_suffix("MiB") {
+        (p, 1024 * 1024)
+    } else if let Some(p) = s.strip_suffix("KiB") {
+        (p, 1024)
+    } else if let Some(p) = s.strip_suffix('B') {
+        (p, 1)
+    } else {
+        (s, 1)
+    };
+    let v: f64 = num.trim().parse().ok()?;
+    if !v.is_finite() || v < 0.0 {
+        return None;
+    }
+    Some((v * mult as f64) as u64)
+}
+
+/// Parse aria2c's ETA tokens ("8s", "1m6s", "8m7s", "1h2m3s") into
+/// seconds. Returns None when there's no usable number (e.g. "--" or
+/// "INF" that aria emits before it has an estimate).
+fn parse_aria_eta(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let mut total: u64 = 0;
+    let mut num = String::new();
+    let mut saw_digit = false;
+    for c in s.chars() {
+        if c.is_ascii_digit() {
+            num.push(c);
+            saw_digit = true;
+        } else {
+            let n: u64 = num.parse().unwrap_or(0);
+            num.clear();
+            match c {
+                'h' => total += n * 3600,
+                'm' => total += n * 60,
+                's' => total += n,
+                _ => {}
+            }
+        }
+    }
+    if saw_digit {
+        Some(total)
+    } else {
+        None
+    }
+}
+
 /// Format a number of seconds as HH-MM-SS for use in filenames.
 /// Dashes (not colons) so the result is filesystem-safe on Windows.
 fn fmt_segment_label(sec: f64) -> String {
@@ -914,18 +971,34 @@ async fn yt_download(
     // 1.2.16 — prefer the auto-updated managed binary (see updater).
     let cmd = updater::resolve_yt_dlp(&app)?.env("PYTHONUNBUFFERED", "1");
 
-    // We don't try to parse yt-dlp's progress output anymore — Python's
-    // block-buffering on piped stdout makes it arrive in one burst at
-    // end-of-process (PYTHONUNBUFFERED doesn't override PyInstaller's
-    // bundled Python in practice). Instead we poll the .part file size
-    // from the filesystem every 500ms in a sibling task, which gives
-    // us real progress without depending on stdout flushing. See
-    // sum_part_file_bytes + the spawn block below.
+    // 1.10.0 — hybrid progress. We now ALSO parse yt-dlp's own progress
+    // via `--newline --progress-template` (smoke-tested 2026-06-13: with
+    // --newline the frozen PyInstaller binary streams progress lines live,
+    // every ~100-200ms, contrary to the old block-buffering assumption).
+    // yt-dlp's speed/ETA are far more accurate than anything we can derive
+    // from file stats, so we let them drive `speed_bps`/`eta_sec`.
+    //
+    // The filesystem `.part` poll STAYS as the source of truth for
+    // downloaded_bytes / percent — it's naturally cumulative across the
+    // video+audio streams of a composed `<id>+bestaudio` spec (yt-dlp's
+    // native downloaded_bytes resets to 0 when it moves from video to
+    // audio, which would make the bar jump backwards). The poll is also
+    // the fallback when an external downloader (aria2c) or an odd format
+    // emits no template lines at all. Single emitter = no event races.
     //
     // `--print after_move:...` still works — it fires only once after
     // each stream's post-processing rename, so a single end-of-process
     // flush is fine for capturing the final path.
     let filepath_template = "after_move:[mh-filepath] %(filepath)s";
+    // Scoped to `download:` so post-processing (merge/trim) lines don't
+    // also fire it. No spaces in the payload so the Rust parse is a
+    // trivial split on '|'. Fields (any may be "NA" until yt-dlp knows):
+    //   speed | eta | total_bytes | total_bytes_estimate
+    // The two totals let us correct the progress denominator: the upfront
+    // `filesize_approx` the frontend passes as total_bytes_hint is often
+    // an UNDER-estimate for YouTube DASH, which makes the bar shoot to
+    // ~99% then crawl. yt-dlp's live total is exact, so we prefer it.
+    let progress_template = "download:[mh-progress]%(progress.speed)s|%(progress.eta)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s";
 
     let mut args: Vec<&str> = vec![
         "-f",
@@ -934,12 +1007,18 @@ async fn yt_download(
         "--no-warnings",
         "--restrict-filenames",
         "--no-mtime", // download time, not source mtime — friendlier for library sort
-        // Sequential fragment downloads — forces each fragment to flush
-        // before the next starts, giving our filesystem polling more
-        // discrete checkpoints to observe. Without this yt-dlp downloads
-        // N fragments in parallel and the writes can all arrive in one burst.
+        // 1.10.0 — parallel fragment downloads. Was pinned to 1 so the
+        // filesystem poll had discrete checkpoints; now that we parse
+        // yt-dlp's own progress (and the poll sums all in-flight frag
+        // files by id anyway), 4 concurrent fragments gives the 2-5x
+        // speedup segmented sources (most of YouTube/Twitter) allow.
         "--concurrent-fragments",
-        "1",
+        "4",
+        // 1.10.0 — emit machine-parseable progress + one line per update
+        // (not \r-overwrite) so we can read it off the event stream.
+        "--newline",
+        "--progress-template",
+        progress_template,
         // Force temp files to be in dest dir (see temp_paths_arg above).
         "-P",
         temp_paths_arg.as_str(),
@@ -982,6 +1061,18 @@ async fn yt_download(
     let bandwidth = settings::bandwidth_args(&settings);
     for b in &bandwidth {
         args.push(b.as_str());
+    }
+    // 1.10.0 — aria2c external downloader (opt-in). Only consulted when
+    // the setting is on; returns empty (→ native downloader) if the
+    // binary hasn't been lazy-downloaded or the platform is unsupported.
+    // Owned outside the loop so the &str refs outlive the spawn.
+    let aria_args = if settings::use_aria2c(&settings) {
+        aria2::downloader_args(&app)
+    } else {
+        Vec::new()
+    };
+    for a in &aria_args {
+        args.push(a.as_str());
     }
     // Allowed container values — defensive guard against arbitrary
     // strings from the renderer slipping into a yt-dlp arg.
@@ -1038,7 +1129,7 @@ async fn yt_download(
     // shared `running` flag flips — set by the StopPolling drop guard
     // when this function returns (success or error), so the task can
     // never outlive the download.
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -1052,6 +1143,32 @@ async fn yt_download(
     let running = Arc::new(AtomicBool::new(true));
     let _stop_guard = StopPolling(running.clone());
 
+    // 1.10.0 — native-progress overlay. The yt-dlp reader loop (below)
+    // writes the latest values yt-dlp reports; the poll task reads them
+    // so a SINGLE task emits the event (no two-writer race on the bar).
+    //   native_speed: bytes/s, 0 = unknown
+    //   native_eta:   seconds, -1 = unknown
+    //   native_total: bytes of the current stream, 0 = unknown. Used to
+    //                 correct the bar denominator when the upfront
+    //                 filesize estimate is too low (DASH under-estimate).
+    let native_speed = Arc::new(AtomicU64::new(0));
+    let native_eta = Arc::new(AtomicI64::new(-1));
+    let native_total = Arc::new(AtomicU64::new(0));
+
+    // 1.10.1 — aria2c byte overlay. When aria2c is the downloader, yt-dlp
+    // emits no --progress-template lines (upstream yt-dlp#16753 still
+    // open) and the filesystem poll can't see aria's scattered multi-
+    // segment writes — together that produced the "instant 95% then
+    // crawl" bar. Instead we parse aria2c's own console readout
+    // (`[#hash 187MiB/679MiB(27%) ... DL: ETA:]`) in the reader loop and
+    // publish cumulative downloaded/total bytes here. The poll task uses
+    // these as the bar's numerator/denominator when aria is active.
+    //   aria_dl / aria_total: cumulative bytes across the video+audio
+    //   streams; 0 = nothing reported yet (poll falls back to file sum).
+    let aria_active = !aria_args.is_empty();
+    let aria_dl = Arc::new(AtomicU64::new(0));
+    let aria_total = Arc::new(AtomicU64::new(0));
+
     {
         let app = app.clone();
         let dest = dest.clone();
@@ -1059,6 +1176,11 @@ async fn yt_download(
         let total_hint = total_bytes_hint;
         let video_id = video_id.clone();
         let job_id_clone = job_id.clone();
+        let native_speed = native_speed.clone();
+        let native_eta = native_eta.clone();
+        let native_total = native_total.clone();
+        let aria_dl = aria_dl.clone();
+        let aria_total = aria_total.clone();
         tokio::spawn(async move {
             // Rolling window of (bytes, time) samples. Speed is computed
             // across the oldest-to-newest sample, smoothing out the
@@ -1074,7 +1196,20 @@ async fn yt_download(
                 if !running.load(Ordering::Relaxed) {
                     break;
                 }
-                let bytes_now = sum_live_dir_bytes(&dest, &video_id);
+                // Numerator: aria2c's reported bytes when it's driving
+                // (the file poll is blind to its scattered writes), else
+                // the filesystem sum (accurate for yt-dlp's own
+                // sequential / fragment writes, cumulative across streams).
+                let aria_bytes = if aria_active {
+                    aria_dl.load(Ordering::Relaxed)
+                } else {
+                    0
+                };
+                let bytes_now = if aria_bytes > 0 {
+                    aria_bytes
+                } else {
+                    sum_live_dir_bytes(&dest, &video_id)
+                };
                 let now = Instant::now();
 
                 window.push_back((bytes_now, now));
@@ -1082,8 +1217,11 @@ async fn yt_download(
                     window.pop_front();
                 }
 
-                // Need at least two samples to compute a delta.
-                let speed = if window.len() >= 2 {
+                // Speed: prefer yt-dlp's own number (accounts for retries,
+                // fragment overhead, the real network rate); fall back to
+                // the byte-window delta when no native line has arrived yet
+                // (or an external downloader emits none).
+                let window_speed = if window.len() >= 2 {
                     let (b0, t0) = window.front().copied().unwrap();
                     let (b1, t1) = window.back().copied().unwrap();
                     let dt = t1.duration_since(t0).as_secs_f64();
@@ -1096,22 +1234,52 @@ async fn yt_download(
                 } else {
                     None
                 };
+                let nsp = native_speed.load(Ordering::Relaxed);
+                let speed = if nsp > 0 { Some(nsp) } else { window_speed };
 
-                let percent = total_hint
-                    .filter(|t| *t > 0)
-                    .map(|t| ((bytes_now as f64 / t as f64) * 100.0).min(99.9));
-                let eta = match (speed, total_hint) {
-                    (Some(s), Some(t)) if s > 0 && t > bytes_now => {
-                        Some(t.saturating_sub(bytes_now) / s)
+                // Denominator = the best total we know. Prefer yt-dlp's
+                // live total (exact), fall back to the upfront hint. Both
+                // are floored by bytes_now so a low estimate can't make
+                // the bar overshoot 100% (the "instant 95% then crawl"
+                // symptom). None only when no total source exists at all.
+                let nt = native_total.load(Ordering::Relaxed);
+                let at = if aria_active {
+                    aria_total.load(Ordering::Relaxed)
+                } else {
+                    0
+                };
+                let best_total = nt.max(at).max(total_hint.unwrap_or(0));
+                let percent = if best_total > 0 {
+                    let denom = best_total.max(bytes_now);
+                    Some(((bytes_now as f64 / denom as f64) * 100.0).min(99.9))
+                } else {
+                    None
+                };
+                // ETA: yt-dlp's when known, else derive from speed + the
+                // best total we have.
+                let neta = native_eta.load(Ordering::Relaxed);
+                let eta = if neta >= 0 {
+                    Some(neta as u64)
+                } else {
+                    match speed {
+                        Some(s) if s > 0 && best_total > bytes_now => {
+                            Some(best_total.saturating_sub(bytes_now) / s)
+                        }
+                        _ => None,
                     }
-                    _ => None,
                 };
                 let _ = app.emit(
                     "download:progress",
                     ProgressEvent {
                         job_id: job_id_clone.clone(),
                         downloaded_bytes: bytes_now,
-                        total_bytes: total_hint,
+                        // Report the corrected total so the UI's "X / Y MB"
+                        // readout matches the bar (not the low estimate).
+                        total_bytes: if best_total > 0 {
+                            Some(best_total)
+                        } else {
+                            total_hint
+                        },
                         percent,
                         speed_bps: speed,
                         eta_sec: eta,
@@ -1147,6 +1315,97 @@ async fn yt_download(
         drop(child);
     }
 
+    // 1.10.0 — parse a `[mh-progress]<speed>|<eta>` line emitted by the
+    // --progress-template into the shared overlay atomics. Returns true
+    // when the line was a progress line (so callers skip the tail logic
+    // and don't flood the error buffers). yt-dlp may route these to
+    // stdout or stderr depending on tty detection, so we check both.
+    let parse_progress = |line: &str| -> bool {
+        let Some(rest) = line.strip_prefix("[mh-progress]") else {
+            return false;
+        };
+        // speed | eta | total_bytes | total_bytes_estimate
+        let f: Vec<&str> = rest.split('|').collect();
+        let num = |i: usize| -> Option<f64> {
+            f.get(i)
+                .map(|s| s.trim())
+                .and_then(|s| s.parse::<f64>().ok())
+                .filter(|v| v.is_finite() && *v >= 0.0)
+        };
+        if let Some(v) = num(0) {
+            native_speed.store(v as u64, Ordering::Relaxed);
+        }
+        match num(1) {
+            Some(e) => native_eta.store(e as i64, Ordering::Relaxed),
+            None => native_eta.store(-1, Ordering::Relaxed),
+        }
+        // Prefer the exact total_bytes; fall back to the estimate. Only
+        // overwrite when we got a real number so a late "NA" frame doesn't
+        // wipe a good total back to unknown.
+        if let Some(t) = num(2).or_else(|| num(3)) {
+            if t > 0.0 {
+                native_total.store(t as u64, Ordering::Relaxed);
+            }
+        }
+        true
+    };
+
+    // 1.10.1 — parse aria2c's console readout
+    // `[#a0435a 187MiB/679MiB(27%) CN:16 DL:27MiB ETA:18s]`.
+    // Each download stream gets its own `#hash`; when the hash changes
+    // (video → audio) we commit the finished stream's total into `base`
+    // so the cumulative byte count stays monotonic across the whole
+    // `<video>+<audio>` spec instead of resetting the bar to 0. Updates
+    // the aria_dl/aria_total overlay + reuses native_speed/native_eta.
+    // Returns true when it consumed a readout line (skip the tail).
+    let parse_aria =
+        |line: &str, base: &mut u64, last_total: &mut u64, last_hash: &mut String| -> bool {
+            let Some(s) = line.find("[#") else { return false };
+            let rest = &line[s + 2..];
+            let Some(e) = rest.find(']') else { return false };
+            let inner = &rest[..e]; // "a0435a 187MiB/679MiB(27%) CN:16 DL:27MiB ETA:18s"
+            let mut toks = inner.split_whitespace();
+            let Some(hash) = toks.next() else { return false };
+            let Some(sizes) = toks.next() else { return false };
+            let Some(slash) = sizes.find('/') else { return false };
+            let dl_s = &sizes[..slash];
+            let total_s = sizes[slash + 1..].split('(').next().unwrap_or("");
+            let (Some(dl), Some(total)) = (parse_human_size(dl_s), parse_human_size(total_s))
+            else {
+                return false;
+            };
+            let mut speed: Option<u64> = None;
+            let mut eta: Option<u64> = None;
+            for t in toks {
+                if let Some(v) = t.strip_prefix("DL:") {
+                    speed = parse_human_size(v);
+                } else if let Some(v) = t.strip_prefix("ETA:") {
+                    eta = parse_aria_eta(v);
+                }
+            }
+            // New stream (hash changed) → bank the previous stream's total.
+            if !last_hash.is_empty() && last_hash.as_str() != hash {
+                *base += *last_total;
+            }
+            *last_hash = hash.to_string();
+            *last_total = total;
+            aria_dl.store(*base + dl, Ordering::Relaxed);
+            aria_total.store(*base + total, Ordering::Relaxed);
+            if let Some(sp) = speed {
+                native_speed.store(sp, Ordering::Relaxed);
+            }
+            match eta {
+                Some(x) => native_eta.store(x as i64, Ordering::Relaxed),
+                None => native_eta.store(-1, Ordering::Relaxed),
+            }
+            true
+        };
+    // Cumulative-tracking state for parse_aria (single reader task, so
+    // plain locals threaded through by &mut are fine).
+    let mut aria_base: u64 = 0;
+    let mut aria_last_total: u64 = 0;
+    let mut aria_last_hash = String::new();
+
     let mut final_path: Option<String> = None;
     let mut stderr_tail: Vec<String> = Vec::new();
     // 1.2.14 — also tail stdout. PyInstaller-bundled yt-dlp can
@@ -1162,7 +1421,13 @@ async fn yt_download(
             CommandEvent::Stdout(bytes) => {
                 let line = String::from_utf8_lossy(&bytes);
                 let line = line.trim();
-                if let Some(path) = line.strip_prefix("[mh-filepath] ") {
+                if aria_active
+                    && parse_aria(line, &mut aria_base, &mut aria_last_total, &mut aria_last_hash)
+                {
+                    // aria2c readout consumed — poll task emits.
+                } else if parse_progress(line) {
+                    // Progress overlay updated — the poll task emits.
+                } else if let Some(path) = line.strip_prefix("[mh-filepath] ") {
                     final_path = Some(path.trim().to_string());
                 } else if !line.is_empty() {
                     // Skip the noisy progress chatter; only keep lines
@@ -1177,7 +1442,13 @@ async fn yt_download(
             }
             CommandEvent::Stderr(bytes) => {
                 let line = String::from_utf8_lossy(&bytes).trim().to_string();
-                if !line.is_empty() {
+                if aria_active
+                    && parse_aria(&line, &mut aria_base, &mut aria_last_total, &mut aria_last_hash)
+                {
+                    // aria2c readout on stderr — overlay updated, skip tail.
+                } else if parse_progress(&line) {
+                    // Progress line on stderr — overlay updated, skip tail.
+                } else if !line.is_empty() {
                     stderr_tail.push(line);
                     if stderr_tail.len() > 50 {
                         stderr_tail.remove(0);
@@ -2482,6 +2753,8 @@ pub fn run() {
             settings::settings_get,
             settings::settings_set,
             settings::cookies_validate,
+            aria2::aria2_status,
+            aria2::aria2_ensure,
             updater::yt_dlp_update_now,
             updater::yt_dlp_engine_info,
             updater::check_for_app_update,

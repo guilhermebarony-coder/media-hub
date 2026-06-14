@@ -199,6 +199,12 @@ export type Settings = {
   rename_template: string;
   download_concurrency: number;
   bandwidth_limit_kbps: number | null;
+  /** 1.10.0 — route downloads through aria2c (many parallel connections
+   *  → faster large/HLS pulls). Opt-in, default false. aria2c isn't
+   *  bundled; it's lazy-downloaded to app-data on first enable. When the
+   *  binary is unavailable (macOS, or not yet downloaded) the backend
+   *  silently falls back to yt-dlp's native downloader. */
+  use_aria2c: boolean;
   default_transcode_preset: string;
   /** 1.3.x — Preferred max video height ("1080" / "720" / "480") or
    *  empty string for "no cap, use source". Applied to downloads
@@ -237,6 +243,7 @@ export const DEFAULT_SETTINGS: Settings = {
   rename_template: "",
   download_concurrency: 3,
   bandwidth_limit_kbps: null,
+  use_aria2c: false,
   default_transcode_preset: "none",
   preferred_max_quality: "1080",
   onboarding_complete: false,

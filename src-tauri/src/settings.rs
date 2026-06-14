@@ -94,6 +94,16 @@ pub struct Settings {
     /// yt-dlp `--limit-rate` in KiB/s. None = unlimited. Lands 0.8.C.
     pub bandwidth_limit_kbps: Option<u32>,
 
+    /// 1.10.0 — use aria2c as the external downloader (many parallel
+    /// connections per file → big speedup on large / HLS pulls). Opt-in
+    /// and OFF by default. aria2c is NOT bundled — it's lazy-downloaded
+    /// to app-data on first enable (see aria2.rs). When enabled but the
+    /// binary isn't present (e.g. macOS, where no static build exists, or
+    /// a failed download), `aria2::downloader_args` returns empty and we
+    /// silently fall back to yt-dlp's native downloader.
+    #[serde(default)]
+    pub use_aria2c: bool,
+
     // Transcode.
     /// Default transcode preset for new downloads. "none" / "prores_422_lt"
     /// / "dnxhr_sq" / "h264_mp4" / "h264_nvenc_mp4". Lands 0.8.B.
@@ -189,6 +199,7 @@ impl Default for Settings {
             rename_template: String::new(),
             download_concurrency: 3,
             bandwidth_limit_kbps: None,
+            use_aria2c: false,
             default_transcode_preset: "none".into(),
             preferred_max_quality: default_preferred_max_quality(),
             onboarding_complete: false,
@@ -867,6 +878,12 @@ fn source_to_args(source: &CookiesSource) -> Vec<String> {
 /// the user didn't agree to).
 pub fn cookies_enabled(state: &SettingsState) -> bool {
     state.inner.lock().map(|g| g.cookies_enabled).unwrap_or(false)
+}
+
+/// Whether the user opted into the aria2c external downloader. Lock
+/// poison reads as `false` (fall back to yt-dlp's native downloader).
+pub fn use_aria2c(state: &SettingsState) -> bool {
+    state.inner.lock().map(|g| g.use_aria2c).unwrap_or(false)
 }
 
 /// Resolve the cookie args for a SPECIFIC url: a per-platform override

@@ -1,6 +1,6 @@
 [package]
 name = "media-hub"
-version = "1.9.0"
+version = "1.10.0"
 description = "Media Hub — download manager + media library for video editors"
 authors = ["Guilherme"]
 edition = "2021"
