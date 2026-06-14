@@ -943,8 +943,8 @@ function DownloadsSection() {
           {aria2Busy
             ? "Downloading the aria2c engine…"
             : settings.use_aria2c
-              ? "aria2c opens many parallel connections per file — faster on large or streaming (HLS/DASH) sources."
-              : "Use aria2c (parallel connections) for a big speedup on large/streaming downloads. Fetched once on enable (~3 MB). Falls back to the built-in engine if unavailable (e.g. macOS)."}
+              ? "On — best for very large / long videos, or when a download is crawling (YouTube throttling one connection). For normal downloads the built-in engine is usually just as fast, so you can leave this off."
+              : "Only helps when YouTube throttles a single connection — i.e. big / long videos or a download stuck well below your real speed. Otherwise the built-in engine is as fast or faster, so keep this off unless a download is crawling. Fetched once on enable (~3 MB, Windows)."}
         </span>
       </div>
 
