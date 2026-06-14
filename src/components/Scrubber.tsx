@@ -114,10 +114,13 @@ export function Scrubber(props: ScrubberProps) {
   >([]);
   // Tier 1 — storyboard hover preview. Tracks the pointer over the bar.
   const [hover, setHover] = useState<{ x: number; time: number } | null>(null);
-  // Option A — true while the remote stream is fetching a freshly-sought
-  // frame. We paint the storyboard tile into the player during this gap
-  // so scrubbing feels instant instead of frozen for seconds.
-  const [seekingNet, setSeekingNet] = useState(false);
+  // Option A — storyboard scrub preview. Only the scrub BAR drives this
+  // (it's the rough-nav tool); jog + arrow steps are precision tools and
+  // deliberately left to show the real frame. `barScrubTime` is the live
+  // drag position (updated from the mouse, not the throttled video clock,
+  // so it moves instantly); it's cleared once the real frame seeks in.
+  const [barScrubTime, setBarScrubTime] = useState<number | null>(null);
+  const barDraggingRef = useRef(false);
   // The HTML5 element reports playback state through events; we
   // mirror it into React state so the UI reflects it.
   const [playing, setPlaying] = useState(false);
@@ -466,7 +469,10 @@ export function Scrubber(props: ScrubberProps) {
       setCurrentTime(v.currentTime);
       lastTimeRef.current = v.currentTime;
     };
-    const onPlay = () => setPlaying(true);
+    const onPlay = () => {
+      setPlaying(true);
+      setBarScrubTime(null);
+    };
     const onPause = () => setPlaying(false);
     const onLoaded = () => {
       if (Number.isFinite(v.duration) && v.duration > 0) {
@@ -498,18 +504,17 @@ export function Scrubber(props: ScrubberProps) {
       // or the network blip cleared). Drop the message.
       setVideoErr(null);
     };
-    // Option A — track the network-seek gap so we can cover it with a
-    // storyboard frame. `seeking` fires when a seek starts; `seeked`
-    // when the new frame is actually available to paint.
-    const onSeeking = () => setSeekingNet(true);
-    const onSeeked = () => setSeekingNet(false);
+    // Option A — once the real frame for a bar-seek has landed, drop the
+    // storyboard cover (unless the user is still actively dragging).
+    const onSeeked = () => {
+      if (!barDraggingRef.current) setBarScrubTime(null);
+    };
     v.addEventListener("timeupdate", onTime);
     v.addEventListener("play", onPlay);
     v.addEventListener("pause", onPause);
     v.addEventListener("loadedmetadata", onLoaded);
     v.addEventListener("error", onError);
     v.addEventListener("canplay", onCanPlay);
-    v.addEventListener("seeking", onSeeking);
     v.addEventListener("seeked", onSeeked);
     return () => {
       v.removeEventListener("timeupdate", onTime);
@@ -518,7 +523,6 @@ export function Scrubber(props: ScrubberProps) {
       v.removeEventListener("loadedmetadata", onLoaded);
       v.removeEventListener("error", onError);
       v.removeEventListener("canplay", onCanPlay);
-      v.removeEventListener("seeking", onSeeking);
       v.removeEventListener("seeked", onSeeked);
     };
   }, [playable]);
@@ -650,9 +654,14 @@ export function Scrubber(props: ScrubberProps) {
     const wasPlaying = v && !v.paused;
     v?.pause();
 
+    // Option A — the bar is the rough-nav tool, so it drives the instant
+    // storyboard preview straight from the mouse position.
+    barDraggingRef.current = true;
     const seek = (clientX: number) => {
       const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      seekTo(ratio * duration);
+      const t = ratio * duration;
+      setBarScrubTime(t);
+      seekTo(t);
     };
     seek(e.clientX);
 
@@ -660,6 +669,10 @@ export function Scrubber(props: ScrubberProps) {
     const onUp = () => {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
+      // Keep the storyboard frame up until the real frame seeks in
+      // (the 'seeked' handler clears it); just stop treating it as a
+      // live drag so an in-flight seeked event can resolve it.
+      barDraggingRef.current = false;
       if (wasPlaying) v?.play();
     };
     document.addEventListener("mousemove", onMove);
@@ -789,11 +802,13 @@ export function Scrubber(props: ScrubberProps) {
   const currentPct = posPct(currentTime) ?? "0%";
 
   // Option A — show the storyboard frame in the player only while the
-  // remote stream is still fetching a sought frame (paused, no local
-  // proxy yet, not already covered by the frame-exact overlay).
+  // user is rough-navigating with the scrub BAR and the real frame for
+  // that position hasn't streamed in yet. Driven by the live drag time
+  // so it tracks the mouse instantly; skipped once a local proxy exists
+  // (seeks are instant then) or a frame-exact window already covers it.
   const playerStory =
-    !playing && seekingNet && proxyState !== "ready" && !fineActive
-      ? storyFill(currentTime)
+    barScrubTime != null && proxyState !== "ready" && !fineActive
+      ? storyFill(barScrubTime)
       : null;
 
   return (
