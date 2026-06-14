@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { openPath } from "@tauri-apps/plugin-opener";
 import { Icon } from "../lib/icons";
 import { alertDialog, confirmDialog } from "../lib/dialog";
 import { useSettings } from "../lib/settings";
@@ -812,9 +813,23 @@ function DownloadsSection() {
   // remembered platforms is small (1-2 entries today).
   const stickyEntries = Object.entries(settings.last_formats ?? {});
 
+  // Preview cache size + path readout (refreshed after clear).
+  const [cacheInfo, setCacheInfo] = useState<{ bytes: number; path: string } | null>(
+    null,
+  );
+  function refreshCacheInfo() {
+    invoke<{ bytes: number; path: string }>("preview_cache_info")
+      .then(setCacheInfo)
+      .catch(() => setCacheInfo(null));
+  }
+  useEffect(() => {
+    refreshCacheInfo();
+  }, []);
+
   async function clearPreviewCache() {
     try {
       const freed = await invoke<number>("preview_cache_clear");
+      refreshCacheInfo();
       await alertDialog(
         `Removed ${(freed / 1048576).toFixed(0)} MB of cached preview proxies.`,
         { title: "Preview cache cleared", kind: "info" },
@@ -977,9 +992,13 @@ function DownloadsSection() {
         >
           <option value="auto">Auto (by length)</option>
           <option value="720">720p</option>
+          <option value="480">480p</option>
           <option value="360">360p</option>
           <option value="off">Streaming only</option>
         </select>
+        <span className="mono faint" style={{ flex: "0 0 auto", fontSize: 11 }}>
+          {cacheInfo ? `${(cacheInfo.bytes / 1048576).toFixed(0)} MB` : "—"}
+        </span>
         <button
           type="button"
           className="btn btn-secondary"
@@ -988,13 +1007,25 @@ function DownloadsSection() {
         >
           Clear cache
         </button>
+        {cacheInfo && (
+          <button
+            type="button"
+            className="btn btn-ghost"
+            style={{ flex: "0 0 auto" }}
+            title={cacheInfo.path}
+            onClick={() => void openPath(cacheInfo.path).catch(() => {})}
+          >
+            Open folder
+          </button>
+        )}
         <span className="hint-text faint">
-          The scrubber downloads a small local copy for buttery seeking.
-          <strong> Auto</strong> picks the best quality that stays small
-          to download — 720p when it's under ~1.5&nbsp;GB, otherwise 360p
-          (tiny even for multi-hour videos), only streaming if 360p would
-          top 3&nbsp;GB. Cache auto-caps at 2&nbsp;GB; “Clear cache” wipes
-          it now.
+          The scrubber downloads a small local copy for buttery seeking,
+          plus tiny frame-exact windows where you pause.
+          <strong> Auto</strong> picks the best quality that stays small to
+          download — 720p when under ~1.5&nbsp;GB, else 360p (tiny even for
+          multi-hour videos), only streaming if 360p would top 3&nbsp;GB.
+          Cache lives at <code>{cacheInfo?.path ?? "…/cache/preview"}</code>,
+          auto-caps at 2&nbsp;GB; “Clear cache” wipes it now.
         </span>
       </div>
 

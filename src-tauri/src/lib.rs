@@ -1104,6 +1104,33 @@ async fn preview_intra_window(
     })
 }
 
+/// Total bytes + on-disk path of the preview cache, for the Settings
+/// readout ("Cache: 420 MB" + a reveal-in-folder button).
+#[derive(Serialize, Clone)]
+struct PreviewCacheInfo {
+    bytes: u64,
+    path: String,
+}
+
+#[tauri::command]
+fn preview_cache_info(app: AppHandle) -> Result<PreviewCacheInfo, String> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("cache dir: {e}"))?
+        .join("preview");
+    let mut bytes = 0u64;
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for entry in rd.filter_map(|e| e.ok()) {
+            bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
+        }
+    }
+    Ok(PreviewCacheInfo {
+        bytes,
+        path: dir.to_string_lossy().to_string(),
+    })
+}
+
 /// Delete every cached preview proxy. Returns the number of bytes freed
 /// so the UI can show "freed N MB". Best-effort per file.
 #[tauri::command]
@@ -3001,6 +3028,7 @@ pub fn run() {
             yt_resolve_stream_url,
             preview_proxy,
             preview_intra_window,
+            preview_cache_info,
             preview_cache_clear,
             yt_download,
             yt_download_cancel,

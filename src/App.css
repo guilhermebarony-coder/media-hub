@@ -3065,6 +3065,29 @@ body.lib-resizing-h * {
   color: #0a0a0a;
   background: var(--accent);
 }
+/* AE-style cache line along the bottom of the scrub bar. */
+.scrubber-cacheline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(229, 70, 70, 0.6); /* red = not cached */
+  border-radius: 0 0 4px 4px;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 3;
+}
+.scrubber-cacheline.proxy {
+  /* proxy is local (smooth seek) but not yet frame-exact */
+  background: rgba(120, 132, 150, 0.45);
+}
+.scrubber-cacheline-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: #3aa0ff; /* blue = frame-exact window cached */
+}
 .scrubber-player video {
   width: 100%;
   height: 100%;

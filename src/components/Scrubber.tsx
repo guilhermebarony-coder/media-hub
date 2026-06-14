@@ -87,6 +87,11 @@ export function Scrubber(props: ScrubberProps) {
   const [fineStart, setFineStart] = useState(0);
   const [fineDur, setFineDur] = useState(0);
   const FINE_RADIUS = 3; // seconds each side of the pause point
+  // AE-style cache line: time ranges that have a frame-exact window
+  // prepared (rendered blue on the bar; the rest reads red = not cached).
+  const [cachedWindows, setCachedWindows] = useState<
+    Array<{ start: number; end: number }>
+  >([]);
   // The HTML5 element reports playback state through events; we
   // mirror it into React state so the UI reflects it.
   const [playing, setPlaying] = useState(false);
@@ -207,9 +212,9 @@ export function Scrubber(props: ScrubberProps) {
   const previewHeight = ((): number | null => {
     const q = settings.preview_quality ?? "auto";
     if (q === "off") return null;
-    if (q === "360") return 360;
-    if (q === "720") return 720;
-    return autoHeight();
+    if (q === "auto") return autoHeight();
+    const n = parseInt(q, 10);
+    return Number.isFinite(n) && n > 0 ? n : autoHeight();
   })();
   useEffect(() => {
     setProxyUrl(null);
@@ -250,11 +255,12 @@ export function Scrubber(props: ScrubberProps) {
     currentTime >= fineStart &&
     currentTime <= fineStart + fineDur;
 
-  // Reset the fine window when the source changes.
+  // Reset the fine window + cache line when the source changes.
   useEffect(() => {
     setFineUrl(null);
     setFineStart(0);
     setFineDur(0);
+    setCachedWindows([]);
   }, [sourceUrl, videoId]);
 
   // When paused on a point (and we have a local proxy), cut a short
@@ -277,6 +283,12 @@ export function Scrubber(props: ScrubberProps) {
           setFineStart(res.start_sec);
           setFineDur(res.dur_sec);
           setFineUrl(convertFileSrc(res.path) + `#w${res.start_sec}`);
+          // Record the range for the cache line (dedupe by start).
+          setCachedWindows((prev) =>
+            prev.some((w) => w.start === res.start_sec)
+              ? prev
+              : [...prev, { start: res.start_sec, end: res.start_sec + res.dur_sec }],
+          );
         })
         .catch((e) => console.warn("[intra-window] failed:", e));
     }, 350);
@@ -852,6 +864,24 @@ export function Scrubber(props: ScrubberProps) {
         aria-valuenow={currentTime}
       >
         <div className="scrubber-bar-track" />
+        {/* AE-style cache line: red = not frame-exact cached, blue = a
+            prepared all-intra window covers that range. */}
+        {duration > 0 && (
+          <div
+            className={"scrubber-cacheline" + (proxyState === "ready" ? " proxy" : "")}
+          >
+            {cachedWindows.map((w, i) => (
+              <div
+                key={i}
+                className="scrubber-cacheline-seg"
+                style={{
+                  left: `${Math.max(0, (w.start / duration) * 100)}%`,
+                  width: `${Math.max(0, ((w.end - w.start) / duration) * 100)}%`,
+                }}
+              />
+            ))}
+          </div>
+        )}
         {segmentRegions.map((r) => (
           <div
             key={r.index}
