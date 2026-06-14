@@ -3415,17 +3415,17 @@ body.lib-resizing-h * {
 .scrubber-bar-chapterhover {
   position: absolute;
   bottom: 12px;              /* track bottom edge (bar 30 − track bottom 18) */
-  height: 6px;               /* starts flush with the track */
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 3px;
+  height: 6px;               /* exactly the track — no doubling */
+  background: var(--bg-3);
+  border-radius: 2px;
   pointer-events: none;
   z-index: 1;
-  animation: chapterHoverIn 130ms ease-out forwards;
+  animation: chapterHoverIn 120ms ease-out forwards;
 }
 @keyframes chapterHoverIn {
   to {
-    height: 11px;            /* +5px, all upward */
-    background: rgba(199, 241, 84, 0.22); /* warms to the accent */
+    height: 8px;             /* +2px up only — a gentle nudge */
+    background: rgba(199, 241, 84, 0.32); /* faint accent tint */
   }
 }
 
