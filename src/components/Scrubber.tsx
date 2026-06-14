@@ -798,8 +798,10 @@ export function Scrubber(props: ScrubberProps) {
         }
       : null;
 
-  // Position of the playhead on the bar (current % of duration).
-  const currentPct = posPct(currentTime) ?? "0%";
+  // Position of the playhead on the bar (current % of duration). While
+  // dragging the bar we follow the live drag time so the needle lands
+  // instantly with the thumbnail, instead of waiting on the video clock.
+  const currentPct = posPct(barScrubTime ?? currentTime) ?? "0%";
 
   // Option A — show the storyboard frame in the player only while the
   // user is rough-navigating with the scrub BAR and the real frame for
