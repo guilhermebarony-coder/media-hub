@@ -86,6 +86,13 @@ export function Scrubber(props: ScrubberProps) {
   const [fineUrl, setFineUrl] = useState<string | null>(null);
   const [fineStart, setFineStart] = useState(0);
   const [fineDur, setFineDur] = useState(0);
+  // Live mirror of the current window so the jog drag (a closure captured
+  // at mousedown) can read the latest window without going stale.
+  const fineWinRef = useRef<{ url: string | null; start: number; dur: number }>({
+    url: null,
+    start: 0,
+    dur: 0,
+  });
   const FINE_RADIUS = 3; // seconds each side of the pause point
   // AE-style cache line: time ranges that have a frame-exact window
   // prepared (rendered blue on the bar; the rest reads red = not cached).
@@ -260,6 +267,7 @@ export function Scrubber(props: ScrubberProps) {
     setFineUrl(null);
     setFineStart(0);
     setFineDur(0);
+    fineWinRef.current = { url: null, start: 0, dur: 0 };
     setCachedWindows([]);
   }, [sourceUrl, videoId]);
 
@@ -280,9 +288,15 @@ export function Scrubber(props: ScrubberProps) {
       )
         .then((res) => {
           // Cache-bust per window-start so the element reloads the new file.
+          const fineSrc = convertFileSrc(res.path) + `#w${res.start_sec}`;
           setFineStart(res.start_sec);
           setFineDur(res.dur_sec);
-          setFineUrl(convertFileSrc(res.path) + `#w${res.start_sec}`);
+          setFineUrl(fineSrc);
+          fineWinRef.current = {
+            url: fineSrc,
+            start: res.start_sec,
+            dur: res.dur_sec,
+          };
           // Record the range for the cache line (dedupe by start).
           setCachedWindows((prev) =>
             prev.some((w) => w.start === res.start_sec)
@@ -389,6 +403,24 @@ export function Scrubber(props: ScrubberProps) {
       // delta-per-pixel is so small that we're not requesting wildly
       // different ranges; CDN handles this gracefully.
       v.currentTime = next;
+      // If the target lands inside a prepared all-intra window, drive the
+      // frame-exact overlay imperatively here instead of waiting on the
+      // throttled timeupdate→state→effect path. That path only fires a
+      // few times a second, which is what makes the jog look like it
+      // skips frames even when a window is cached. Every frame in the
+      // window is a keyframe, so this seek is exact and instant.
+      const win = fineWinRef.current;
+      const fv = fineRef.current;
+      if (fv && win.url && next >= win.start && next <= win.start + win.dur) {
+        try {
+          fv.currentTime = next - win.start;
+          fv.style.opacity = "1";
+        } catch {
+          /* not loaded yet */
+        }
+      } else if (fv) {
+        fv.style.opacity = "0";
+      }
     };
     const onUp = () => {
       document.removeEventListener("mousemove", onMove);

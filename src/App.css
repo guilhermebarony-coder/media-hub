@@ -3071,8 +3071,8 @@ body.lib-resizing-h * {
   left: 0;
   right: 0;
   bottom: 0;
-  height: 3px;
-  background: rgba(229, 70, 70, 0.6); /* red = not cached */
+  height: 2px;
+  background: rgba(229, 70, 70, 0.4); /* red = not cached */
   border-radius: 0 0 4px 4px;
   overflow: hidden;
   pointer-events: none;
