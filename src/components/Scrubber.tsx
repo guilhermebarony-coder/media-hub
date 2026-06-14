@@ -58,6 +58,7 @@ export function Scrubber(props: ScrubberProps) {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const scrubBarRef = useRef<HTMLDivElement>(null);
+  const { settings } = useSettings();
 
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [streamErr, setStreamErr] = useState<string | null>(null);
@@ -140,15 +141,32 @@ export function Scrubber(props: ScrubberProps) {
   // Runs in parallel with the stream resolve above; on success we swap
   // the <video> source to the local file (instant seeks) preserving the
   // current playhead. Failure is silent — we just stay on the stream.
+  //
+  // Quality comes from settings.preview_quality. "auto" scales by length
+  // and SKIPS the proxy for very long videos (a multi-GB 720p proxy of a
+  // 7h video never finishes), so we only ever download a sane-size proxy.
+  const previewHeight = ((): number | null => {
+    const q = settings.preview_quality ?? "auto";
+    if (q === "off") return null;
+    if (q === "360") return 360;
+    if (q === "720") return 720;
+    // auto: by duration (seconds)
+    const d = durationHint ?? 0;
+    if (d > 0 && d <= 20 * 60) return 720; // ≤20 min
+    if (d > 0 && d <= 90 * 60) return 360; // ≤90 min
+    if (d === 0) return 720; // unknown length — assume short
+    return null; // very long → stream only
+  })();
   useEffect(() => {
     setProxyUrl(null);
     setProxyState("idle");
-    if (!sourceUrl.trim() || !videoId) return;
+    if (!sourceUrl.trim() || !videoId || previewHeight == null) return;
     let cancelled = false;
     setProxyState("preparing");
     invoke<{ path: string; cached: boolean }>("preview_proxy", {
       url: sourceUrl,
       videoId,
+      maxHeight: previewHeight,
     })
       .then((res) => {
         if (cancelled) return;
@@ -164,7 +182,7 @@ export function Scrubber(props: ScrubberProps) {
     return () => {
       cancelled = true;
     };
-  }, [sourceUrl, videoId]);
+  }, [sourceUrl, videoId, previewHeight]);
 
   // The source the <video> actually uses right now: the local proxy when
   // ready, else the remote stream (Tier 0 fallback).
@@ -228,7 +246,6 @@ export function Scrubber(props: ScrubberProps) {
   // drag per second (the original tuned value). 0.5 = coarser, 2.0 =
   // finer. Reactive — changing it in Settings updates live without a
   // scrubber remount.
-  const { settings } = useSettings();
   const jogSensitivity =
     settings.jog_sensitivity > 0 ? settings.jog_sensitivity : 1.0;
   const SECONDS_PER_PIXEL = (1 / 80) * jogSensitivity;

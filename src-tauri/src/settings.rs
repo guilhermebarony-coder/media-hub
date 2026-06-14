@@ -104,6 +104,14 @@ pub struct Settings {
     #[serde(default)]
     pub use_aria2c: bool,
 
+    /// EXPERIMENT (exp/preview-proxy) — scrubber preview quality.
+    /// "off"  = stream only (no local proxy)
+    /// "360"  = 360p proxy   "720" = 720p proxy
+    /// "auto" = pick by length (720p short, 360p medium, off for very
+    ///          long videos so a multi-GB proxy never hangs). Default.
+    #[serde(default = "default_preview_quality")]
+    pub preview_quality: String,
+
     // Transcode.
     /// Default transcode preset for new downloads. "none" / "prores_422_lt"
     /// / "dnxhr_sq" / "h264_mp4" / "h264_nvenc_mp4". Lands 0.8.B.
@@ -169,6 +177,10 @@ fn default_preferred_max_quality() -> String {
     "1080".into()
 }
 
+fn default_preview_quality() -> String {
+    "auto".into()
+}
+
 fn default_bridge_port() -> u16 {
     47821
 }
@@ -200,6 +212,7 @@ impl Default for Settings {
             download_concurrency: 3,
             bandwidth_limit_kbps: None,
             use_aria2c: false,
+            preview_quality: default_preview_quality(),
             default_transcode_preset: "none".into(),
             preferred_max_quality: default_preferred_max_quality(),
             onboarding_complete: false,

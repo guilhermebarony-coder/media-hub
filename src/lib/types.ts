@@ -205,6 +205,10 @@ export type Settings = {
    *  binary is unavailable (macOS, or not yet downloaded) the backend
    *  silently falls back to yt-dlp's native downloader. */
   use_aria2c: boolean;
+  /** EXPERIMENT (exp/preview-proxy) — scrubber preview quality.
+   *  "off" | "360" | "720" | "auto" (auto picks by video length, and
+   *  skips the proxy entirely for very long videos). */
+  preview_quality: string;
   default_transcode_preset: string;
   /** 1.3.x — Preferred max video height ("1080" / "720" / "480") or
    *  empty string for "no cap, use source". Applied to downloads
@@ -244,6 +248,7 @@ export const DEFAULT_SETTINGS: Settings = {
   download_concurrency: 3,
   bandwidth_limit_kbps: null,
   use_aria2c: false,
+  preview_quality: "auto",
   default_transcode_preset: "none",
   preferred_max_quality: "1080",
   onboarding_complete: false,

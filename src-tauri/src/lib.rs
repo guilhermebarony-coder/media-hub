@@ -896,12 +896,17 @@ async fn preview_proxy(
     settings: tauri::State<'_, settings::SettingsState>,
     url: String,
     video_id: String,
+    max_height: u32,
 ) -> Result<PreviewProxy, String> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return Err("URL is empty".into());
     }
-    // Sanitize the id into a safe filename (no path traversal).
+    // Clamp the requested proxy height (frontend decides it from the
+    // preview-quality setting + video length).
+    let h = max_height.clamp(144, 1080);
+    // Sanitize the id into a safe filename (no path traversal). Cache key
+    // includes the height so switching quality re-fetches cleanly.
     let id: String = video_id
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
@@ -915,7 +920,7 @@ async fn preview_proxy(
         .map_err(|e| format!("cache dir: {e}"))?
         .join("preview");
     std::fs::create_dir_all(&dir).map_err(|e| format!("create preview dir: {e}"))?;
-    let out = dir.join(format!("{id}.mp4"));
+    let out = dir.join(format!("{id}-{h}.mp4"));
     if out.is_file() {
         return Ok(PreviewProxy {
             path: out.to_string_lossy().to_string(),
@@ -923,13 +928,12 @@ async fn preview_proxy(
         });
     }
 
-    // Muxed 360p (format 18) plays in the webview with audio and needs
-    // no ffmpeg merge. Fall back to any small mp4 if 18 is absent.
-    let tmpl = dir.join(format!("{id}.dl.%(ext)s"));
+    let tmpl = dir.join(format!("{id}-{h}.dl.%(ext)s"));
     let tmpl_str = tmpl.to_string_lossy().to_string();
     let cookies = resolve_cookie_args(&app, &settings, trimmed);
-    // 720p needs a video+audio merge (YouTube offers no muxed format
-    // above 360p), so point yt-dlp at the bundled ffmpeg.
+    // ≤360p uses muxed format 18 (no ffmpeg merge); higher needs a
+    // video+audio merge (YouTube has no muxed format above 360p) → point
+    // yt-dlp at the bundled ffmpeg.
     let ffmpeg_path = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
@@ -941,11 +945,19 @@ async fn preview_proxy(
             }
         })
         .filter(|p| p.exists());
+    // Prefer H.264 at the target height (fastest hardware decode →
+    // smoothest scrub) + m4a audio; fall back to muxed 22, any merge at
+    // the height, then 18.
+    let format_spec = if h <= 360 {
+        "18/best[ext=mp4][height<=360]/best[ext=mp4][height<=480]".to_string()
+    } else {
+        format!(
+            "bestvideo[height<={h}][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/22/bestvideo[height<={h}]+bestaudio/18/best[height<={h}]"
+        )
+    };
     let mut opts: Vec<String> = vec![
         "-f".into(),
-        // Prefer 720p H.264 (fastest hardware decode → smoothest scrub)
-        // + m4a audio; fall back to muxed 22, any ≤720 merge, then 18.
-        "bestvideo[height<=720][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/22/bestvideo[height<=720]+bestaudio/18/best[height<=720]".into(),
+        format_spec,
         "--merge-output-format".into(),
         "mp4".into(),
         "--no-playlist".into(),
@@ -970,10 +982,11 @@ async fn preview_proxy(
     // Locate the produced file and promote it to `{id}.mp4`. After a
     // merge the result is `{id}.dl.mp4`; prefer that, else scan for any
     // leftover `{id}.dl.<ext>` (e.g. a non-merge fallback path).
-    let exact = dir.join(format!("{id}.dl.mp4"));
+    let exact = dir.join(format!("{id}-{h}.dl.mp4"));
     let produced = if exact.is_file() {
         exact
     } else {
+        let prefix = format!("{id}-{h}.dl.");
         std::fs::read_dir(&dir)
             .ok()
             .and_then(|rd| {
@@ -982,7 +995,7 @@ async fn preview_proxy(
                     .find(|p| {
                         p.file_name()
                             .and_then(|n| n.to_str())
-                            .map(|n| n.starts_with(&format!("{id}.dl.")))
+                            .map(|n| n.starts_with(&prefix))
                             .unwrap_or(false)
                     })
             })
@@ -995,6 +1008,31 @@ async fn preview_proxy(
         path: out.to_string_lossy().to_string(),
         cached: false,
     })
+}
+
+/// Delete every cached preview proxy. Returns the number of bytes freed
+/// so the UI can show "freed N MB". Best-effort per file.
+#[tauri::command]
+fn preview_cache_clear(app: AppHandle) -> Result<u64, String> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("cache dir: {e}"))?
+        .join("preview");
+    if !dir.is_dir() {
+        return Ok(0);
+    }
+    let mut freed: u64 = 0;
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for entry in rd.filter_map(|e| e.ok()) {
+            let p = entry.path();
+            let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            if std::fs::remove_file(&p).is_ok() {
+                freed += len;
+            }
+        }
+    }
+    Ok(freed)
 }
 
 #[tauri::command]
@@ -2868,6 +2906,7 @@ pub fn run() {
             yt_fetch_playlist,
             yt_resolve_stream_url,
             preview_proxy,
+            preview_cache_clear,
             yt_download,
             yt_download_cancel,
             mouse_cursor_pos,

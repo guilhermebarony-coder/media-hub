@@ -812,6 +812,21 @@ function DownloadsSection() {
   // remembered platforms is small (1-2 entries today).
   const stickyEntries = Object.entries(settings.last_formats ?? {});
 
+  async function clearPreviewCache() {
+    try {
+      const freed = await invoke<number>("preview_cache_clear");
+      await alertDialog(
+        `Removed ${(freed / 1048576).toFixed(0)} MB of cached preview proxies.`,
+        { title: "Preview cache cleared", kind: "info" },
+      );
+    } catch (e) {
+      await alertDialog(`Couldn't clear preview cache: ${String(e)}`, {
+        title: "Preview cache",
+        kind: "error",
+      });
+    }
+  }
+
   function clearSticky(platform?: string) {
     void save((s) => {
       const next = { ...(s.last_formats ?? {}) };
@@ -945,6 +960,39 @@ function DownloadsSection() {
             : settings.use_aria2c
               ? "On — best for very large / long videos, or when a download is crawling (YouTube throttling one connection). For normal downloads the built-in engine is usually just as fast, so you can leave this off."
               : "Only helps when YouTube throttles a single connection — i.e. big / long videos or a download stuck well below your real speed. Otherwise the built-in engine is as fast or faster, so keep this off unless a download is crawling. Fetched once on enable (~3 MB, Windows)."}
+        </span>
+      </div>
+
+      {/* EXPERIMENT (exp/preview-proxy) — scrubber preview quality +
+          cache control. */}
+      <div className="settings-row">
+        <span className="settings-label">Preview quality</span>
+        <select
+          className="field-input"
+          style={{ width: 160, flex: "0 0 160px" }}
+          value={settings.preview_quality}
+          onChange={(e) =>
+            void save((s) => ({ ...s, preview_quality: e.target.value }))
+          }
+        >
+          <option value="auto">Auto (by length)</option>
+          <option value="720">720p</option>
+          <option value="360">360p</option>
+          <option value="off">Streaming only</option>
+        </select>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ flex: "0 0 auto" }}
+          onClick={() => void clearPreviewCache()}
+        >
+          Clear cache
+        </button>
+        <span className="hint-text faint">
+          The scrubber downloads a small local copy for buttery seeking.
+          <strong> Auto</strong> uses 720p for short clips, 360p for
+          medium, and streams (no proxy) for very long videos so it never
+          stalls. Cache auto-caps at 2&nbsp;GB; “Clear cache” wipes it now.
         </span>
       </div>
 
