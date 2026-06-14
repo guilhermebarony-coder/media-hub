@@ -3416,8 +3416,10 @@ body.lib-resizing-h * {
   position: absolute;
   bottom: 12px;              /* track bottom edge (bar 30 − track bottom 18) */
   height: 6px;               /* exactly the track — no doubling */
+  /* Opaque (color-mix of two solid colours) so the grey track never
+     shows through. Square ends so it doesn't pinch on the sides. */
   background: var(--bg-3);
-  border-radius: 2px;
+  border-radius: 0;
   pointer-events: none;
   z-index: 1;
   animation: chapterHoverIn 120ms ease-out forwards;
@@ -3425,7 +3427,7 @@ body.lib-resizing-h * {
 @keyframes chapterHoverIn {
   to {
     height: 8px;             /* +2px up only — a gentle nudge */
-    background: rgba(199, 241, 84, 0.32); /* faint accent tint */
+    background: color-mix(in srgb, var(--accent) 26%, var(--bg-3));
   }
 }
 
