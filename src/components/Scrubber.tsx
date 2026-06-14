@@ -27,7 +27,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { fmtDuration } from "../lib/format";
 import { useSettings } from "../lib/settings";
 import type { Segment } from "../lib/types";
@@ -37,6 +37,9 @@ type StreamUrl = { url: string; has_audio: boolean };
 type ScrubberProps = {
   /** The original YouTube URL — used to resolve the direct stream. */
   sourceUrl: string;
+  /** EXPERIMENT (exp/preview-proxy) — video id, used to fetch + cache a
+   *  small local proxy we swap in for smoother scrubbing. */
+  videoId?: string | null;
   /** Total duration in seconds (from metadata fetch). Optional — we
    *  also read video.duration once the element loads metadata. */
   durationHint: number | null;
@@ -51,7 +54,7 @@ type ScrubberProps = {
 };
 
 export function Scrubber(props: ScrubberProps) {
-  const { sourceUrl, durationHint, fpsHint, segments, onSegmentsChange } = props;
+  const { sourceUrl, videoId, durationHint, fpsHint, segments, onSegmentsChange } = props;
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const scrubBarRef = useRef<HTMLDivElement>(null);
@@ -59,6 +62,18 @@ export function Scrubber(props: ScrubberProps) {
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [streamErr, setStreamErr] = useState<string | null>(null);
   const [resolving, setResolving] = useState(false);
+  // EXPERIMENT (exp/preview-proxy) — local proxy. We play the remote
+  // stream immediately, then swap to this local file when it lands so
+  // seeks have no network round-trip. `playable` = whatever the <video>
+  // can use right now (proxy preferred). lastTimeRef preserves the
+  // playhead across the swap; pendingSeekRef re-seeks after the new src
+  // loads metadata.
+  const [proxyUrl, setProxyUrl] = useState<string | null>(null);
+  const [proxyState, setProxyState] = useState<
+    "idle" | "preparing" | "ready" | "failed"
+  >("idle");
+  const lastTimeRef = useRef(0);
+  const pendingSeekRef = useRef<number | null>(null);
   // The HTML5 element reports playback state through events; we
   // mirror it into React state so the UI reflects it.
   const [playing, setPlaying] = useState(false);
@@ -120,6 +135,40 @@ export function Scrubber(props: ScrubberProps) {
       .catch((e) => setStreamErr(String(e)))
       .finally(() => setResolving(false));
   }, [sourceUrl, durationHint]);
+
+  // EXPERIMENT — fetch a local proxy in the background and swap to it.
+  // Runs in parallel with the stream resolve above; on success we swap
+  // the <video> source to the local file (instant seeks) preserving the
+  // current playhead. Failure is silent — we just stay on the stream.
+  useEffect(() => {
+    setProxyUrl(null);
+    setProxyState("idle");
+    if (!sourceUrl.trim() || !videoId) return;
+    let cancelled = false;
+    setProxyState("preparing");
+    invoke<{ path: string; cached: boolean }>("preview_proxy", {
+      url: sourceUrl,
+      videoId,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        pendingSeekRef.current = lastTimeRef.current;
+        setProxyUrl(convertFileSrc(res.path));
+        setProxyState("ready");
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        console.warn("[preview-proxy] failed:", e);
+        setProxyState("failed");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceUrl, videoId]);
+
+  // The source the <video> actually uses right now: the local proxy when
+  // ready, else the remote stream (Tier 0 fallback).
+  const playable = proxyUrl ?? streamUrl;
 
   /**
    * Mark functions. `I` and the Set In button → markIn; `O` and Set
@@ -226,12 +275,27 @@ export function Scrubber(props: ScrubberProps) {
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    const onTime = () => setCurrentTime(v.currentTime);
+    const onTime = () => {
+      setCurrentTime(v.currentTime);
+      lastTimeRef.current = v.currentTime;
+    };
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
     const onLoaded = () => {
       if (Number.isFinite(v.duration) && v.duration > 0) {
         setDuration(v.duration);
+      }
+      // EXPERIMENT — after swapping to the proxy, restore the playhead.
+      if (pendingSeekRef.current != null) {
+        const t = pendingSeekRef.current;
+        pendingSeekRef.current = null;
+        if (Number.isFinite(t) && t > 0) {
+          try {
+            v.currentTime = t;
+          } catch {
+            /* element not ready — ignore */
+          }
+        }
       }
     };
     const onError = () => {
@@ -261,7 +325,7 @@ export function Scrubber(props: ScrubberProps) {
       v.removeEventListener("error", onError);
       v.removeEventListener("canplay", onCanPlay);
     };
-  }, [streamUrl]);
+  }, [playable]);
 
   /**
    * Re-attempt playback after an error. Two recovery paths:
@@ -306,7 +370,7 @@ export function Scrubber(props: ScrubberProps) {
   // scrubber. But we skip when the active element is a text input
   // — otherwise Space inserts a space in the URL bar.
   useEffect(() => {
-    if (!streamUrl) return;
+    if (!playable) return;
     const onKey = (e: KeyboardEvent) => {
       const t = document.activeElement?.tagName;
       const editing =
@@ -345,7 +409,7 @@ export function Scrubber(props: ScrubberProps) {
     // + segments updates to refresh the listener so the next keypress
     // sees current state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streamUrl, frameSec, duration, draftIn, segments]);
+  }, [playable, frameSec, duration, draftIn, segments]);
 
   function togglePlay() {
     const v = videoRef.current;
@@ -369,7 +433,7 @@ export function Scrubber(props: ScrubberProps) {
     } catch {
       // localStorage quota / disabled — fine, just don't persist this tick
     }
-  }, [volume, muted, streamUrl]);
+  }, [volume, muted, playable]);
 
   function toggleMute() {
     setMuted((m) => !m);
@@ -440,10 +504,17 @@ export function Scrubber(props: ScrubberProps) {
     <div className="scrubber">
       {/* Player */}
       <div className="scrubber-player">
-        {streamUrl ? (
+        {/* EXPERIMENT — proxy status pill (top-left of the player) */}
+        {proxyState === "preparing" && (
+          <div className="scrubber-proxy-badge">preparing smooth preview…</div>
+        )}
+        {proxyState === "ready" && (
+          <div className="scrubber-proxy-badge ready">⚡ smooth preview</div>
+        )}
+        {playable ? (
           <video
             ref={videoRef}
-            src={streamUrl}
+            src={playable}
             preload="metadata"
             // No native controls — we provide our own + keyboard shortcuts.
             // Muting is the user's call; default unmuted so editorial
@@ -474,7 +545,7 @@ export function Scrubber(props: ScrubberProps) {
         <button
           className="ic-btn"
           onClick={togglePlay}
-          disabled={!streamUrl}
+          disabled={!playable}
           title={playing ? "Pause (Space)" : "Play (Space)"}
         >
           {playing ? (
@@ -501,7 +572,7 @@ export function Scrubber(props: ScrubberProps) {
             type="button"
             className="ic-btn"
             onClick={toggleMute}
-            disabled={!streamUrl}
+            disabled={!playable}
             title={muted || volume === 0 ? "Unmute" : "Mute"}
           >
             {muted || volume === 0 ? (
@@ -536,7 +607,7 @@ export function Scrubber(props: ScrubberProps) {
               // explicit mute button is the only way to set it.
               if (muted && v > 0) setMuted(false);
             }}
-            disabled={!streamUrl}
+            disabled={!playable}
             aria-label="Volume"
             title={`${Math.round((muted ? 0 : volume) * 100)}%`}
           />
@@ -550,7 +621,7 @@ export function Scrubber(props: ScrubberProps) {
             type="button"
             className="scrubber-jog-step"
             onClick={() => jogStep(-1)}
-            disabled={!streamUrl}
+            disabled={!playable}
             title="Step back 1 frame (←)"
             aria-label="Step back one frame"
           >
@@ -572,7 +643,7 @@ export function Scrubber(props: ScrubberProps) {
             type="button"
             className="scrubber-jog-step"
             onClick={() => jogStep(1)}
-            disabled={!streamUrl}
+            disabled={!playable}
             title="Step forward 1 frame (→)"
             aria-label="Step forward one frame"
           >
@@ -586,7 +657,7 @@ export function Scrubber(props: ScrubberProps) {
         <button
           className={"btn btn-secondary" + (draftIn != null ? " btn-active" : "")}
           onClick={markIn}
-          disabled={!streamUrl}
+          disabled={!playable}
           title="Mark In at current position (I)"
         >
           Set In <span className="kbd">I</span>
@@ -594,7 +665,7 @@ export function Scrubber(props: ScrubberProps) {
         <button
           className="btn btn-secondary"
           onClick={markOut}
-          disabled={!streamUrl || draftIn == null}
+          disabled={!playable || draftIn == null}
           title={draftIn == null ? "Set In first" : "Mark Out + commit segment (O)"}
         >
           Set Out <span className="kbd">O</span>

@@ -938,6 +938,7 @@ function MetadataCard() {
 
           <Scrubber
             sourceUrl={url}
+            videoId={meta.id}
             durationHint={meta.duration_sec}
             fpsHint={selectedFormat?.fps ?? null}
             segments={segments}

@@ -836,6 +836,99 @@ fn fmt_segment_label(sec: f64) -> String {
     format!("{:02}-{:02}-{:02}", h, m, s)
 }
 
+/// EXPERIMENT (exp/preview-proxy) — local proxy for buttery scrubbing.
+///
+/// Downloads a small (~360p, muxed) copy of the source into the app
+/// cache and returns its local path. The Scrubber plays the remote
+/// stream immediately (Tier 0), then swaps to this local file when it
+/// lands — local seeks have no network round-trip, so jogging/cutting
+/// feels far smoother. Cached per video id, so re-opening is instant.
+///
+/// This whole feature lives behind the experiment branch; if scrapped,
+/// delete this fn + its handler registration + the Scrubber proxy code.
+#[derive(Serialize, Clone)]
+struct PreviewProxy {
+    path: String,
+    cached: bool,
+}
+
+#[tauri::command]
+async fn preview_proxy(
+    app: AppHandle,
+    settings: tauri::State<'_, settings::SettingsState>,
+    url: String,
+    video_id: String,
+) -> Result<PreviewProxy, String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err("URL is empty".into());
+    }
+    // Sanitize the id into a safe filename (no path traversal).
+    let id: String = video_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(64)
+        .collect();
+    let id = if id.is_empty() { "preview".to_string() } else { id };
+
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("cache dir: {e}"))?
+        .join("preview");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create preview dir: {e}"))?;
+    let out = dir.join(format!("{id}.mp4"));
+    if out.is_file() {
+        return Ok(PreviewProxy {
+            path: out.to_string_lossy().to_string(),
+            cached: true,
+        });
+    }
+
+    // Muxed 360p (format 18) plays in the webview with audio and needs
+    // no ffmpeg merge. Fall back to any small mp4 if 18 is absent.
+    let tmpl = dir.join(format!("{id}.dl.%(ext)s"));
+    let tmpl_str = tmpl.to_string_lossy().to_string();
+    let cookies = resolve_cookie_args(&app, &settings, trimmed);
+    let mut opts: Vec<String> = vec![
+        "-f".into(),
+        "18/best[ext=mp4][height<=360]/best[ext=mp4][height<=480]".into(),
+        "--no-playlist".into(),
+        "--no-warnings".into(),
+        "-o".into(),
+        tmpl_str,
+    ];
+    opts.extend(settings::youtube_extractor_args());
+    opts.extend(js_runtime_args());
+
+    let output = yt_dlp_capture(&app, &opts, &cookies, trimmed).await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let tail = stderr.lines().last().unwrap_or("(no stderr)").trim();
+        return Err(settings::translate_ytdlp_error(tail));
+    }
+
+    // Locate the produced `{id}.dl.<ext>` and promote it to `{id}.mp4`.
+    let produced = std::fs::read_dir(&dir)
+        .ok()
+        .and_then(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .find(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.starts_with(&format!("{id}.dl.")))
+                        .unwrap_or(false)
+                })
+        })
+        .ok_or("preview output not found")?;
+    std::fs::rename(&produced, &out).map_err(|e| format!("finalize preview: {e}"))?;
+    Ok(PreviewProxy {
+        path: out.to_string_lossy().to_string(),
+        cached: false,
+    })
+}
+
 #[tauri::command]
 async fn yt_download(
     app: AppHandle,
@@ -2706,6 +2799,7 @@ pub fn run() {
             yt_fetch_metadata,
             yt_fetch_playlist,
             yt_resolve_stream_url,
+            preview_proxy,
             yt_download,
             yt_download_cancel,
             mouse_cursor_pos,
