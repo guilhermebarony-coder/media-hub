@@ -3455,6 +3455,7 @@ body.lib-resizing-h * {
   align-items: center;
   gap: 8px;
   height: 24px;
+  font-size: 11px;          /* match the formats table */
 }
 .scrubber-chapter-jump {
   display: flex;
