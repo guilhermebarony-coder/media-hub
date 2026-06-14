@@ -79,6 +79,14 @@ export function Scrubber(props: ScrubberProps) {
   >("idle");
   const lastTimeRef = useRef(0);
   const pendingSeekRef = useRef<number | null>(null);
+  // EXPERIMENT (Tier 3) — frame-exact overlay. When paused, we cut a
+  // short all-intra window around the playhead and show it on top of the
+  // (keyframe-snappy) proxy so the displayed/stepped frame is exact.
+  const fineRef = useRef<HTMLVideoElement>(null);
+  const [fineUrl, setFineUrl] = useState<string | null>(null);
+  const [fineStart, setFineStart] = useState(0);
+  const [fineDur, setFineDur] = useState(0);
+  const FINE_RADIUS = 3; // seconds each side of the pause point
   // The HTML5 element reports playback state through events; we
   // mirror it into React state so the UI reflects it.
   const [playing, setPlaying] = useState(false);
@@ -233,6 +241,59 @@ export function Scrubber(props: ScrubberProps) {
   // The source the <video> actually uses right now: the local proxy when
   // ready, else the remote stream (Tier 0 fallback).
   const playable = proxyUrl ?? streamUrl;
+
+  // EXPERIMENT (Tier 3) — frame-exact overlay is active only when paused
+  // and the current time falls inside a prepared all-intra window.
+  const fineActive =
+    !playing &&
+    fineUrl != null &&
+    currentTime >= fineStart &&
+    currentTime <= fineStart + fineDur;
+
+  // Reset the fine window when the source changes.
+  useEffect(() => {
+    setFineUrl(null);
+    setFineStart(0);
+    setFineDur(0);
+  }, [sourceUrl, videoId]);
+
+  // When paused on a point (and we have a local proxy), cut a short
+  // all-intra window around it in the background. Debounced so dragging
+  // doesn't spam ffmpeg; skipped if the current window already covers
+  // the playhead. Never blocks the proxy/stream playback.
+  useEffect(() => {
+    if (playing || proxyState !== "ready" || !videoId || previewHeight == null) {
+      return;
+    }
+    const t = currentTime;
+    if (fineUrl && t >= fineStart && t <= fineStart + fineDur) return; // covered
+    const id = window.setTimeout(() => {
+      invoke<{ path: string; start_sec: number; dur_sec: number }>(
+        "preview_intra_window",
+        { videoId, maxHeight: previewHeight, centerSec: t, radiusSec: FINE_RADIUS },
+      )
+        .then((res) => {
+          // Cache-bust per window-start so the element reloads the new file.
+          setFineStart(res.start_sec);
+          setFineDur(res.dur_sec);
+          setFineUrl(convertFileSrc(res.path) + `#w${res.start_sec}`);
+        })
+        .catch((e) => console.warn("[intra-window] failed:", e));
+    }, 350);
+    return () => window.clearTimeout(id);
+  }, [playing, currentTime, proxyState, videoId, previewHeight, fineUrl, fineStart, fineDur]);
+
+  // Keep the overlay frame in sync with the global playhead while active.
+  useEffect(() => {
+    const fv = fineRef.current;
+    if (!fv || !fineActive) return;
+    const local = Math.max(0, Math.min(fineDur, currentTime - fineStart));
+    try {
+      fv.currentTime = local;
+    } catch {
+      /* not loaded yet — the loadeddata handler will re-seek */
+    }
+  }, [fineActive, currentTime, fineStart, fineDur]);
 
   /**
    * Mark functions. `I` and the Set In button → markIn; `O` and Set
@@ -573,6 +634,42 @@ export function Scrubber(props: ScrubberProps) {
         )}
         {proxyState === "ready" && (
           <div className="scrubber-proxy-badge ready">⚡ smooth preview</div>
+        )}
+        {/* EXPERIMENT (Tier 3) — frame-exact overlay. Sits on top of the
+            proxy and shows the precise frame when paused inside a window. */}
+        {fineUrl && (
+          <video
+            ref={fineRef}
+            src={fineUrl}
+            muted
+            preload="auto"
+            playsInline
+            onLoadedData={() => {
+              const fv = fineRef.current;
+              if (!fv) return;
+              fv.currentTime = Math.max(
+                0,
+                Math.min(fineDur, lastTimeRef.current - fineStart),
+              );
+            }}
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+              objectFit: "contain",
+              background: "#000",
+              opacity: fineActive ? 1 : 0,
+              transition: "opacity 80ms linear",
+              pointerEvents: "none",
+              zIndex: 1,
+            }}
+          />
+        )}
+        {fineActive && (
+          <div className="scrubber-proxy-badge ready" style={{ left: "auto", right: 8 }}>
+            ◆ frame-exact
+          </div>
         )}
         {playable ? (
           <video

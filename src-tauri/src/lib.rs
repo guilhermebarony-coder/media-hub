@@ -1014,6 +1014,96 @@ async fn preview_proxy(
     })
 }
 
+/// EXPERIMENT (exp/preview-proxy, Tier 3) — frame-exact trim window.
+///
+/// Re-encodes a SHORT window of the already-downloaded proxy as
+/// all-intra (`-g 1`, every frame a keyframe) so the scrubber can show
+/// the exact frame at any time within it — without re-encoding the whole
+/// (possibly multi-hour) proxy. Generated on demand when the user pauses
+/// on a point; the coarse proxy stays the source for everything else.
+#[derive(Serialize, Clone)]
+struct IntraWindow {
+    path: String,
+    start_sec: f64,
+    dur_sec: f64,
+}
+
+#[tauri::command]
+async fn preview_intra_window(
+    app: AppHandle,
+    video_id: String,
+    max_height: u32,
+    center_sec: f64,
+    radius_sec: f64,
+) -> Result<IntraWindow, String> {
+    let h = max_height.clamp(144, 1080);
+    let id: String = video_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(64)
+        .collect();
+    let id = if id.is_empty() { "preview".to_string() } else { id };
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("cache dir: {e}"))?
+        .join("preview");
+    let proxy = dir.join(format!("{id}-{h}.mp4"));
+    if !proxy.is_file() {
+        return Err("proxy not ready".into());
+    }
+    let r = radius_sec.clamp(1.0, 15.0);
+    let start = (center_sec - r).max(0.0).floor();
+    let dur = r * 2.0;
+    // Cache the window by start-second so nearby pauses reuse it.
+    let out = dir.join(format!("{id}-{h}-w{}.mp4", start as u64));
+    if out.is_file() {
+        return Ok(IntraWindow {
+            path: out.to_string_lossy().to_string(),
+            start_sec: start,
+            dur_sec: dur,
+        });
+    }
+    let start_s = format!("{start}");
+    let dur_s = format!("{dur}");
+    let out_s = out.to_string_lossy().to_string();
+    let proxy_s = proxy.to_string_lossy().to_string();
+    let ff = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| format!("sidecar ffmpeg: {e}"))?;
+    // -ss before -i = fast seek; all-intra + ultrafast for a quick cut.
+    let output = ff
+        .args([
+            "-ss", start_s.as_str(),
+            "-i", proxy_s.as_str(),
+            "-t", dur_s.as_str(),
+            "-an",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-g", "1",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            "-y", out_s.as_str(),
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("ffmpeg window: {e}"))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "ffmpeg window failed: {}",
+            err.lines().last().unwrap_or("(no stderr)")
+        ));
+    }
+    prune_preview_cache(&dir, PREVIEW_CACHE_CAP_BYTES);
+    Ok(IntraWindow {
+        path: out_s,
+        start_sec: start,
+        dur_sec: dur,
+    })
+}
+
 /// Delete every cached preview proxy. Returns the number of bytes freed
 /// so the UI can show "freed N MB". Best-effort per file.
 #[tauri::command]
@@ -2910,6 +3000,7 @@ pub fn run() {
             yt_fetch_playlist,
             yt_resolve_stream_url,
             preview_proxy,
+            preview_intra_window,
             preview_cache_clear,
             yt_download,
             yt_download_cancel,
