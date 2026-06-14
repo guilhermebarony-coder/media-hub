@@ -3345,6 +3345,90 @@ body.lib-resizing-h * {
   transform: scale(1.15);
 }
 
+/* Tier 1 — chapter ticks on the bar. */
+.scrubber-bar-chaptertick {
+  position: absolute;
+  top: 6px;
+  width: 1px;
+  height: 14px;
+  margin-left: -0.5px;
+  background: rgba(255, 255, 255, 0.55);
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Tier 1 — storyboard hover thumbnail + time bubble above the bar. */
+.scrubber-hover-thumb {
+  position: absolute;
+  bottom: calc(100% - 6px);
+  transform: translateX(-50%);
+  background-repeat: no-repeat;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  z-index: 6;
+}
+.scrubber-hover-time {
+  position: absolute;
+  bottom: calc(100% - 2px);
+  transform: translateX(-50%);
+  padding: 1px 5px;
+  font-size: 10px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  border-radius: 3px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 7;
+}
+
+/* Tier 1 — chapters / markers list. */
+.scrubber-chapters {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 6px;
+}
+.scrubber-chapters-head {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.scrubber-chapters-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 132px;
+  overflow-y: auto;
+}
+.scrubber-chapter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+}
+.scrubber-chapter-jump {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: var(--text-0);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  min-width: 0;
+}
+.scrubber-chapter-jump:hover .scrubber-chapter-title {
+  color: var(--accent);
+}
+.scrubber-chapter-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Segments list — committed segments + draft row + empty hint. */
 .scrubber-segments {
   display: flex;

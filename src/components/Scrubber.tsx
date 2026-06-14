@@ -30,7 +30,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { fmtDuration } from "../lib/format";
 import { useSettings } from "../lib/settings";
-import type { FormatOption, Segment } from "../lib/types";
+import type { FormatOption, Segment, Storyboard, Chapter } from "../lib/types";
 
 type StreamUrl = { url: string; has_audio: boolean };
 
@@ -48,6 +48,10 @@ type ScrubberProps = {
   durationHint: number | null;
   /** FPS hint for frame-step granularity. Falls back to 30. */
   fpsHint: number | null;
+  /** Tier 1 — sprite-sheet thumbnails for hover-scrubbing the bar. */
+  storyboard?: Storyboard | null;
+  /** YouTube chapters/markers — shown as bar ticks + a jump list. */
+  chapters?: Chapter[];
   /** Committed segments. Empty array = full-video download.
    *  N entries = N segment trims from the same source. */
   segments: Segment[];
@@ -57,8 +61,17 @@ type ScrubberProps = {
 };
 
 export function Scrubber(props: ScrubberProps) {
-  const { sourceUrl, videoId, formats, durationHint, fpsHint, segments, onSegmentsChange } =
-    props;
+  const {
+    sourceUrl,
+    videoId,
+    formats,
+    durationHint,
+    fpsHint,
+    storyboard,
+    chapters,
+    segments,
+    onSegmentsChange,
+  } = props;
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const scrubBarRef = useRef<HTMLDivElement>(null);
@@ -99,6 +112,8 @@ export function Scrubber(props: ScrubberProps) {
   const [cachedWindows, setCachedWindows] = useState<
     Array<{ start: number; end: number }>
   >([]);
+  // Tier 1 — storyboard hover preview. Tracks the pointer over the bar.
+  const [hover, setHover] = useState<{ x: number; time: number } | null>(null);
   // The HTML5 element reports playback state through events; we
   // mirror it into React state so the UI reflects it.
   const [playing, setPlaying] = useState(false);
@@ -642,6 +657,63 @@ export function Scrubber(props: ScrubberProps) {
   const posPct = (s: number | null): string | null =>
     s == null || duration <= 0 ? null : `${Math.max(0, Math.min(100, (s / duration) * 100))}%`;
 
+  // Tier 1 — map a timestamp to a sprite tile in the storyboard sheets.
+  // Each fragment is one sheet of rows*cols tiles. Prefer per-fragment
+  // durations (yt-dlp provides them); fall back to an even split over
+  // the video duration if they're missing.
+  function storyTile(time: number) {
+    if (!storyboard || storyboard.fragments.length === 0 || duration <= 0) {
+      return null;
+    }
+    const { tile_w, tile_h, rows, cols, fragments } = storyboard;
+    const perSheet = rows * cols;
+    if (perSheet <= 0) return null;
+    const totalDur = fragments.reduce((a, f) => a + (f.duration > 0 ? f.duration : 0), 0);
+    let fragIndex = 0;
+    let localFrac = 0;
+    if (totalDur > 0) {
+      let acc = 0;
+      for (let i = 0; i < fragments.length; i++) {
+        const d = fragments[i].duration > 0 ? fragments[i].duration : 0;
+        if (time < acc + d || i === fragments.length - 1) {
+          fragIndex = i;
+          localFrac = d > 0 ? (time - acc) / d : 0;
+          break;
+        }
+        acc += d;
+      }
+    } else {
+      const totalTiles = fragments.length * perSheet;
+      const gi = Math.min(totalTiles - 1, Math.floor((time / duration) * totalTiles));
+      fragIndex = Math.floor(gi / perSheet);
+      localFrac = (gi % perSheet) / perSheet;
+    }
+    localFrac = Math.max(0, Math.min(0.999, localFrac));
+    const tileIndex = Math.min(perSheet - 1, Math.floor(localFrac * perSheet));
+    const row = Math.floor(tileIndex / cols);
+    const col = tileIndex % cols;
+    return {
+      url: fragments[fragIndex].url,
+      bgX: -(col * tile_w),
+      bgY: -(row * tile_h),
+      sheetW: cols * tile_w,
+      sheetH: rows * tile_h,
+      tile_w,
+      tile_h,
+    };
+  }
+
+  // Chapters → add the whole chapter as a download segment in one click.
+  function addChapterSegment(ch: Chapter) {
+    const inSec = Math.max(0, ch.start_sec);
+    const end = ch.end_sec > ch.start_sec ? ch.end_sec : duration || ch.start_sec;
+    const outSec = duration > 0 ? Math.min(duration, end) : end;
+    if (outSec <= inSec) return;
+    onSegmentsChange([...segments, { inSec, outSec }]);
+  }
+
+  const chapterList = chapters ?? [];
+
   // Compute on-bar regions for each committed segment. Multiple bands
   // can render side-by-side or even overlap (we don't validate
   // overlapping segments — user can do what they want).
@@ -890,12 +962,60 @@ export function Scrubber(props: ScrubberProps) {
         className="scrubber-bar"
         ref={scrubBarRef}
         onMouseDown={onScrubBarMouseDown}
+        onMouseMove={(e) => {
+          const bar = scrubBarRef.current;
+          if (!bar || duration <= 0) return;
+          const rect = bar.getBoundingClientRect();
+          const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+          setHover({ x: ratio * rect.width, time: ratio * duration });
+        }}
+        onMouseLeave={() => setHover(null)}
         role="slider"
         aria-valuemin={0}
         aria-valuemax={duration}
         aria-valuenow={currentTime}
       >
         <div className="scrubber-bar-track" />
+        {/* Tier 1 — chapter ticks. */}
+        {duration > 0 &&
+          chapterList.map((ch, i) => (
+            <div
+              key={`ck${i}`}
+              className="scrubber-bar-chaptertick"
+              style={{ left: posPct(ch.start_sec) ?? "0%" }}
+              title={ch.title}
+            />
+          ))}
+        {/* Tier 1 — storyboard hover thumbnail + time bubble. */}
+        {hover &&
+          (() => {
+            const tile = storyTile(hover.time);
+            const bubble = (
+              <div
+                className="scrubber-hover-time mono"
+                style={{ left: hover.x }}
+              >
+                {fmtDuration(hover.time)}
+              </div>
+            );
+            if (!tile) return bubble;
+            return (
+              <>
+                <div
+                  className="scrubber-hover-thumb"
+                  style={{
+                    left: hover.x,
+                    width: tile.tile_w,
+                    height: tile.tile_h,
+                    backgroundImage: `url("${tile.url}")`,
+                    backgroundPosition: `${tile.bgX}px ${tile.bgY}px`,
+                    backgroundSize: `${tile.sheetW}px ${tile.sheetH}px`,
+                  }}
+                />
+                {bubble}
+              </>
+            );
+          })()}
         {/* AE-style cache line: red = not frame-exact cached, blue = a
             prepared all-intra window covers that range. */}
         {duration > 0 && (
@@ -939,6 +1059,43 @@ export function Scrubber(props: ScrubberProps) {
           </div>
         )}
       </div>
+
+      {/* Tier 1 — chapters / markers pulled from YouTube. Click a row to
+          jump; the + button drops the whole chapter in as a segment. */}
+      {chapterList.length > 0 && (
+        <div className="scrubber-chapters">
+          <div className="scrubber-chapters-head mono faint">
+            {chapterList.length} chapter{chapterList.length === 1 ? "" : "s"}
+          </div>
+          <div className="scrubber-chapters-list">
+            {chapterList.map((ch, i) => (
+              <div key={`cr${i}`} className="scrubber-chapter-row mono">
+                <button
+                  type="button"
+                  className="scrubber-chapter-jump"
+                  onClick={() => seekTo(ch.start_sec)}
+                  title="Jump to chapter"
+                >
+                  <span className="faint">{fmtDuration(ch.start_sec)}</span>
+                  <span className="scrubber-chapter-title">{ch.title}</span>
+                </button>
+                <span className="scrubber-spacer" />
+                <button
+                  className="ic-btn"
+                  onClick={() => addChapterSegment(ch)}
+                  disabled={!playable}
+                  title="Add this chapter as a segment"
+                  aria-label="Add chapter as segment"
+                >
+                  <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round">
+                    <path d="M8 3v10M3 8h10" />
+                  </svg>
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Segments list + summary */}
       <div className="scrubber-segments">

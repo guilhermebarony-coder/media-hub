@@ -9,6 +9,29 @@ a structural decision).
 Format: dated sections, newest at top. Each entry self-contained —
 written so future-me (or future-Claude) can pick it up cold.
 
+## 2026-06-14 — Preview Tier 1 (storyboards) + chapters (exp/preview-proxy)
+
+- **Storyboard hover-scrub.** `yt_fetch_metadata` already runs `yt-dlp -j`;
+  that JSON carries storyboard formats (protocol `mhtml`, with
+  `rows`/`columns`/`fragments[{url,duration}]` + tile `width`/`height`).
+  We now keep the best one (largest tile width ≤240px) via
+  `pick_storyboard` → `VideoMetadata.storyboard`. No extra network call,
+  no download — the Scrubber renders the sprite tile as a CSS background
+  on bar hover (`storyTile(time)` maps time→fragment→tile). Uses remote
+  `i.ytimg.com` URLs directly; works because `tauri.conf.json` csp=null.
+- **Chapters.** Same JSON has `chapters[{start_time,end_time,title}]` →
+  `VideoMetadata.chapters`. Shown as bar ticks + a jump list under the
+  bar; each row has a **+** that drops the whole chapter in as a download
+  segment (`addChapterSegment`).
+- **Jog frame-exactness fix.** The all-intra overlay only synced via the
+  throttled timeupdate→state path, so jogging inside a cached window still
+  looked choppy. The jog drag now drives the overlay's currentTime
+  imperatively (every frame is a keyframe → exact). First pass through
+  fresh territory is still proxy-rate until the window bakes (debounced
+  on pause). Cache line thinned to 2px.
+- Intra windows + proxy share the same `app_cache_dir/preview` dir, so
+  one "Clear cache" wipes both.
+
 **Companion docs:**
 - `ARCHITECTURE.md` — what's actually built + how it fits together
 - `ROADMAP.md` — milestone tree + decision log + cut-lines

@@ -942,6 +942,8 @@ function MetadataCard() {
             formats={meta.formats}
             durationHint={meta.duration_sec}
             fpsHint={selectedFormat?.fps ?? null}
+            storyboard={meta.storyboard}
+            chapters={meta.chapters}
             segments={segments}
             onSegmentsChange={setSegments}
           />

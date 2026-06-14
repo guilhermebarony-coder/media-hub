@@ -21,6 +21,25 @@ export type FormatOption = {
   has_audio: boolean;
 };
 
+export type Chapter = {
+  start_sec: number;
+  end_sec: number;
+  title: string;
+};
+
+export type StoryFragment = {
+  url: string;
+  duration: number;
+};
+
+export type Storyboard = {
+  tile_w: number;
+  tile_h: number;
+  rows: number;
+  cols: number;
+  fragments: StoryFragment[];
+};
+
 export type VideoMetadata = {
   id: string;
   title: string;
@@ -31,6 +50,8 @@ export type VideoMetadata = {
   webpage_url: string;
   view_count: number | null;
   formats: FormatOption[];
+  chapters: Chapter[];
+  storyboard: Storyboard | null;
 };
 
 export type DownloadResult = {

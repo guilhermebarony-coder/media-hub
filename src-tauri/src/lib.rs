@@ -191,6 +191,9 @@ pub struct VideoMetadata {
     pub webpage_url: String,
     pub view_count: Option<u64>,
     pub formats: Vec<FormatOption>,
+    #[serde(default)]
+    pub chapters: Vec<Chapter>,
+    pub storyboard: Option<Storyboard>,
 }
 
 #[derive(Serialize)]
@@ -206,6 +209,32 @@ pub struct FormatOption {
     pub note: Option<String>, // yt-dlp format_note ("1080p", "tiny", etc.)
     pub has_video: bool,
     pub has_audio: bool,
+}
+
+/// A YouTube chapter / marker. Times in seconds.
+#[derive(Serialize)]
+pub struct Chapter {
+    pub start_sec: f64,
+    pub end_sec: f64,
+    pub title: String,
+}
+
+/// Storyboard manifest — sprite sheets of thumbnails for hover-scrubbing.
+/// Each fragment is one sprite image holding rows*cols tiles, each
+/// `tile_w`x`tile_h`, covering `duration` seconds of the timeline.
+#[derive(Serialize)]
+pub struct Storyboard {
+    pub tile_w: u32,
+    pub tile_h: u32,
+    pub rows: u32,
+    pub cols: u32,
+    pub fragments: Vec<StoryFragment>,
+}
+
+#[derive(Serialize)]
+pub struct StoryFragment {
+    pub url: String,
+    pub duration: f64,
 }
 
 /// Raw yt-dlp -j shape, deserialized partially. We only declare fields we
@@ -230,6 +259,26 @@ struct RawYtDlp {
     view_count: Option<u64>,
     #[serde(default)]
     formats: Vec<RawFormat>,
+    #[serde(default)]
+    chapters: Vec<RawChapter>,
+}
+
+#[derive(Deserialize)]
+struct RawChapter {
+    #[serde(default)]
+    start_time: Option<f64>,
+    #[serde(default)]
+    end_time: Option<f64>,
+    #[serde(default)]
+    title: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RawFragment {
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    duration: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -255,6 +304,13 @@ struct RawFormat {
     format_note: Option<String>,
     #[serde(default)]
     protocol: Option<String>,
+    // Storyboard-only fields (present when protocol == "mhtml").
+    #[serde(default)]
+    rows: Option<u32>,
+    #[serde(default)]
+    columns: Option<u32>,
+    #[serde(default)]
+    fragments: Vec<RawFragment>,
 }
 
 fn project_format(f: RawFormat) -> Option<FormatOption> {
@@ -280,6 +336,58 @@ fn project_format(f: RawFormat) -> Option<FormatOption> {
         note: f.format_note,
         has_video,
         has_audio,
+    })
+}
+
+/// Pick the best storyboard from the raw format list for hover-scrubbing.
+/// Storyboards are mhtml formats with rows/cols/fragments. We want the
+/// sharpest tiles that aren't absurdly large, so we choose the largest
+/// tile width <= 240px, falling back to the largest available.
+fn pick_storyboard(formats: &[RawFormat]) -> Option<Storyboard> {
+    let mut boards: Vec<&RawFormat> = formats
+        .iter()
+        .filter(|f| {
+            matches!(f.protocol.as_deref(), Some("mhtml"))
+                && f.rows.unwrap_or(0) > 0
+                && f.columns.unwrap_or(0) > 0
+                && !f.fragments.is_empty()
+                && f.width.unwrap_or(0) > 0
+                && f.height.unwrap_or(0) > 0
+        })
+        .collect();
+    if boards.is_empty() {
+        return None;
+    }
+    // Largest tile width first.
+    boards.sort_by_key(|f| std::cmp::Reverse(f.width.unwrap_or(0)));
+    let best = boards
+        .iter()
+        .find(|f| f.width.unwrap_or(0) <= 240)
+        .copied()
+        .unwrap_or(boards[boards.len() - 1]);
+
+    let fragments: Vec<StoryFragment> = best
+        .fragments
+        .iter()
+        .filter_map(|fr| {
+            let url = fr.url.clone()?;
+            Some(StoryFragment {
+                url,
+                // yt-dlp gives a per-fragment duration; default to 0 (the
+                // frontend treats a 0 as "split evenly" via total dur).
+                duration: fr.duration.unwrap_or(0.0),
+            })
+        })
+        .collect();
+    if fragments.is_empty() {
+        return None;
+    }
+    Some(Storyboard {
+        tile_w: best.width.unwrap_or(0),
+        tile_h: best.height.unwrap_or(0),
+        rows: best.rows.unwrap_or(0),
+        cols: best.columns.unwrap_or(0),
+        fragments,
     })
 }
 
@@ -462,6 +570,20 @@ async fn yt_fetch_metadata(
         .ok_or_else(|| "yt-dlp returned no JSON".to_string())?
         .map_err(|e| format!("JSON parse failed: {e}"))?;
 
+    // Extract storyboards + chapters before raw.formats is consumed.
+    let storyboard = pick_storyboard(&raw.formats);
+    let chapters: Vec<Chapter> = raw
+        .chapters
+        .into_iter()
+        .filter_map(|c| {
+            let start = c.start_time?;
+            Some(Chapter {
+                start_sec: start,
+                end_sec: c.end_time.unwrap_or(start),
+                title: c.title.unwrap_or_else(|| "Chapter".into()),
+            })
+        })
+        .collect();
     let formats: Vec<FormatOption> = raw.formats.into_iter().filter_map(project_format).collect();
 
     Ok(VideoMetadata {
@@ -474,6 +596,8 @@ async fn yt_fetch_metadata(
         webpage_url: raw.webpage_url.unwrap_or(trimmed.to_string()),
         view_count: raw.view_count,
         formats,
+        chapters,
+        storyboard,
     })
 }
 
