@@ -997,6 +997,7 @@ export function Scrubber(props: ScrubberProps) {
             you're pointing at. */}
         {duration > 0 && hoverChapter && (
           <div
+            key={hoverChapter.idx}
             className="scrubber-bar-chapterhover"
             style={{
               left: posPct(hoverChapter.start) ?? "0%",

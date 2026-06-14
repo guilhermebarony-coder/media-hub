@@ -3375,7 +3375,7 @@ body.lib-resizing-h * {
 /* Tier 1 — storyboard hover thumbnail + time bubble above the bar. */
 .scrubber-hover-thumb {
   position: absolute;
-  bottom: calc(100% - 6px);
+  bottom: calc(100% + 26px);   /* stacked above the time/title bubble */
   transform: translateX(-50%);
   background-repeat: no-repeat;
   border: 1px solid rgba(255, 255, 255, 0.25);
@@ -3386,7 +3386,7 @@ body.lib-resizing-h * {
 }
 .scrubber-hover-time {
   position: absolute;
-  bottom: calc(100% - 2px);
+  bottom: calc(100% + 4px);
   transform: translateX(-50%);
   display: inline-flex;
   align-items: baseline;
@@ -3409,14 +3409,24 @@ body.lib-resizing-h * {
 }
 
 /* YouTube-style chapter hover — the pointed-at chapter lifts + brightens. */
+/* YouTube-style chapter hover: anchored at the track's bottom edge, it
+   grows UPWARD only (never down into the cache lane) and brightens in.
+   Re-keyed per chapter so the little grow replays as you move across. */
 .scrubber-bar-chapterhover {
   position: absolute;
-  top: 10px;
-  height: 10px;
-  background: rgba(255, 255, 255, 0.16);
+  bottom: 12px;              /* track bottom edge (bar 30 − track bottom 18) */
+  height: 6px;               /* starts flush with the track */
+  background: rgba(255, 255, 255, 0.08);
   border-radius: 3px;
   pointer-events: none;
   z-index: 1;
+  animation: chapterHoverIn 130ms ease-out forwards;
+}
+@keyframes chapterHoverIn {
+  to {
+    height: 11px;            /* +5px, all upward */
+    background: rgba(199, 241, 84, 0.22); /* warms to the accent */
+  }
 }
 
 /* Tier 1 — chapters / markers list. */
