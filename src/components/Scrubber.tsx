@@ -30,7 +30,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { fmtDuration } from "../lib/format";
 import { useSettings } from "../lib/settings";
-import type { Segment } from "../lib/types";
+import type { FormatOption, Segment } from "../lib/types";
 
 type StreamUrl = { url: string; has_audio: boolean };
 
@@ -40,6 +40,9 @@ type ScrubberProps = {
   /** EXPERIMENT (exp/preview-proxy) — video id, used to fetch + cache a
    *  small local proxy we swap in for smoother scrubbing. */
   videoId?: string | null;
+  /** EXPERIMENT — fetched formats, used to estimate the proxy download
+   *  size so "auto" picks the highest quality that stays under the cap. */
+  formats?: FormatOption[];
   /** Total duration in seconds (from metadata fetch). Optional — we
    *  also read video.duration once the element loads metadata. */
   durationHint: number | null;
@@ -54,7 +57,8 @@ type ScrubberProps = {
 };
 
 export function Scrubber(props: ScrubberProps) {
-  const { sourceUrl, videoId, durationHint, fpsHint, segments, onSegmentsChange } = props;
+  const { sourceUrl, videoId, formats, durationHint, fpsHint, segments, onSegmentsChange } =
+    props;
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const scrubBarRef = useRef<HTMLDivElement>(null);
@@ -142,20 +146,62 @@ export function Scrubber(props: ScrubberProps) {
   // the <video> source to the local file (instant seeks) preserving the
   // current playhead. Failure is silent — we just stay on the stream.
   //
-  // Quality comes from settings.preview_quality. "auto" scales by length
-  // and SKIPS the proxy for very long videos (a multi-GB 720p proxy of a
-  // 7h video never finishes), so we only ever download a sane-size proxy.
+  // Quality comes from settings.preview_quality. "auto" picks the
+  // highest quality whose ESTIMATED proxy download stays under a cap
+  // (sizes come from the fetched formats), so a tiny 360p proxy is used
+  // even for very long videos, and we only stream (skip the proxy) when
+  // even 360p would be too big. 360p of a 6.5h video is ~500 MB, so this
+  // almost always lands on a real proxy.
+  const GB = 1024 * 1024 * 1024;
+  const CAP_720 = 1.5 * GB;
+  const CAP_360 = 3 * GB;
+  function estimateProxyBytes(maxH: number): number | null {
+    if (!formats || formats.length === 0) return null;
+    const sized = formats.filter((f) => (f.filesize_bytes ?? 0) > 0);
+    if (sized.length === 0) return null;
+    const vids = sized.filter((f) => f.has_video && (f.height ?? 1e9) <= maxH);
+    if (vids.length === 0) return null;
+    // Mirror the backend spec: prefer avc1/mp4, pick the one closest to
+    // the target height (largest ≤ maxH).
+    const avc = vids.filter(
+      (f) => f.ext === "mp4" && (f.vcodec ?? "").toLowerCase().startsWith("avc1"),
+    );
+    const pool = avc.length ? avc : vids;
+    const vid = pool.reduce((a, b) => ((b.height ?? 0) > (a.height ?? 0) ? b : a));
+    let bytes = vid.filesize_bytes ?? 0;
+    if (!vid.has_audio) {
+      const auds = sized.filter((f) => f.has_audio && !f.has_video);
+      if (auds.length > 0) {
+        const aud = auds.reduce((a, b) =>
+          (b.filesize_bytes ?? 0) < (a.filesize_bytes ?? 0) ? b : a,
+        );
+        bytes += aud.filesize_bytes ?? 0;
+      }
+    }
+    return bytes;
+  }
+  function autoHeight(): number | null {
+    const e720 = estimateProxyBytes(720);
+    const e360 = estimateProxyBytes(360);
+    if (e720 != null && e720 <= CAP_720) return 720;
+    if (e360 != null && e360 <= CAP_360) return 360;
+    if (e360 == null) {
+      // Unknown sizes — fall back to a duration heuristic (360p is small
+      // enough to allow even multi-hour clips).
+      const d = durationHint ?? 0;
+      if (d === 0) return 720;
+      if (d <= 25 * 60) return 720;
+      if (d <= 8 * 60 * 60) return 360;
+      return null;
+    }
+    return null; // even 360p over the cap → stream only
+  }
   const previewHeight = ((): number | null => {
     const q = settings.preview_quality ?? "auto";
     if (q === "off") return null;
     if (q === "360") return 360;
     if (q === "720") return 720;
-    // auto: by duration (seconds)
-    const d = durationHint ?? 0;
-    if (d > 0 && d <= 20 * 60) return 720; // ≤20 min
-    if (d > 0 && d <= 90 * 60) return 360; // ≤90 min
-    if (d === 0) return 720; // unknown length — assume short
-    return null; // very long → stream only
+    return autoHeight();
   })();
   useEffect(() => {
     setProxyUrl(null);

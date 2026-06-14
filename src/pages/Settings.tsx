@@ -990,9 +990,11 @@ function DownloadsSection() {
         </button>
         <span className="hint-text faint">
           The scrubber downloads a small local copy for buttery seeking.
-          <strong> Auto</strong> uses 720p for short clips, 360p for
-          medium, and streams (no proxy) for very long videos so it never
-          stalls. Cache auto-caps at 2&nbsp;GB; “Clear cache” wipes it now.
+          <strong> Auto</strong> picks the best quality that stays small
+          to download — 720p when it's under ~1.5&nbsp;GB, otherwise 360p
+          (tiny even for multi-hour videos), only streaming if 360p would
+          top 3&nbsp;GB. Cache auto-caps at 2&nbsp;GB; “Clear cache” wipes
+          it now.
         </span>
       </div>
 
