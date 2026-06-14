@@ -9,6 +9,21 @@ a structural decision).
 Format: dated sections, newest at top. Each entry self-contained —
 written so future-me (or future-Claude) can pick it up cold.
 
+## 2026-06-14 — Option A: storyboard covers the stream-seek gap (exp/preview-proxy)
+
+Streaming preview (pre-proxy) seeks are ~4s each: `yt_resolve_stream_url`
+forces a muxed mp4 (`best[ext=mp4][height<=720]`), which on YouTube is
+only **format 18** (360p progressive) — the single throttled stream — and
+every seek is a fresh CDN range request. Can't make remote seeking truly
+instant, so instead we **paint the storyboard tile into the player** while
+the stream fetches the new frame. Scrubber tracks the `seeking`/`seeked`
+events (`seekingNet`); when paused + seeking + no local proxy yet + not
+already frame-exact, `storyFill(currentTime)` blows one storyboard tile up
+to fill the player (CSS percentage sprite technique). Real frame swaps
+back in on `seeked`. Net: instant rough nav during the streaming window;
+proxy/intra still own smooth + frame-exact. `.scrubber-storyfill` z1
+(below the status badge z2), only while `proxyState !== 'ready'`.
+
 ## 2026-06-14 — Preview Tier 1 (storyboards) + chapters (exp/preview-proxy)
 
 - **Storyboard hover-scrub.** `yt_fetch_metadata` already runs `yt-dlp -j`;

@@ -114,6 +114,10 @@ export function Scrubber(props: ScrubberProps) {
   >([]);
   // Tier 1 — storyboard hover preview. Tracks the pointer over the bar.
   const [hover, setHover] = useState<{ x: number; time: number } | null>(null);
+  // Option A — true while the remote stream is fetching a freshly-sought
+  // frame. We paint the storyboard tile into the player during this gap
+  // so scrubbing feels instant instead of frozen for seconds.
+  const [seekingNet, setSeekingNet] = useState(false);
   // The HTML5 element reports playback state through events; we
   // mirror it into React state so the UI reflects it.
   const [playing, setPlaying] = useState(false);
@@ -494,12 +498,19 @@ export function Scrubber(props: ScrubberProps) {
       // or the network blip cleared). Drop the message.
       setVideoErr(null);
     };
+    // Option A — track the network-seek gap so we can cover it with a
+    // storyboard frame. `seeking` fires when a seek starts; `seeked`
+    // when the new frame is actually available to paint.
+    const onSeeking = () => setSeekingNet(true);
+    const onSeeked = () => setSeekingNet(false);
     v.addEventListener("timeupdate", onTime);
     v.addEventListener("play", onPlay);
     v.addEventListener("pause", onPause);
     v.addEventListener("loadedmetadata", onLoaded);
     v.addEventListener("error", onError);
     v.addEventListener("canplay", onCanPlay);
+    v.addEventListener("seeking", onSeeking);
+    v.addEventListener("seeked", onSeeked);
     return () => {
       v.removeEventListener("timeupdate", onTime);
       v.removeEventListener("play", onPlay);
@@ -507,6 +518,8 @@ export function Scrubber(props: ScrubberProps) {
       v.removeEventListener("loadedmetadata", onLoaded);
       v.removeEventListener("error", onError);
       v.removeEventListener("canplay", onCanPlay);
+      v.removeEventListener("seeking", onSeeking);
+      v.removeEventListener("seeked", onSeeked);
     };
   }, [playable]);
 
@@ -700,6 +713,25 @@ export function Scrubber(props: ScrubberProps) {
       sheetH: rows * tile_h,
       tile_w,
       tile_h,
+      col,
+      row,
+      cols,
+      rows,
+    };
+  }
+
+  // Option A — CSS background props to blow a single storyboard tile up
+  // to fill the whole player (percentage technique scales to any size).
+  function storyFill(time: number) {
+    const t = storyTile(time);
+    if (!t) return null;
+    return {
+      backgroundImage: `url("${t.url}")`,
+      backgroundSize: `${t.cols * 100}% ${t.rows * 100}%`,
+      backgroundPosition: `${t.cols > 1 ? (t.col / (t.cols - 1)) * 100 : 0}% ${
+        t.rows > 1 ? (t.row / (t.rows - 1)) * 100 : 0
+      }%`,
+      backgroundRepeat: "no-repeat" as const,
     };
   }
 
@@ -756,6 +788,14 @@ export function Scrubber(props: ScrubberProps) {
   // Position of the playhead on the bar (current % of duration).
   const currentPct = posPct(currentTime) ?? "0%";
 
+  // Option A — show the storyboard frame in the player only while the
+  // remote stream is still fetching a sought frame (paused, no local
+  // proxy yet, not already covered by the frame-exact overlay).
+  const playerStory =
+    !playing && seekingNet && proxyState !== "ready" && !fineActive
+      ? storyFill(currentTime)
+      : null;
+
   return (
     <div className="scrubber">
       {/* Player */}
@@ -767,6 +807,9 @@ export function Scrubber(props: ScrubberProps) {
         {proxyState === "ready" && (
           <div className="scrubber-proxy-badge ready">⚡ smooth preview</div>
         )}
+        {/* Option A — instant storyboard frame covering the network-seek
+            gap so scrubbing the remote stream feels immediate. */}
+        {playerStory && <div className="scrubber-storyfill" style={playerStory} />}
         {/* EXPERIMENT (Tier 3) — frame-exact overlay. Sits on top of the
             proxy and shows the precise frame when paused inside a window. */}
         {fineUrl && (

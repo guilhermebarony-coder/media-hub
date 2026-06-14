@@ -3099,6 +3099,15 @@ body.lib-resizing-h * {
   object-fit: contain;
   background: #000;
 }
+/* Option A — storyboard frame blown up to fill the player during the
+   network-seek gap. Sits above the buffering video, below the badges. */
+.scrubber-storyfill {
+  position: absolute;
+  inset: 0;
+  background-color: #000;
+  z-index: 1;
+  pointer-events: none;
+}
 .scrubber-player-placeholder {
   font-family: var(--mono);
   font-size: 12px;
