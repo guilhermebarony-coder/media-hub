@@ -890,14 +890,35 @@ async fn preview_proxy(
     let tmpl = dir.join(format!("{id}.dl.%(ext)s"));
     let tmpl_str = tmpl.to_string_lossy().to_string();
     let cookies = resolve_cookie_args(&app, &settings, trimmed);
+    // 720p needs a video+audio merge (YouTube offers no muxed format
+    // above 360p), so point yt-dlp at the bundled ffmpeg.
+    let ffmpeg_path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .map(|dir| {
+            if cfg!(windows) {
+                dir.join("ffmpeg.exe")
+            } else {
+                dir.join("ffmpeg")
+            }
+        })
+        .filter(|p| p.exists());
     let mut opts: Vec<String> = vec![
         "-f".into(),
-        "18/best[ext=mp4][height<=360]/best[ext=mp4][height<=480]".into(),
+        // Prefer 720p H.264 (fastest hardware decode → smoothest scrub)
+        // + m4a audio; fall back to muxed 22, any ≤720 merge, then 18.
+        "bestvideo[height<=720][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/22/bestvideo[height<=720]+bestaudio/18/best[height<=720]".into(),
+        "--merge-output-format".into(),
+        "mp4".into(),
         "--no-playlist".into(),
         "--no-warnings".into(),
         "-o".into(),
         tmpl_str,
     ];
+    if let Some(ff) = ffmpeg_path.as_ref() {
+        opts.push("--ffmpeg-location".into());
+        opts.push(ff.to_string_lossy().to_string());
+    }
     opts.extend(settings::youtube_extractor_args());
     opts.extend(js_runtime_args());
 
@@ -908,20 +929,27 @@ async fn preview_proxy(
         return Err(settings::translate_ytdlp_error(tail));
     }
 
-    // Locate the produced `{id}.dl.<ext>` and promote it to `{id}.mp4`.
-    let produced = std::fs::read_dir(&dir)
-        .ok()
-        .and_then(|rd| {
-            rd.filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .find(|p| {
-                    p.file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|n| n.starts_with(&format!("{id}.dl.")))
-                        .unwrap_or(false)
-                })
-        })
-        .ok_or("preview output not found")?;
+    // Locate the produced file and promote it to `{id}.mp4`. After a
+    // merge the result is `{id}.dl.mp4`; prefer that, else scan for any
+    // leftover `{id}.dl.<ext>` (e.g. a non-merge fallback path).
+    let exact = dir.join(format!("{id}.dl.mp4"));
+    let produced = if exact.is_file() {
+        exact
+    } else {
+        std::fs::read_dir(&dir)
+            .ok()
+            .and_then(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .find(|p| {
+                        p.file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|n| n.starts_with(&format!("{id}.dl.")))
+                            .unwrap_or(false)
+                    })
+            })
+            .ok_or("preview output not found")?
+    };
     std::fs::rename(&produced, &out).map_err(|e| format!("finalize preview: {e}"))?;
     Ok(PreviewProxy {
         path: out.to_string_lossy().to_string(),
