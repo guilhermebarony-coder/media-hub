@@ -3066,21 +3066,25 @@ body.lib-resizing-h * {
   background: var(--accent);
 }
 /* AE-style cache line along the bottom of the scrub bar. */
+/* Cache strip — flush UNDER the track so the two read as one unit:
+   the timeline pill on top, its "render lane" hugging the bottom edge.
+   Base is a near-invisible red (not cached); blue fills where a
+   frame-exact window is ready. */
 .scrubber-cacheline {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
-  height: 2px;
-  background: rgba(229, 70, 70, 0.4); /* red = not cached */
-  border-radius: 0 0 4px 4px;
+  top: 18px;          /* directly below the 6px track (top 12 + 6) */
+  height: 3px;
+  background: rgba(229, 70, 70, 0.18); /* not cached — quiet */
+  border-radius: 0 0 3px 3px;
   overflow: hidden;
   pointer-events: none;
   z-index: 3;
 }
 .scrubber-cacheline.proxy {
   /* proxy is local (smooth seek) but not yet frame-exact */
-  background: rgba(120, 132, 150, 0.45);
+  background: rgba(120, 132, 150, 0.22);
 }
 .scrubber-cacheline-seg {
   position: absolute;
@@ -3197,54 +3201,63 @@ body.lib-resizing-h * {
 }
 
 /* The bar itself. Click-and-drag seeks; markers float on top. */
+/* ── Unified timeline ──────────────────────────────────────────────
+   One coherent stack: subtle chapter notches at the top edge, the
+   6px scrub track, accent segment bands on the track, and the cache
+   "render lane" hugging the bottom edge of the same pill. The playhead
+   is the single tallest/brightest element so position reads instantly. */
 .scrubber-bar {
   position: relative;
-  height: 26px;
+  height: 30px;
   cursor: pointer;
-  padding: 11px 0;          /* visual height ~4px track, generous click area */
+  padding: 9px 0;           /* generous click area around the visual band */
   user-select: none;
 }
 .scrubber-bar-track {
   position: absolute;
   left: 0;
   right: 0;
-  top: 11px;
-  height: 4px;
+  top: 12px;
+  height: 6px;
   background: var(--bg-3);
-  border-radius: 2px;
+  border-radius: 3px 3px 0 0;  /* cache strip rounds the bottom */
 }
 .scrubber-bar-region {
   position: absolute;
-  top: 9px;
-  height: 8px;
+  top: 12px;
+  height: 6px;
   background: var(--accent-dim);
-  border-top: 1px solid var(--accent-line);
-  border-bottom: 1px solid var(--accent-line);
+  border-left: 1px solid var(--accent-line);
+  border-right: 1px solid var(--accent-line);
+  box-sizing: border-box;
 }
 /* Draft region — segment being marked but not yet committed. Lighter
    tint so users can tell at a glance which bands are "locked in"
    vs the one they're still defining. */
 .scrubber-bar-region--draft {
   background: rgba(199, 241, 84, 0.08);
-  border-top-color: rgba(199, 241, 84, 0.22);
-  border-bottom-color: rgba(199, 241, 84, 0.22);
+  border-left-color: rgba(199, 241, 84, 0.3);
+  border-right-color: rgba(199, 241, 84, 0.3);
 }
 .scrubber-bar-playhead {
   position: absolute;
-  top: 5px;
+  top: 7px;
   width: 2px;
-  height: 16px;
+  height: 18px;
   margin-left: -1px;
   background: var(--text-0);
   border-radius: 1px;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
   pointer-events: none;
+  z-index: 5;
 }
 .scrubber-bar-marker {
   position: absolute;
-  top: 3px;
+  top: 7px;
   width: 0;
-  height: 20px;
+  height: 18px;
   pointer-events: none;
+  z-index: 4;
 }
 .scrubber-bar-marker::before {
   content: '';
@@ -3252,7 +3265,7 @@ body.lib-resizing-h * {
   top: 0;
   left: -1.5px;
   width: 3px;
-  height: 20px;
+  height: 18px;
   background: var(--accent);
   border-radius: 1px;
 }
@@ -3345,14 +3358,16 @@ body.lib-resizing-h * {
   transform: scale(1.15);
 }
 
-/* Tier 1 — chapter ticks on the bar. */
+/* Tier 1 — chapter notches. Small marks straddling the top edge of the
+   track: clearly "dividers on this bar" without competing with the
+   playhead (which is taller + brighter). */
 .scrubber-bar-chaptertick {
   position: absolute;
-  top: 6px;
-  width: 1px;
-  height: 14px;
-  margin-left: -0.5px;
-  background: rgba(255, 255, 255, 0.55);
+  top: 12px;
+  width: 2px;
+  height: 6px;
+  margin-left: -1px;
+  background: var(--bg-2);            /* gap through the track = divider */
   pointer-events: none;
   z-index: 2;
 }
