@@ -3090,7 +3090,7 @@ body.lib-resizing-h * {
   position: absolute;
   top: 0;
   bottom: 0;
-  background: #3aa0ff; /* blue = frame-exact window cached */
+  background: #5b9c70; /* muted green = frame-exact window cached */
 }
 .scrubber-player video {
   width: 100%;
