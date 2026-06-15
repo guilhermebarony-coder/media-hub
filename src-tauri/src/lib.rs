@@ -259,8 +259,21 @@ struct RawYtDlp {
     view_count: Option<u64>,
     #[serde(default)]
     formats: Vec<RawFormat>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     chapters: Vec<RawChapter>,
+}
+
+/// Deserialize a Vec field that yt-dlp may emit as JSON `null` rather than
+/// omitting it (e.g. `"chapters": null` for videos with no chapters, or a
+/// null `fragments`). Plain `#[serde(default)]` only covers a *missing*
+/// key — an explicit `null` still errors with "invalid type: null,
+/// expected a sequence". This maps null (and missing) to the default.
+fn null_default<'de, D, T>(de: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(de)?.unwrap_or_default())
 }
 
 #[derive(Deserialize)]
@@ -309,7 +322,7 @@ struct RawFormat {
     rows: Option<u32>,
     #[serde(default)]
     columns: Option<u32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     fragments: Vec<RawFragment>,
 }
 
