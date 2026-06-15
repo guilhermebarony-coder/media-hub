@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Media Hub — Send to App",
   "short_name": "Media Hub",
-  "version": "1.9.0",
+  "version": "1.11.0",
   "description": "Send the current tab (or any link/video) straight into Media Hub's download queue. Pairs with the desktop app via localhost.",
 
   "permissions": [
@@ -17,7 +17,31 @@
 
   "host_permissions": [
     "http://127.0.0.1:*/*",
-    "<all_urls>"
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "https://*.reddit.com/*",
+    "https://reddit.com/*",
+    "https://*.pinterest.com/*",
+    "https://pinterest.com/*",
+    "https://*.pinterest.co.uk/*",
+    "https://*.pinterest.ca/*",
+    "https://*.pinterest.com.au/*",
+    "https://*.pinterest.de/*",
+    "https://*.pinterest.fr/*",
+    "https://*.pinterest.es/*",
+    "https://*.pinterest.it/*",
+    "https://*.pinterest.jp/*",
+    "https://*.pinterest.com.mx/*",
+    "https://*.pinterest.com.br/*",
+    "https://www.instagram.com/*",
+    "https://instagram.com/*",
+    "https://www.youtube.com/*",
+    "https://youtube.com/*",
+    "https://m.youtube.com/*",
+    "https://www.tiktok.com/*",
+    "https://tiktok.com/*",
+    "https://m.tiktok.com/*",
+    "https://vm.tiktok.com/*"
   ],
 
   "action": {

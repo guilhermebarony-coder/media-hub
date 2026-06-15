@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Packaged extension uploads (built on demand for the Chrome Web Store)
+media-hub-extension-*.zip
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
