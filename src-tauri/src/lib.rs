@@ -2252,13 +2252,18 @@ async fn media_transcode(
         "-loglevel", "warning",
         "-progress", "pipe:1",
         "-nostats",          // we have our own progress; the stderr stats are noise
-        // Hardware decode acceleration where available. `auto` picks
-        // the best available backend (NVDEC on NVIDIA, QSV on Intel,
-        // VideoToolbox on macOS, etc.) and falls back to CPU silently
-        // if none work. Cuts decode time substantially on H.264/HEVC/
-        // AV1 inputs which is most of what YouTube serves.
-        "-hwaccel", "auto",
+        // NOTE: no `-hwaccel auto`. On Windows it decodes into GPU
+        // surfaces (d3d11va/dxva2), but our CPU encoders (libx264,
+        // prores_ks, dnxhd) can't read GPU frames — the encoder then
+        // gets zero packets and ffmpeg aborts with "at least one of its
+        // streams received no packets". CPU decode is the safe default;
+        // the NVENC preset is still GPU-accelerated on the encode side.
         "-i", src_path.as_str(),
+        // Explicit, resilient mapping: always take the first video; take
+        // the first audio only if it exists (`?`) so a video-only source
+        // doesn't abort with the same "no packets" error.
+        "-map", "0:v:0",
+        "-map", "0:a:0?",
     ];
     args.extend(preset_args.iter());
     args.push(out_path_str.as_str());
