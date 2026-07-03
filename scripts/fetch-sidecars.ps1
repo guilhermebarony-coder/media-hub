@@ -26,13 +26,23 @@ Write-Host "      -> $ytdlpOut" -ForegroundColor Green
 
 # ---------- ffmpeg ----------
 # BtbN GPL build — includes prores, dnxhd, libx264, etc.
+#
+# IMPORTANT: pin to the STABLE RELEASE BRANCH (n7.1), NOT master-latest.
+# `ffmpeg-master-latest` is a bleeding-edge nightly re-fetched on every
+# build, so each release randomly inherited whatever regressions were in
+# that day's master (this is what caused the "transcode: at least one of
+# its streams received no packets" bug that hit some machines and not
+# others, then "fixed itself" a few versions later). The n7.1 release
+# branch only takes bugfix backports — stable + reproducible.
+# To fully freeze a build, swap `latest` for a dated `autobuild-YYYY-MM-DD-*`
+# tag (see https://github.com/BtbN/FFmpeg-Builds/releases).
 $ffZip = Join-Path $env:TEMP 'ffmpeg-mh.zip'
 $ffExtract = Join-Path $env:TEMP 'ffmpeg-mh'
 $ffOut = Join-Path $binDir "ffmpeg-$target.exe"
 
-Write-Host "[2/2] Fetching ffmpeg (BtbN GPL, ~80 MB)..." -ForegroundColor Cyan
+Write-Host "[2/2] Fetching ffmpeg (BtbN GPL, stable n7.1, ~80 MB)..." -ForegroundColor Cyan
 Invoke-WebRequest `
-  -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' `
+  -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-win64-gpl-7.1.zip' `
   -OutFile $ffZip
 Write-Host "      Extracting..." -ForegroundColor Cyan
 if (Test-Path $ffExtract) { Remove-Item -Recurse -Force $ffExtract }

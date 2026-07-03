@@ -9,6 +9,37 @@ a structural decision).
 Format: dated sections, newest at top. Each entry self-contained —
 written so future-me (or future-Claude) can pick it up cold.
 
+## 2026-07-02 — Transcode "no packets" saga + diagnostics system (1.11.3)
+
+Testers hit `Transcode failed: ffmpeg failed: [out#0/mp4] Nothing was
+written into output file, because at least one of its streams received no
+packets.` — **every transcode, every video**, but it NEVER reproduced on
+the dev machine. Two wrong fixes shipped first (AV1+hwaccel in 1.11.2,
+which was a real but unrelated issue). Extensive repro with the shipped
+binaries (fmt18, segments, NVENC, libx264, brackets, even the exact
+`N-125328…20260627` master ffmpeg) all **succeeded** locally.
+
+Root cause is environmental/transient: **the Windows sidecar fetched
+`ffmpeg-master-latest-win64-gpl.zip`** — a bleeding-edge nightly re-fetched
+on every CI build. So each release randomly inherited whatever master
+regression existed that day; it "fixed itself a few versions later" as
+master moved on. This is a whole *class* of "works here, not there" bugs.
+
+Fixes in 1.11.3:
+- **Pin ffmpeg to the stable release branch** in `scripts/fetch-sidecars.ps1`:
+  `ffmpeg-master-latest-win64-gpl.zip` → `ffmpeg-n7.1-latest-win64-gpl-7.1.zip`
+  (n7.1.5, verified to include libx264/prores_ks/dnxhd/h264_nvenc/aac). Only
+  bugfix backports, no master churn. macOS already used a `/release/` build.
+  To fully freeze: swap `latest` for a dated `autobuild-YYYY-MM-DD-*` tag.
+- **Diagnostics system** (`src-tauri/src/diag.rs`): always-on file logger at
+  `app_log_dir/media-hub.log` (rotates at 4 MB). Every transcode logs its
+  full command; on failure it logs the FULL ffmpeg stderr **plus** an
+  `ffmpeg -i <input>` probe (the input's real streams/codecs — the thing we
+  never had). Startup writes an app/OS + sidecar-version snapshot so we
+  always know which ffmpeg build a machine runs. Commands `diag_snapshot`
+  + `diag_open_logs`; Settings → Diagnostics has an "Open logs folder"
+  button. The whole point: the next failure report is self-contained.
+
 ## 2026-06-14 — Option A: storyboard covers the stream-seek gap (exp/preview-proxy)
 
 Streaming preview (pre-proxy) seeks are ~4s each: `yt_resolve_stream_url`

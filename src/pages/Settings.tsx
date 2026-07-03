@@ -1433,6 +1433,20 @@ function DiagnosticsSection() {
     }
   }
 
+  // 1.11.3 — diagnostics log. On a failure (esp. transcode) the app now
+  // writes the full ffmpeg command, full stderr, and the input's real
+  // streams to a log file. This opens the folder so a tester can grab it.
+  const [logMsg, setLogMsg] = useState<string | null>(null);
+  async function openLogs() {
+    try {
+      await invoke("diag_snapshot"); // freshen the version header first
+      await invoke("diag_open_logs");
+      setLogMsg(null);
+    } catch (e) {
+      setLogMsg(`Couldn't open logs: ${String(e)}`);
+    }
+  }
+
   // Auto-load on mount — diagnostics are read-only and useful at a
   // glance. User can re-check via the button if they update sidecars.
   useEffect(() => {
@@ -1545,6 +1559,28 @@ function DiagnosticsSection() {
           <dd>%APPDATA%\com.guilherme.mediahub\settings.json</dd>
         </div>
       </dl>
+
+      {/* 1.11.3 — diagnostics log. Every download/transcode failure now
+          records the full command + ffmpeg stderr + the input's actual
+          streams here, so bug reports are self-contained. */}
+      <div className="settings-row">
+        <span className="settings-label">Diagnostics log</span>
+        <button className="btn btn-secondary" onClick={() => void openLogs()}>
+          Open logs folder
+        </button>
+      </div>
+      <p className="hint">
+        If a download or transcode fails, open this folder and send{" "}
+        <code>media-hub.log</code> — it records the exact command, the full
+        ffmpeg output, and what the input file actually was (which ffmpeg
+        build, codecs, streams). That's everything needed to diagnose it.
+      </p>
+      {logMsg && (
+        <div className="msg-row err">
+          <span className="label">logs</span>
+          <code>{logMsg}</code>
+        </div>
+      )}
     </section>
   );
 }

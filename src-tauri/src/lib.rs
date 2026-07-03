@@ -5,6 +5,7 @@
 
 mod aria2;
 mod bridge;
+mod diag;
 mod direct;
 mod eagle;
 mod library;
@@ -2268,6 +2269,14 @@ async fn media_transcode(
     args.extend(preset_args.iter());
     args.push(out_path_str.as_str());
 
+    // Diagnostics: record the exact command so a failure report is
+    // actionable without a local repro.
+    diag::log(
+        &app,
+        "transcode",
+        &format!("preset={} cmd: ffmpeg {}", preset.trim(), args.join(" ")),
+    );
+
     let (mut rx, _child) = ffmpeg
         .args(args)
         .spawn()
@@ -2350,11 +2359,31 @@ async fn media_transcode(
     }
 
     if exit_code != Some(0) {
+        // Diagnostics: the last stderr line alone is rarely enough to tell
+        // WHY a transcode failed (esp. "a stream received no packets", which
+        // depends entirely on the input). Log the full stderr + probe the
+        // input's real streams so a tester's report is self-contained.
+        let full_stderr = if stderr_tail.is_empty() {
+            "(no stderr)".to_string()
+        } else {
+            stderr_tail.join("\n")
+        };
+        let probe = diag::probe_media(&app, &src_path).await;
+        diag::log(
+            &app,
+            "transcode",
+            &format!(
+                "FAILED exit={:?} src={}\n--- ffmpeg stderr ---\n{}\n--- input probe ---\n{}",
+                exit_code, src_path, full_stderr, probe
+            ),
+        );
         let tail = stderr_tail
             .last()
             .cloned()
             .unwrap_or_else(|| "(no stderr)".into());
-        return Err(format!("ffmpeg failed: {tail}"));
+        return Err(format!(
+            "ffmpeg failed: {tail} — details saved to the diagnostics log (Settings → Diagnostics → Open logs)"
+        ));
     }
 
     let bytes = std::fs::metadata(&out_path_str).ok().map(|m| m.len());
@@ -2950,6 +2979,54 @@ fn os_open_path(path: String) -> Result<(), String> {
         .map_err(|e| format!("os_open_path spawn failed: {e}"))
 }
 
+// =====================================================================
+// 1.11.3 — Diagnostics
+// =====================================================================
+
+#[derive(Serialize)]
+pub struct DiagSnapshot {
+    pub app_version: String,
+    pub os: String,
+    pub log_path: String,
+    pub sidecars: Vec<SidecarVersion>,
+}
+
+/// Gather app/OS/sidecar versions, write them to the log as a header, and
+/// return them for the Settings panel. The sidecar versions are the key
+/// bit: they tell us exactly which ffmpeg/yt-dlp build a machine has, which
+/// is what makes "works here, not there" bugs tractable.
+#[tauri::command]
+async fn diag_snapshot(app: AppHandle) -> Result<DiagSnapshot, String> {
+    let info = diag::info(&app);
+    let sidecars = binaries_version(app.clone()).await.unwrap_or_default();
+    let versions = sidecars
+        .iter()
+        .map(|s| format!("{}={}", s.name, s.version))
+        .collect::<Vec<_>>()
+        .join(", ");
+    diag::log(
+        &app,
+        "snapshot",
+        &format!(
+            "app={} os={} | {}",
+            info.app_version, info.os, versions
+        ),
+    );
+    Ok(DiagSnapshot {
+        app_version: info.app_version,
+        os: info.os,
+        log_path: info.log_path,
+        sidecars,
+    })
+}
+
+/// Open the folder containing the diagnostics log in the OS file manager.
+#[tauri::command]
+fn diag_open_logs(app: AppHandle) -> Result<(), String> {
+    let dir = diag::log_dir(&app).ok_or("could not resolve log directory")?;
+    os_open_path(dir.to_string_lossy().to_string())
+}
+
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -3094,6 +3171,16 @@ pub fn run() {
             // tokio reactor in setup — same lesson as the bridge server).
             updater::spawn_startup_check(app_handle.clone());
 
+            // 1.11.3 — write a startup snapshot (app/OS + sidecar versions)
+            // to the diagnostics log every launch, so any bug report tells
+            // us exactly which ffmpeg/yt-dlp build the machine is running.
+            {
+                let h = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = diag_snapshot(h).await;
+                });
+            }
+
             // 1.0.1: registry of in-flight yt-dlp children so we can
             // cancel them. Empty at startup — populated as downloads
             // spawn, drained as they finish or get killed.
@@ -3176,6 +3263,8 @@ pub fn run() {
             yt_download_cancel,
             mouse_cursor_pos,
             os_open_path,
+            diag_snapshot,
+            diag_open_logs,
             media_transcode,
             media_extract_thumbnail,
             media_extract_waveform,
