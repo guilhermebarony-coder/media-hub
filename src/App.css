@@ -4648,6 +4648,73 @@ body.lib-resizing-h * {
 }
 
 /* ============================================================
+   HelpHint — the "(?)" popover next to controls
+   ============================================================ */
+.help-hint {
+  position: relative;
+  display: inline-flex;
+  vertical-align: middle;
+}
+.help-hint-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+  cursor: help;
+  transition: color 0.12s;
+}
+.help-hint-btn:hover,
+.help-hint-btn:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+.help-hint-pop {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 0;
+  z-index: 40;
+  width: 250px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 12px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-hi);
+  border-radius: 7px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  text-align: left;
+  cursor: default;
+  animation: help-hint-in 0.12s ease-out;
+}
+@keyframes help-hint-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.help-hint-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+.help-hint-body {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-1);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.help-hint-more {
+  font-size: 10.5px;
+  color: var(--accent);
+  margin-top: 1px;
+}
+
+/* ============================================================
    Help / Manual page
    ============================================================ */
 .help {

@@ -4,6 +4,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { Icon } from "../lib/icons";
 import { alertDialog, confirmDialog } from "../lib/dialog";
+import { HelpHint } from "../components/HelpHint";
 import { useSettings } from "../lib/settings";
 import { APP_VERSION } from "../lib/version";
 import {
@@ -83,6 +84,12 @@ function SourcesSection() {
     <section className="card-box">
       <h2>
         Sources <span className="chip">browser cookies</span>
+        <HelpHint id="set-sources" title="Sources (cookies / login)">
+          Some videos only play if you're signed in — age-restricted,
+          members-only, that kind of thing. This lets Media Hub borrow your
+          browser's login so it can grab those too. You only need it if a
+          download complains about signing in or "not a bot".
+        </HelpHint>
         <ResetButton
           onClick={() =>
             void save((s) => ({ ...s, cookies_source: { kind: "none" } }))
@@ -855,6 +862,12 @@ function DownloadsSection() {
     <section className="card-box">
       <h2>
         Downloads <span className="chip">workers + throttle</span>
+        <HelpHint id="set-downloads" title="Downloads (speed)">
+          Controls how fast things download. "Workers" is how many videos
+          download at the same time. "Speed limit" slows downloads so they
+          don't hog your whole internet. "Fast downloads" is a turbo mode for
+          big files. If you're not sure, the defaults are fine.
+        </HelpHint>
         <ResetButton
           onClick={() =>
             void save((s) => ({
@@ -1126,6 +1139,12 @@ function TranscodeSection() {
     <section className="card-box">
       <h2>
         Transcode <span className="chip">default preset</span>
+        <HelpHint id="set-transcode" title="Transcode (convert)">
+          Transcoding converts a video into a format editing apps handle more
+          smoothly. Keep this on "None" unless your editor struggles with the
+          downloaded file — converting makes the files much bigger and takes
+          extra time, so it's off by default.
+        </HelpHint>
         <ResetButton
           onClick={() =>
             void save((s) => ({ ...s, default_transcode_preset: "none" }))
@@ -1213,6 +1232,12 @@ function BridgeSection() {
     <section className="card-box">
       <h2>
         Browser bridge <span className="chip">extension + scripts</span>
+        <HelpHint id="set-bridge" title="Browser bridge (extension)">
+          This connects the Media Hub browser add-on so a button in your web
+          browser can send videos straight to the app. You pair them once
+          using the code here. If you don't use the browser add-on, you can
+          ignore this whole section.
+        </HelpHint>
       </h2>
       <p className="hint">
         Media Hub runs a tiny HTTP server on <code>127.0.0.1</code> so the

@@ -9,6 +9,32 @@ a structural decision).
 Format: dated sections, newest at top. Each entry self-contained —
 written so future-me (or future-Claude) can pick it up cold.
 
+## 2026-07-04 — Docs expansion + (?) hints + transcode-default fix
+
+Three things, pre-release:
+
+- **Transcode default → "none" in the onboarding wizard** (Onboarding.tsx).
+  Settings default was already "none", but the wizard seeded `preset` to
+  `prores_422_lt`, so anyone clicking Next without reading got ProRes on every
+  download (slow + huge). Now opt-in. (Footgun flagged by user watching testers.)
+- **HelpHint (?) tooltips** — `src/components/HelpHint.tsx` + `.help-hint*` CSS.
+  Hover 500ms → plain-language ("5-yo") popover; click → deep-links to
+  `/help#<id>`; shows on keyboard focus too. Placed on 4 Settings section
+  headers (Sources, Downloads, Transcode, Browser bridge). NOT everywhere yet
+  — add more by dropping `<HelpHint id="..." title="...">simple text</HelpHint>`
+  next to a control. 500ms chosen over the user's initial 2s (too long — people
+  give up before it shows).
+- **Help/MANUAL expansion** (helpContent.ts + docs/MANUAL.md, kept in sync):
+  new **Browser extension** category (install/pair/use/privacy/trouble), new
+  **For developers** category (stack, run-from-source, build, code map, add a
+  command, extension dev, how the docs/i18n/(?) system works, contributing),
+  expanded **Troubleshooting** (download fails, first-run tools, blank window,
+  update), and a **Reporting bugs** entry (what to include + the log). Aimed at
+  a Reddit share. Bridge port documented as 127.0.0.1:47821.
+
+Note: root README.md is stale (says v1.0.0 / "no auto-updater" / "audio not in
+1.0") — offered to refresh but not done yet.
+
 ## 2026-07-04 — User manual / FAQ (docs/MANUAL.md)
 
 Wrote `docs/MANUAL.md` — a plain-language manual covering **every screen and

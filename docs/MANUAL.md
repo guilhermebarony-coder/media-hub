@@ -30,8 +30,11 @@ looking at, and understand what it does in a sentence or two.
 7. [Library page](#library-page)
 8. [Projects page](#projects-page)
 9. [Settings page](#settings-page)
-10. [Keyboard shortcuts](#shortcuts)
-11. [Troubleshooting](#troubleshooting)
+10. [Browser extension](#extension)
+11. [Keyboard shortcuts](#shortcuts)
+12. [Troubleshooting](#troubleshooting)
+13. [Reporting bugs](#reporting-bugs)
+14. [For developers](#developers)
 
 ---
 
@@ -545,7 +548,72 @@ App version and info. Media Hub checks for updates and can update itself.
 
 ---
 
-## 10. Keyboard shortcuts {#shortcuts}
+## 10. Browser extension {#extension}
+
+**Keywords:** extension, add-on, addon, browser, send to app, chrome, firefox,
+edge, brave
+
+An **optional** browser extension adds a "Send to Media Hub" button to your
+browser, so you can push a video into the app's queue without copy-pasting the
+URL. Everything still works from the app without it — it's just a shortcut. It
+talks **only to your own computer** (localhost); nothing leaves your machine.
+
+### What it does {#ext-what}
+**Keywords:** what is the extension, purpose, send to app
+
+Adds a toolbar button (and in-page buttons on some sites) that sends the
+current video straight into Media Hub's download queue.
+
+### Installing it {#ext-install}
+**Keywords:** install extension, load unpacked, developer mode, chrome extensions
+
+- **Chrome / Edge / Brave:** open `chrome://extensions` (or `edge://`,
+  `brave://`), turn on **Developer mode** (top-right), click **Load unpacked**,
+  and pick the app's `extension` folder.
+- **Firefox:** `about:debugging` → **This Firefox** → **Load Temporary
+  Add-on** → pick `manifest.json` in the extension folder. (Firefox forgets it
+  when the browser closes.)
+
+Then pair it (below). Full walkthrough: `extension/README.md`.
+
+### Pairing with the app {#ext-pair}
+**Keywords:** pair, token, connect, bridge, test connection
+
+A token stops random sites from talking to your app. Pair once:
+1. **App:** Settings → [Browser bridge](#set-bridge) → **Copy token**.
+2. **Browser:** extension icon → **Options** → paste token → **Save** → **Test
+   connection**. A green "Connected" = done. Can't connect? The app must be open.
+
+### Ways to send a video {#ext-use}
+**Keywords:** send video, download from browser, shortcut, right click, toolbar, mp3
+
+- **Toolbar button** (everywhere): icon → pick Video / MP3 / M4A / FLAC → Send.
+- **In-page button** (Twitter/X, Reddit): hover a video → click the lime
+  "Media Hub" button.
+- **Right-click** → Send to Media Hub (blocked on some sites — use another way).
+- **Keyboard:** `Ctrl+Shift+Y` = current tab as video, `Ctrl+Shift+M` = MP3.
+  These work even on YouTube.
+
+### Is it safe / private? {#ext-privacy}
+**Keywords:** safe, private, privacy, security, tracking, localhost
+
+Yes. It only talks to `127.0.0.1` (your computer) — nothing goes to the
+internet or to us. It only sends a URL **when you click**; it never downloads
+on its own. The token is a password so other sites can't fire downloads at
+your app.
+
+### Extension won't connect / button missing {#ext-trouble}
+**Keywords:** extension not working, offline, can't connect, button not showing, reload
+
+- **"Offline" / can't connect** → the desktop app isn't running. Open it.
+- **In-page button missing** → refresh the page (`Ctrl+F5`); it only appears on
+  freshly loaded pages.
+- **Changed the token** → re-open the extension Options, paste the new token, Save.
+- **Edited extension files** → reload it from `chrome://extensions` (↻ on the card).
+
+---
+
+## 11. Keyboard shortcuts {#shortcuts}
 
 **Keywords:** shortcuts, hotkeys, keys, keyboard
 
@@ -567,9 +635,16 @@ App version and info. Media Hub checks for updates and can update itself.
 
 ---
 
-## 11. Troubleshooting {#troubleshooting}
+## 12. Troubleshooting {#troubleshooting}
 
 **Keywords:** problem, error, not working, fix, help, broken, fails
+
+**A download fails or errors out**
+→ Usually one of: (1) the video needs a login → [cookies](#set-sources);
+(2) the site changed and the downloader is out of date → a newer app build
+ships a newer yt-dlp (check versions in [Diagnostics](#set-diagnostics));
+(3) a bad/region-locked URL → confirm it plays in your browser. Still stuck?
+[Report it](#reporting-bugs) with the log.
 
 **"Sign in / not a bot / video unavailable" on download**
 → The site needs you logged in. Set up [Sources / cookies](#set-sources).
@@ -577,6 +652,16 @@ App version and info. Media Hub checks for updates and can update itself.
 **Transcode or preview suddenly fails**
 → ffmpeg/deno may be missing or corrupted. Run
 [Diagnostics → Repair tools](#set-repair).
+
+**Stuck on first-run setup / tools won't download**
+→ First launch downloads ffmpeg + deno; a stall is almost always a
+firewall/VPN blocking GitHub. Try again on a normal connection, or
+[Diagnostics → Repair tools](#set-repair).
+
+**App won't open or shows a blank window**
+→ It may be running **hidden in the system tray** (it keeps downloads alive in
+the background) — find it there and Quit, then reopen. If a blank window
+persists, reinstall over the top; your library and settings aren't touched.
 
 **Preview is slow to seek**
 → Lower the [Preview quality](#idea-preview); the first seek also has to fetch
@@ -590,9 +675,119 @@ especially for large or segmented files.
 → Its file was moved or deleted outside the app. Re-download it, or reveal to
 check where it went.
 
+**Update didn't install / wrong version**
+→ Check [Settings → About](#set-about). Fully quit (including from the tray)
+and reopen so a downloaded update can swap in, or reinstall the latest.
+
 **Where are the logs?**
 → [Diagnostics → Open logs folder](#set-logs) (`media-hub.log`).
 
 **I deleted a clip by accident**
 → Check the [Trash folder](#lib-trash) and **Restore** it — as long as you
 haven't permanently deleted it.
+
+---
+
+## 13. Reporting bugs {#reporting-bugs}
+
+**Keywords:** report bug, bug report, issue, feedback, broken, how to report, logs
+
+A good report gets fixed fast. Please include:
+
+1. **What you did**, what you **expected**, and what **happened** instead.
+2. The **exact URL** if it's a download/fetch problem — many bugs are
+   site-specific.
+3. Your **app version** ([Settings → About](#set-about)) and **OS**
+   (e.g. Windows 11).
+4. The **log file** — [Diagnostics → Open logs folder](#set-logs) → attach
+   `media-hub.log`. *(This is the single most useful thing — it usually shows
+   the real error.)*
+5. A **screenshot** of any error message.
+
+Send it wherever the project points you (GitHub issues / the release thread).
+
+---
+
+## 14. For developers {#developers}
+
+**Keywords:** developer, contribute, build, source, architecture, api, hack
+
+Media Hub is open source. This section is for anyone who wants to build it,
+extend it, or understand how it fits together.
+
+### What it's built with {#dev-open-source}
+**Keywords:** stack, tech, tauri, rust, react, typescript, sqlite
+
+A **Tauri 2** desktop app: a **Rust** core + a **React + TypeScript (Vite)**
+frontend, an **SQLite** library, and **yt-dlp / ffmpeg / deno** as helper
+binaries. The UI calls Rust through Tauri **commands** (`invoke`) and listens
+to **events** for live progress. See [`docs/ARCHITECTURE.md`](ARCHITECTURE.md).
+
+### Run it from source {#dev-run-source}
+**Keywords:** dev setup, build from source, run locally, npm, cargo, tauri dev
+
+Requirements: **Node.js 20+**, **Rust stable** (via [rustup](https://rustup.rs)),
+and platform webview build tools (Windows: VS C++ Build Tools; macOS: Xcode CLT).
+
+```bash
+npm install
+pwsh scripts/fetch-sidecars.ps1     # yt-dlp + ffmpeg (gitignored); mac: fetch-sidecars-mac.sh
+npm run tauri dev                    # first Rust build takes several minutes
+```
+
+### Build an installer {#dev-build}
+**Keywords:** build, installer, release, package, msi, exe
+
+`npm run tauri build` → installer under `src-tauri/target/release/bundle`.
+Releases are tag-driven: push a `v*` tag and GitHub Actions builds Windows +
+macOS, signs the updater artifacts, and drafts a release. Checks: `npx tsc
+--noEmit` (frontend) and `cargo test` (in `src-tauri`).
+
+### Where the code lives {#dev-structure}
+**Keywords:** structure, layout, files, modules, architecture map
+
+- **`src/`** (frontend) — `pages/` (Download, Library, Projects, Settings,
+  Help), `components/` (Scrubber, Onboarding, HelpHint…), `lib/` (settings,
+  downloads, types, `helpContent`, `helpSearch`).
+- **`src-tauri/src/`** (backend) — `lib.rs` wires everything; feature modules:
+  `download`/`direct`, `library`, `settings`, `tools` (lazy ffmpeg/deno),
+  `transcode`, `metadata`, `playlist`, `preview`, `media_extract`, `bridge`
+  (extension server), `tray`, `updater`, `diag`.
+- **`extension/`** — the MV3 browser add-on. **`docs/`** — read first.
+
+### Add a command or feature {#dev-add-feature}
+**Keywords:** add command, new feature, tauri command, invoke, backend
+
+Write a `#[tauri::command]` in the relevant module, register it in the
+`generate_handler!` list in `lib.rs`, then call it from the frontend with
+`invoke("your_command", { args })`. For long-running work, emit **events**
+(`Emitter`) and `listen()` on the frontend — that's how downloads/transcodes
+stream progress. Keep splits behavior-neutral; run `cargo test` + `tsc`.
+
+### Hack on the browser extension {#dev-extension}
+**Keywords:** extension dev, content script, background, manifest, bridge
+
+Plain MV3, **no build step** — edit a file, hit reload on `chrome://extensions`.
+It talks to the app's local bridge server (**`127.0.0.1:47821`** by default)
+using the pairing token in `chrome.storage.local` as auth. `background.js`
+routes messages; `content-*.js` add in-page buttons; `bridge.js` is the shared
+HTTP client. See [`extension/README.md`](../extension/README.md).
+
+### How this Help / docs system works {#dev-docs}
+**Keywords:** help docs, add topic, translate, i18n, question mark, tooltip
+
+In-app Help renders from `src/lib/helpContent.ts` (mirrored by this file).
+**Add a topic:** append a `HelpEntry` with a `category` — every entry `id` is a
+stable anchor. The **(?)** tooltips (`HelpHint`) deep-link to `/help#<id>`; the
+search (`lib/helpSearch.ts`) is typo/synonym-tolerant. **Translate:** drop in
+`helpContent.<lang>.ts` with the same ids + a `case` in `getHelpContent` — no
+page changes. **Rule:** never rename an existing anchor id once a (?) points at
+it.
+
+### Contributing {#dev-contribute}
+**Keywords:** contribute, pull request, pr, github, help out
+
+Issues and PRs welcome. Keep changes focused, run `npx tsc --noEmit` and
+`cargo test` before opening a PR, and say what changed and why. Not a coder?
+Clear [bug reports](#reporting-bugs) with logs and testing new releases are
+genuinely valuable.

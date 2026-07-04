@@ -62,7 +62,9 @@ export const HELP_CATEGORIES: HelpCategory[] = [
   { id: "library", title: "Library page" },
   { id: "projects", title: "Projects page" },
   { id: "settings", title: "Settings" },
+  { id: "extension", title: "Browser extension" },
   { id: "troubleshooting", title: "Troubleshooting" },
+  { id: "developers", title: "For developers", blurb: "Media Hub is open source — build it, hack on it, or file a good bug." },
 ];
 
 export const HELP_ENTRIES: HelpEntry[] = [
@@ -710,5 +712,217 @@ export const HELP_ENTRIES: HelpEntry[] = [
     title: "I deleted a clip by accident",
     keywords: ["accident", "recover", "restore", "undo delete", "trash"],
     body: ["Check the Trash folder and Restore it — as long as you haven't permanently deleted it."],
+  },
+
+  // ---------------------------------------------------------------- browser extension
+  {
+    id: "ext-what",
+    category: "extension",
+    title: "What the browser extension does",
+    keywords: ["extension", "add-on", "addon", "browser", "send to app", "chrome", "firefox", "edge"],
+    body: [
+      "Media Hub has an optional browser extension that adds a \"Send to Media Hub\" button to your browser. Click it on a video and it drops straight into the app's download queue — no copy-pasting URLs.",
+      "It's completely optional. Everything works from the app by pasting a URL; the extension just saves you the trip.",
+    ],
+  },
+  {
+    id: "ext-install",
+    category: "extension",
+    title: "Installing the extension",
+    keywords: ["install extension", "load unpacked", "developer mode", "chrome extensions", "add"],
+    body: [
+      "Chrome / Edge / Brave: open chrome://extensions (or edge://, brave://), turn on \"Developer mode\" (top-right), click \"Load unpacked\", and pick the app's `extension` folder.",
+      "Firefox: open about:debugging → \"This Firefox\" → \"Load Temporary Add-on\" → pick `manifest.json` in the extension folder. (Firefox forgets it when you close the browser.)",
+      "Then pair it with the app — see \"Pairing the extension\".",
+    ],
+  },
+  {
+    id: "ext-pair",
+    category: "extension",
+    title: "Pairing the extension with the app",
+    keywords: ["pair", "token", "connect extension", "bridge", "test connection", "couldn't reach app"],
+    body: [
+      "The extension talks to the app over your own computer (localhost), and a token stops random sites from doing the same. Pair once:",
+      "1. In the app: Settings → Browser bridge → Copy token.",
+      "2. In the browser: click the Media Hub extension icon → Options → paste the token → Save → Test connection.",
+      "A green \"Connected\" message means you're set. If it can't reach the app, make sure the desktop app is open.",
+    ],
+  },
+  {
+    id: "ext-use",
+    category: "extension",
+    title: "Ways to send a video from the browser",
+    keywords: ["send video", "download from browser", "shortcut", "right click", "toolbar button", "mp3"],
+    body: [
+      "Toolbar button (works everywhere): click the extension icon, pick Video / MP3 / M4A / FLAC, hit Send.",
+      "In-page button (Twitter/X, Reddit): hover a video and click the little lime \"Media Hub\" button.",
+      "Right-click a video/link → Send to Media Hub (some sites block this — use another way there).",
+      "Keyboard: Ctrl+Shift+Y sends the current tab as video, Ctrl+Shift+M as MP3. These work even on YouTube.",
+    ],
+  },
+  {
+    id: "ext-privacy",
+    category: "extension",
+    title: "Is the extension safe / private?",
+    keywords: ["safe", "private", "privacy", "security", "data", "tracking", "localhost"],
+    body: [
+      "Yes. The extension only talks to your own computer (127.0.0.1) — it never sends anything to the internet or to us.",
+      "It only sends a video URL when you click a button; it never downloads on its own. The pairing token acts as a password so other websites can't fire downloads at your app.",
+    ],
+  },
+  {
+    id: "ext-trouble",
+    category: "extension",
+    title: "Extension won't connect / button missing",
+    keywords: ["extension not working", "offline", "can't connect", "button not showing", "reload"],
+    body: [
+      "\"Media Hub offline\" / can't connect → the desktop app isn't running. Open it and try again.",
+      "In-page button doesn't appear → refresh the page (Ctrl+F5); it only shows on freshly loaded pages.",
+      "Changed the token in the app → re-open the extension Options, paste the new token, Save.",
+      "Edited the extension files → reload it from chrome://extensions (the ↻ icon on the card).",
+    ],
+  },
+
+  // ---------------------------------------------------------------- troubleshooting (added)
+  {
+    id: "trouble-download-fails",
+    category: "troubleshooting",
+    title: "A download fails or errors out",
+    keywords: ["download failed", "error", "won't download", "cannot", "unavailable", "extractor"],
+    body: [
+      "Most download failures are one of three things:",
+      "1. The video needs a login → set up cookies (Settings → Sources).",
+      "2. The site changed and the downloader is out of date → Settings → Diagnostics shows the yt-dlp version; a newer app build ships a newer yt-dlp.",
+      "3. A bad or region-locked URL → try opening it in your browser to confirm it plays.",
+      "If it still fails, grab the log (Diagnostics → Open logs folder) and report it — see \"How to report a bug\".",
+    ],
+  },
+  {
+    id: "trouble-first-run",
+    category: "troubleshooting",
+    title: "Stuck on first-run setup / tools won't download",
+    keywords: ["first run", "setup", "tools", "ffmpeg download", "deno", "stuck", "loading"],
+    body: [
+      "On first launch the app downloads its media tools (ffmpeg + deno). If that stalls, it's almost always the network (a firewall/VPN blocking GitHub).",
+      "Try again on a normal connection, or use Settings → Diagnostics → Repair tools to re-download them. The app is usable once the tools finish.",
+    ],
+  },
+  {
+    id: "trouble-app-wont-start",
+    category: "troubleshooting",
+    title: "App won't open or shows a blank window",
+    keywords: ["won't start", "blank", "white screen", "crash", "black window", "not opening"],
+    body: [
+      "Fully quit it first — check the system tray (it may be running hidden, since it keeps downloads alive in the background) and choose Quit, then reopen.",
+      "If a blank window persists, reinstall over the top (your library and settings are stored separately and aren't touched). Still stuck? Send the log from the logs folder.",
+    ],
+  },
+  {
+    id: "trouble-update",
+    category: "troubleshooting",
+    title: "Update didn't install / wrong version showing",
+    keywords: ["update", "auto update", "version", "not updating", "old version"],
+    body: [
+      "Check the running version in Settings → About. If an update was downloaded, fully quit (including from the tray) and reopen so it can swap in.",
+      "You can always reinstall the latest from the releases page over your current install — settings and library are preserved.",
+    ],
+  },
+  {
+    id: "report-bug",
+    category: "troubleshooting",
+    title: "How to report a bug properly",
+    keywords: ["report bug", "bug report", "issue", "feedback", "broken", "how to report", "logs"],
+    body: [
+      "A good report gets fixed fast. Please include:",
+      "1. What you did, what you expected, and what happened instead.",
+      "2. The exact URL (if it's a download/fetch problem) — a lot of bugs are site-specific.",
+      "3. Your app version (Settings → About) and OS (e.g. Windows 11).",
+      "4. The log file — Settings → Diagnostics → Open logs folder → attach `media-hub.log`.",
+      "5. A screenshot of any error message.",
+      "Send it wherever the project points you (GitHub issues / the release thread). The log is the single most useful thing — it usually shows the real error.",
+    ],
+  },
+
+  // ---------------------------------------------------------------- for developers
+  {
+    id: "dev-open-source",
+    category: "developers",
+    title: "What it's built with",
+    keywords: ["open source", "stack", "tech", "tauri", "rust", "react", "typescript", "sqlite"],
+    body: [
+      "Media Hub is a Tauri 2 desktop app: a Rust core with a React + TypeScript (Vite) frontend, an SQLite library, and yt-dlp / ffmpeg / deno as helper binaries.",
+      "The UI talks to Rust through Tauri commands (invoke) and listens to events for live progress. See the repo's docs/ARCHITECTURE.md for the full picture.",
+    ],
+  },
+  {
+    id: "dev-run-source",
+    category: "developers",
+    title: "Run it from source",
+    keywords: ["dev setup", "build from source", "run locally", "npm", "cargo", "tauri dev", "develop"],
+    body: [
+      "You'll need Node.js 20+, the Rust stable toolchain (rustup), and your platform's webview build tools (Windows: VS C++ Build Tools; macOS: Xcode CLT).",
+      "Then: `npm install`, fetch the sidecars with `pwsh scripts/fetch-sidecars.ps1` (or the mac .sh), and `npm run tauri dev`. The first Rust build takes several minutes, then it's incremental.",
+    ],
+  },
+  {
+    id: "dev-build",
+    category: "developers",
+    title: "Build an installer",
+    keywords: ["build", "installer", "release", "package", "msi", "exe", "bundle"],
+    body: [
+      "`npm run tauri build` produces the installer for your platform under src-tauri/target/release/bundle.",
+      "Releases are tag-driven via GitHub Actions (push a `v*` tag → CI builds Windows + macOS, signs the updater artifacts, and drafts a release). Frontend type-check is `npx tsc --noEmit`; Rust tests are `cargo test` in src-tauri.",
+    ],
+  },
+  {
+    id: "dev-structure",
+    category: "developers",
+    title: "Where the code lives",
+    keywords: ["structure", "layout", "files", "modules", "architecture", "where is"],
+    body: [
+      "Frontend (src/): pages/ (Download, Library, Projects, Settings, Help), components/ (Scrubber, Onboarding, HelpHint…), lib/ (settings, downloads, types, helpContent).",
+      "Backend (src-tauri/src/): lib.rs wires everything; feature modules include download/direct, library, settings, tools (lazy ffmpeg/deno), transcode, metadata, playlist, preview, media_extract, bridge (extension server), tray, updater, diag.",
+      "Docs (docs/): ARCHITECTURE, ROADMAP, NOTES, IMPROVEMENTS, MANUAL. Read those first.",
+    ],
+  },
+  {
+    id: "dev-add-feature",
+    category: "developers",
+    title: "Add a command or feature",
+    keywords: ["add command", "new feature", "tauri command", "invoke", "backend", "contribute code"],
+    body: [
+      "Backend: write a `#[tauri::command]` in the relevant module, register it in the `generate_handler!` list in lib.rs, then call it from the frontend with `invoke(\"your_command\", { args })`.",
+      "For long-running work, emit events (Emitter) and `listen()` on the frontend for progress — that's how downloads/transcodes stream status. Keep the split behavior-neutral and run cargo test + tsc.",
+    ],
+  },
+  {
+    id: "dev-extension",
+    category: "developers",
+    title: "Hack on the browser extension",
+    keywords: ["extension dev", "content script", "background", "manifest", "bridge", "loopback"],
+    body: [
+      "The extension (extension/) is a plain MV3 add-on — no build step. Edit a file and hit the reload icon on chrome://extensions.",
+      "It talks to the app's local bridge server (127.0.0.1:47821 by default) with the pairing token from chrome.storage.local as auth. background.js routes messages; content-*.js add the in-page buttons; bridge.js is the shared HTTP client. See extension/README.md.",
+    ],
+  },
+  {
+    id: "dev-docs",
+    category: "developers",
+    title: "How this Help / docs system works",
+    keywords: ["help docs", "add topic", "translate", "i18n", "question mark", "tooltip", "manual"],
+    body: [
+      "In-app Help is rendered from src/lib/helpContent.ts (mirrored by docs/MANUAL.md). Add a topic by appending a HelpEntry with a category; every entry's id is a stable anchor.",
+      "The (?) tooltips (HelpHint) deep-link to /help#<id>, and the search (lib/helpSearch.ts) is typo/synonym-tolerant. Translation is a drop-in: add helpContent.<lang>.ts with the same ids and a case in getHelpContent — no page changes.",
+    ],
+  },
+  {
+    id: "dev-contribute",
+    category: "developers",
+    title: "Contributing",
+    keywords: ["contribute", "pull request", "pr", "issue", "help out", "github"],
+    body: [
+      "Issues and PRs are welcome. Keep changes focused, run `npx tsc --noEmit` and `cargo test` before opening a PR, and describe what you changed and why.",
+      "Not a coder? Filing clear bug reports with logs (see \"How to report a bug\") and testing new releases is genuinely valuable.",
+    ],
   },
 ];
