@@ -55,6 +55,7 @@ export function LanguagePicker() {
             >
               <span className="lang-menu-code mono">{l.code.toUpperCase()}</span>
               <span>{l.label}</span>
+              {l.wip && <span className="lang-menu-wip">wip</span>}
             </button>
           ))}
         </div>

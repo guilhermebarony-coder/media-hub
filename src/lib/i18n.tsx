@@ -17,9 +17,12 @@ import { pt } from "../locales/pt";
 
 export type Lang = "en" | "pt";
 
-export const LANGS: { code: Lang; label: string }[] = [
+export const LANGS: { code: Lang; label: string; wip?: boolean }[] = [
   { code: "en", label: "English" },
-  { code: "pt", label: "Português" },
+  // Portuguese is a work in progress — most of the app is translated, but a
+  // few pages still fall back to English. The `wip` flag surfaces a small
+  // marker in the picker so users know. Drop it once coverage is complete.
+  { code: "pt", label: "Português", wip: true },
 ];
 
 const DICTS: Record<Lang, Record<string, string>> = { en, pt };

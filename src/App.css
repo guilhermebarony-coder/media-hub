@@ -4702,6 +4702,17 @@ body.lib-resizing-h * {
   width: 20px;
 }
 .lang-menu-item.active .lang-menu-code { color: var(--accent); }
+.lang-menu-wip {
+  margin-left: auto;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  background: var(--bg-4);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
 
 /* ============================================================
    HelpHint — the "(?)" popover next to controls

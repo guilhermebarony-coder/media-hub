@@ -11,6 +11,7 @@ import {
 import { revealFile } from "../lib/library";
 import { useActiveProject } from "../lib/activeProject";
 import { useSettings } from "../lib/settings";
+import { useT } from "../lib/i18n";
 import {
   detectPlatform,
   isDirectMediaUrl,
@@ -58,18 +59,19 @@ type QueueEnqueueDetail = {
 // =====================================================================
 export default function DownloadPage() {
   const { scope } = useActiveProject();
+  const t = useT();
   const target =
-    scope.kind === "library" ? "Library" : `project · ${scope.name}`;
+    scope.kind === "library" ? t("topbar.library") : `${t("dl.projectPrefix")}${scope.name}`;
   return (
     <div className="content">
       <div className="content-header">
-        <div className="ch-title">Download</div>
+        <div className="ch-title">{t("dl.title")}</div>
         <span className="ch-meta">
-          saving to <strong style={{ color: "var(--text-0)" }}>{target}</strong>
+          {t("dl.savingTo")} <strong style={{ color: "var(--text-0)" }}>{target}</strong>
         </span>
         <div className="ch-spacer" />
         <span className="mono faint" style={{ fontSize: 11 }}>
-          change scope from the top-bar picker
+          {t("dl.scopeHint")}
         </span>
       </div>
       <div className="content-body">
@@ -270,6 +272,7 @@ const AUDIO_FORMAT_META: Record<AudioFormat, { hint: string; specs: string }> = 
 function MetadataCard() {
   const { scope } = useActiveProject();
   const { settings, save: saveSettings } = useSettings();
+  const t = useT();
   const overrideLibrary = useLibraryOverride();
   const urlInputRef = useRef<HTMLInputElement>(null);
   const [url, setUrl] = useState("");
@@ -659,16 +662,9 @@ function MetadataCard() {
   return (
     <section className="card-box">
       <h2>
-        Fetch & download <span className="chip">single URL</span>
+        {t("dl.sec.title")} <span className="chip">{t("dl.sec.chip")}</span>
       </h2>
-      <p className="hint">
-        Paste a video URL — YouTube, Twitter/X, TikTok, Pinterest, Reddit,
-        Instagram, or any direct <code>.mp4</code>/<code>.webm</code>. Runs{" "}
-        <code>yt-dlp -j</code>, then lets you pick a format, scrub
-        segments, and optionally transcode. Files land in the active
-        scope (Library or current project). Hold{" "}
-        <span className="kbd">Ctrl</span> to override to Library.
-      </p>
+      <p className="hint">{t("dl.sec.intro")}</p>
 
       <form
         className="field"
@@ -684,7 +680,7 @@ function MetadataCard() {
           ref={urlInputRef}
           className="field-input"
           type="text"
-          placeholder="https://… any video URL (YouTube, X, TikTok, Pinterest, Reddit, IG, or a direct .mp4)"
+          placeholder={t("dl.urlPlaceholder")}
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           spellCheck={false}
@@ -696,10 +692,10 @@ function MetadataCard() {
           disabled={loading || playlistLoading || !url.trim() || urlKind === "channel"}
         >
           {loading || playlistLoading
-            ? "Fetching…"
+            ? t("dl.fetching")
             : urlKind === "pure_playlist"
-              ? "List playlist"
-              : "Fetch"}
+              ? t("dl.listPlaylist")
+              : t("dl.fetch")}
         </button>
       </form>
 
@@ -724,17 +720,14 @@ function MetadataCard() {
       {urlKind === "watch_with_list" && !playlist && !playlistLoading && (
         <div className="msg-row" style={{ background: "var(--bg-2)" }}>
           <span className="label">playlist</span>
-          <span style={{ flex: 1 }}>
-            This URL is also part of a playlist. By default we'll just
-            download <strong>this one video</strong>.
-          </span>
+          <span style={{ flex: 1 }}>{t("dl.playlistNote")}</span>
           <button
             type="button"
             className="btn btn-secondary"
             onClick={() => void fetchPlaylist()}
             disabled={playlistLoading}
           >
-            See all in playlist…
+            {t("dl.seeAllPlaylist")}
           </button>
         </div>
       )}
@@ -742,7 +735,7 @@ function MetadataCard() {
       {playlistLoading && (
         <div className="msg-row" style={{ background: "var(--bg-2)" }}>
           <span className="label">loading</span>
-          <span style={{ flex: 1 }}>Enumerating playlist entries…</span>
+          <span style={{ flex: 1 }}>{t("dl.enumerating")}</span>
         </div>
       )}
 
@@ -840,7 +833,7 @@ function MetadataCard() {
               onClick={() => setDownloadMode("video")}
             >
               <Icon.video width={12} height={12} />
-              Video
+              {t("dl.video")}
             </button>
             <button
               type="button"
@@ -850,27 +843,27 @@ function MetadataCard() {
               onClick={() => setDownloadMode("audio")}
             >
               <Icon.music width={12} height={12} />
-              Audio
+              {t("dl.audio")}
             </button>
           </div>
 
           {downloadMode === "video" && (
             <button className="meta-toggle" onClick={() => setShowFormats((s) => !s)}>
-              {showFormats ? "▾" : "▸"} {showFormats ? "Hide" : "Show"} format list ({meta.formats.length})
+              {showFormats ? "▾" : "▸"} {showFormats ? t("dl.hide") : t("dl.show")} {t("dl.formatList")} ({meta.formats.length})
             </button>
           )}
 
           {duplicate && (
             <div className="msg-row dupe">
-              <span className="label">already saved</span>
+              <span className="label">{t("dl.dupeLabel")}</span>
               <code style={{ flex: 1 }}>
-                "{duplicate.title}" — in <strong>{duplicate.scope_label}</strong>
+                "{duplicate.title}" — <strong>{duplicate.scope_label}</strong>
               </code>
               <button
                 className="btn btn-secondary"
                 onClick={() => revealFile(duplicate.file_path)}
               >
-                <Icon.folder width={11} height={11} /> Open existing
+                <Icon.folder width={11} height={11} /> {t("dl.openExisting")}
               </button>
             </div>
           )}
@@ -1045,10 +1038,8 @@ function MetadataCard() {
                 </>
               ) : (
                 <span className="faint">
-                  Click a format row above, then download.{" "}
-                  <span className="mono">
-                    Hold <span className="kbd">Ctrl</span> to override → Library
-                  </span>
+                  {t("dl.clickFormat")}{" "}
+                  <span className="mono">{t("dl.holdCtrl")}</span>
                 </span>
               )}
             </div>
@@ -1060,18 +1051,18 @@ function MetadataCard() {
             >
               <Icon.download width={13} height={13} />
               {downloading
-                ? "Downloading…"
+                ? t("dl.downloading")
                 : downloadMode === "audio"
                   ? overrideLibrary
-                    ? `Download ${audioFormat.toUpperCase()} → Library`
-                    : `Download ${audioFormat.toUpperCase()}`
+                    ? `${t("dl.download")} ${audioFormat.toUpperCase()} → ${t("topbar.library")}`
+                    : `${t("dl.download")} ${audioFormat.toUpperCase()}`
                   : overrideLibrary
                     ? segments.length > 1
-                      ? `Download ${segments.length} → Library`
-                      : "Download → Library"
+                      ? `${t("dl.download")} ${segments.length} → ${t("topbar.library")}`
+                      : `${t("dl.download")} → ${t("topbar.library")}`
                     : segments.length > 1
-                      ? `Download ${segments.length} segments`
-                      : "Download"}
+                      ? `${t("dl.download")} ${segments.length} ${t("dl.segmentsWord")}`
+                      : t("dl.download")}
             </button>
           </div>
 
@@ -1142,7 +1133,7 @@ function MetadataCard() {
                 title="Stop this download — partial file (if any) stays on disk"
                 style={{ marginTop: 2 }}
               >
-                Cancel
+                {t("dl.cancel")}
               </button>
             </div>
           )}
@@ -1184,25 +1175,25 @@ function MetadataCard() {
 
           {dlResult && downloadedPaths.length <= 1 && (
             <div className="msg-row ok">
-              <span className="label">downloaded</span>
+              <span className="label">{t("dl.downloadedLabel")}</span>
               <code>{dlResult.path}</code>
               <button className="btn-secondary btn" onClick={() => revealFile(dlResult.path)}>
-                <Icon.folder width={12} height={12} /> Open
+                <Icon.folder width={12} height={12} /> {t("dl.open")}
               </button>
             </div>
           )}
           {downloadedPaths.length > 1 && (
             <div className="msg-row ok" style={{ alignItems: "flex-start", flexDirection: "column", gap: 6 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
-                <span className="label">downloaded</span>
+                <span className="label">{t("dl.downloadedLabel")}</span>
                 <span className="mono" style={{ flex: 1 }}>
-                  {downloadedPaths.length} segments
+                  {downloadedPaths.length} {t("dl.segmentsWord")}
                 </span>
                 <button
                   className="btn-secondary btn"
                   onClick={() => revealFile(downloadedPaths[0])}
                 >
-                  <Icon.folder width={12} height={12} /> Open folder
+                  <Icon.folder width={12} height={12} /> {t("dl.openFolder")}
                 </button>
               </div>
               <ul style={{ margin: 0, paddingLeft: 16, fontSize: 11, color: "var(--text-2)", fontFamily: "var(--mono)" }}>
@@ -1497,6 +1488,7 @@ function ProgressBar({
 function QueueCard() {
   const { scope } = useActiveProject();
   const { settings } = useSettings();
+  const t = useT();
   const overrideLibrary = useLibraryOverride();
   const [urlsInput, setUrlsInput] = useState("");
   // 1.1.3 — queue state + workerLoop + event listeners moved to the
@@ -1596,7 +1588,7 @@ function QueueCard() {
   return (
     <section className="card-box">
       <h2>
-        Batch queue <span className="chip">parallel × {downloadWorkers}</span>
+        {t("dl.queue.title")} <span className="chip">parallel × {downloadWorkers}</span>
       </h2>
       <p className="hint">
         Paste one URL per line, hit Queue all. Each downloads at the best
@@ -1661,14 +1653,14 @@ function QueueCard() {
           disabled={!urlsInput.trim()}
           title={overrideLibrary ? "Queue into Library (Ctrl held)" : undefined}
         >
-          {overrideLibrary ? "Queue → Library" : "Queue all"}
+          {overrideLibrary ? `${t("dl.queueAll")} → ${t("topbar.library")}` : t("dl.queueAll")}
         </button>
         <button className="btn btn-secondary" onClick={clearCompleted}>
-          Clear completed
+          {t("dl.clearCompleted")}
         </button>
         {jobs.some((j) => j.status === "failed") && (
           <button className="btn btn-secondary" onClick={retryFailed}>
-            <Icon.retry width={12} height={12} /> Retry failed
+            <Icon.retry width={12} height={12} /> {t("dl.retryFailed")}
           </button>
         )}
         <span className="stats">{stats}</span>
