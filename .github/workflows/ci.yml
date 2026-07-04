@@ -56,6 +56,17 @@ jobs:
       - name: Typecheck frontend
         run: npx tsc --noEmit
 
+      # tauri-build checks that each externalBin exists for the host target
+      # triple. The unit tests never invoke the sidecars, so empty stub
+      # files satisfy the build-time existence check without fetching the
+      # ~322 MB of real binaries (that's the release job's concern).
+      - name: Stub sidecars (satisfy tauri-build existence check)
+        run: |
+          mkdir -p src-tauri/binaries
+          for bin in yt-dlp ffmpeg deno; do
+            touch "src-tauri/binaries/${bin}-x86_64-unknown-linux-gnu"
+          done
+
       - name: Rust unit tests
         working-directory: src-tauri
         run: cargo test --lib
