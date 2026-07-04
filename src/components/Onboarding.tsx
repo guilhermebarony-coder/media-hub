@@ -27,6 +27,7 @@ import { useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Icon } from "../lib/icons";
 import { useSettings } from "../lib/settings";
+import { useT } from "../lib/i18n";
 import {
   TRANSCODE_PRESETS,
   type CookiesSource,
@@ -34,13 +35,6 @@ import {
 } from "../lib/types";
 
 type Step = 0 | 1 | 2 | 3;
-
-const STEP_TITLES: string[] = [
-  "Welcome",
-  "Set up your library",
-  "Browser cookies (optional)",
-  "How segment downloads work",
-];
 
 // Firefox first since it's the only browser whose cookies yt-dlp can
 // actually still read (Chrome 127+ DPAPI breakage — see yt-dlp/yt-dlp#10927).
@@ -64,7 +58,14 @@ export function OnboardingGate() {
 
 function OnboardingModal() {
   const { save } = useSettings();
+  const t = useT();
   const [step, setStep] = useState<Step>(0);
+  const stepTitles = [
+    t("onb.step.welcome"),
+    t("onb.step.library"),
+    t("onb.step.cookies"),
+    t("onb.step.segments"),
+  ];
 
   // Draft state — collected across screens, committed on Finish.
   // Defaults match the existing settings defaults so a user who
@@ -122,7 +123,7 @@ function OnboardingModal() {
   }
 
   return (
-    <div className="onb-overlay" role="dialog" aria-modal="true" aria-label="Welcome to Media Hub">
+    <div className="onb-overlay" role="dialog" aria-modal="true" aria-label={t("onb.aria")}>
       <div className="onb-card">
         <header className="onb-head">
           <div className="onb-brand">
@@ -133,25 +134,27 @@ function OnboardingModal() {
               label only. Showing all four labels overflowed the
               header on standard window widths and clipped both ends. */}
           <div className="onb-steps">
-            {STEP_TITLES.map((t, i) => (
+            {stepTitles.map((title, i) => (
               <span
-                key={t}
+                key={title}
                 className={"onb-step-dot" + (i === step ? " active" : i < step ? " done" : "")}
-                title={`${i + 1}. ${t}`}
+                title={`${i + 1}. ${title}`}
               >
                 {i + 1}
               </span>
             ))}
             <span className="onb-step-current">
-              Step {step + 1} of 4 · {STEP_TITLES[step]}
+              {t("onb.stepper.current")
+                .replace("{n}", String(step + 1))
+                .replace("{title}", stepTitles[step])}
             </span>
           </div>
           <button
             className="onb-skip"
             onClick={() => void finish({ skip: true })}
-            title="Skip onboarding — you can change all of this later in Settings."
+            title={t("onb.skip.title")}
           >
-            Skip
+            {t("onb.skip")}
           </button>
         </header>
 
@@ -180,16 +183,16 @@ function OnboardingModal() {
 
         <footer className="onb-foot">
           <button className="btn btn-secondary" onClick={back} disabled={step === 0}>
-            Back
+            {t("onb.back")}
           </button>
           <span className="onb-foot-spacer" />
           {step < 3 ? (
             <button className="btn" onClick={next}>
-              Next
+              {t("onb.next")}
             </button>
           ) : (
             <button className="btn" onClick={() => void finish()}>
-              Finish
+              {t("onb.finish")}
             </button>
           )}
         </footer>
@@ -203,33 +206,23 @@ function OnboardingModal() {
 // =====================================================================
 
 function ScreenWelcome() {
+  const t = useT();
   return (
     <div className="onb-screen">
-      <h2 className="onb-title">No bloat. Just the clip you need.</h2>
-      <p className="onb-lead">
-        Media Hub is a desktop sourcing tool for editors and creators.
-        Paste a video URL — YouTube, Twitter/X, TikTok, Pinterest,
-        Reddit, Instagram — scrub or punch in timestamps, get only the
-        segment you want — transcoded into a format your NLE actually
-        likes (ProRes / DNxHR / optimized MP4), filed into a tagged
-        library you can search a month later.
-      </p>
+      <h2 className="onb-title">{t("onb.welcome.title")}</h2>
+      <p className="onb-lead">{t("onb.welcome.lead")}</p>
       <ul className="onb-bullets">
         <li>
-          <strong>Segment downloads</strong> — never grab a 1-hour video
-          to use 5 seconds of it.
+          <strong>{t("onb.welcome.b1.t")}</strong> — {t("onb.welcome.b1.d")}
         </li>
         <li>
-          <strong>Edit-friendly transcodes</strong> — ProRes 422 LT and
-          DNxHR SQ bundled. Drop straight into Resolve / Premiere / Avid.
+          <strong>{t("onb.welcome.b2.t")}</strong> — {t("onb.welcome.b2.d")}
         </li>
         <li>
-          <strong>Tagged library + projects</strong> — every download
-          gets a row. Search and filter by tag, channel, or source.
+          <strong>{t("onb.welcome.b3.t")}</strong> — {t("onb.welcome.b3.d")}
         </li>
         <li>
-          <strong>Local-first</strong> — files live on your disk in folders
-          you can poke at directly. No cloud lock-in.
+          <strong>{t("onb.welcome.b4.t")}</strong> — {t("onb.welcome.b4.d")}
         </li>
       </ul>
     </div>
@@ -243,21 +236,20 @@ function ScreenConfigure(props: {
   setPreset: (p: TranscodePreset) => void;
 }) {
   const { libraryRoot, setLibraryRoot, preset, setPreset } = props;
+  const t = useT();
   const presetMeta = TRANSCODE_PRESETS.find((p) => p.value === preset);
   return (
     <div className="onb-screen">
-      <h2 className="onb-title">Set up your library</h2>
-      <p className="onb-lead">
-        Two quick decisions. You can change both later in Settings.
-      </p>
+      <h2 className="onb-title">{t("onb.cfg.title")}</h2>
+      <p className="onb-lead">{t("onb.cfg.lead")}</p>
 
       <div className="onb-field">
-        <label className="onb-label">Library root</label>
+        <label className="onb-label">{t("onb.cfg.rootLabel")}</label>
         <div style={{ display: "flex", gap: 6 }}>
           <input
             type="text"
             className="field-input"
-            placeholder="(default) ~/Media Hub"
+            placeholder={t("onb.cfg.rootPlaceholder")}
             value={libraryRoot}
             onChange={(e) => setLibraryRoot(e.target.value)}
             spellCheck={false}
@@ -271,7 +263,7 @@ function ScreenConfigure(props: {
                 const picked = await openDialog({
                   directory: true,
                   multiple: false,
-                  title: "Choose your library folder",
+                  title: t("onb.cfg.pickTitle"),
                 });
                 if (typeof picked === "string") setLibraryRoot(picked);
               } catch (e) {
@@ -279,17 +271,18 @@ function ScreenConfigure(props: {
               }
             }}
           >
-            <Icon.folder width={12} height={12} /> Browse…
+            <Icon.folder width={12} height={12} /> {t("onb.cfg.browse")}
           </button>
         </div>
         <p className="onb-hint">
-          Where downloaded clips live on disk. Leave empty for the
-          default (<code>~/Media Hub</code>).
+          {t("onb.cfg.rootHintPre")}
+          <code>~/Media Hub</code>
+          {t("onb.cfg.rootHintPost")}
         </p>
       </div>
 
       <div className="onb-field">
-        <label className="onb-label">Default transcode preset</label>
+        <label className="onb-label">{t("onb.cfg.presetLabel")}</label>
         <select
           className="field-select"
           value={preset}
@@ -304,9 +297,7 @@ function ScreenConfigure(props: {
         <p className="onb-hint">
           {presetMeta?.hint}
           <br />
-          ProRes 422 LT is the editing sweet spot for most B-roll
-          workflows. Pick "None" if you want files exactly as
-          downloaded.
+          {t("onb.cfg.presetHint2")}
         </p>
       </div>
     </div>
@@ -322,48 +313,31 @@ function ScreenCookies(props: {
   setFilePath: (p: string) => void;
 }) {
   const { mode, setMode, browser, setBrowser, filePath, setFilePath } = props;
+  const t = useT();
   return (
     <div className="onb-screen">
-      <h2 className="onb-title">Browser cookies — only if you need them</h2>
-      <p className="onb-lead">
-        Public videos work without any of this on every supported
-        source. Cookies are only needed for sign-in-walled clips —
-        age-restricted YouTube, private Twitter/X posts, members-
-        only content, and similar. Pick <strong>None</strong> if
-        you're not sure — flip it on later when you hit the wall.
-      </p>
+      <h2 className="onb-title">{t("onb.ck.title")}</h2>
+      <p className="onb-lead">{t("onb.ck.lead")}</p>
 
       <div className="onb-callout onb-callout-cookies">
-        <h3 className="onb-callout-title">
-          Heads up — browser cookie compatibility
-        </h3>
+        <h3 className="onb-callout-title">{t("onb.ck.calloutTitle")}</h3>
 
         <div className="onb-cookie-grid">
-          <span className="onb-tag onb-tag-ok">Recommended</span>
+          <span className="onb-tag onb-tag-ok">{t("onb.ck.recommended")}</span>
           <div className="onb-cookie-body">
-            <div><strong>Firefox</strong> · Safari (macOS only)</div>
-            <div className="onb-cookie-why">
-              Work while the browser is open. Firefox is the easiest
-              path for daily use.
-            </div>
+            <div><strong>Firefox</strong> · Safari ({t("onb.ck.macOnly")})</div>
+            <div className="onb-cookie-why">{t("onb.ck.recWhy")}</div>
           </div>
 
-          <span className="onb-tag onb-tag-err">Currently broken</span>
+          <span className="onb-tag onb-tag-err">{t("onb.ck.broken")}</span>
           <div className="onb-cookie-body">
             <div>Chrome · Brave · Edge · Vivaldi · Opera · Chromium</div>
-            <div className="onb-cookie-why">
-              Chrome 127+ added "App-Bound Encryption" — yt-dlp can't
-              decrypt cookies from any Chromium browser right now
-              (yt-dlp issue #10927).
-            </div>
+            <div className="onb-cookie-why">{t("onb.ck.brokenWhy")}</div>
           </div>
         </div>
 
         <div className="onb-cookie-tip">
-          <strong>Tip —</strong> if your main browser is Chrome, sign
-          in to YouTube in Firefox once and point Media Hub at Firefox.
-          Or use a <code>cookies.txt</code> export from any browser
-          (file mode below — works while everything is open).
+          <strong>{t("onb.ck.tipLabel")}</strong> {t("onb.ck.tip")}
         </div>
       </div>
 
@@ -378,10 +352,10 @@ function ScreenCookies(props: {
             />
             <span>
               {m === "none"
-                ? "None — skip cookies"
+                ? t("onb.ck.optNone")
                 : m === "browser"
-                  ? "Read from browser"
-                  : "Read from cookies.txt file"}
+                  ? t("onb.ck.optBrowser")
+                  : t("onb.ck.optFile")}
             </span>
           </label>
         ))}
@@ -389,7 +363,7 @@ function ScreenCookies(props: {
 
       {mode === "browser" && (
         <div className="onb-field">
-          <label className="onb-label">Browser</label>
+          <label className="onb-label">{t("onb.ck.browserLabel")}</label>
           <select
             className="field-select"
             value={browser}
@@ -398,15 +372,13 @@ function ScreenCookies(props: {
             {BROWSERS.map((b) => (
               <option key={b} value={b}>
                 {b[0].toUpperCase() + b.slice(1)}
-                {CHROMIUM_BROWSERS.has(b) ? " (broken — DPAPI)" : ""}
+                {CHROMIUM_BROWSERS.has(b) ? t("onb.ck.brokenSuffix") : ""}
               </option>
             ))}
           </select>
           {CHROMIUM_BROWSERS.has(browser) && (
             <p className="onb-hint" style={{ color: "#e0a93a" }}>
-              ⚠ Chromium browsers can't decrypt cookies right now.
-              Pick Firefox above, or switch to <strong>cookies.txt
-              file mode</strong> below.
+              {t("onb.ck.chromiumWarn")}
             </p>
           )}
         </div>
@@ -414,7 +386,7 @@ function ScreenCookies(props: {
 
       {mode === "file" && (
         <div className="onb-field">
-          <label className="onb-label">Path to cookies.txt</label>
+          <label className="onb-label">{t("onb.ck.fileLabel")}</label>
           <input
             type="text"
             className="field-input"
@@ -423,11 +395,7 @@ function ScreenCookies(props: {
             onChange={(e) => setFilePath(e.target.value)}
             spellCheck={false}
           />
-          <p className="onb-hint">
-            Netscape-format. Export from your browser with the
-            free "Get cookies.txt LOCALLY" extension (Chrome /
-            Firefox). Works even while the browser is open.
-          </p>
+          <p className="onb-hint">{t("onb.ck.fileHint")}</p>
         </div>
       )}
     </div>
@@ -435,43 +403,32 @@ function ScreenCookies(props: {
 }
 
 function ScreenWorkflow() {
+  const t = useT();
   return (
     <div className="onb-screen">
-      <h2 className="onb-title">The 30-second workflow</h2>
-      <p className="onb-lead">
-        Here's the loop most editors run a hundred times a week:
-      </p>
+      <h2 className="onb-title">{t("onb.wf.title")}</h2>
+      <p className="onb-lead">{t("onb.wf.lead")}</p>
 
       <ol className="onb-steps-list">
         <li>
-          <strong>Paste a URL</strong> on the Download page. Metadata
-          + scrubber load in a second or two.
+          <strong>{t("onb.wf.s1.t")}</strong>{t("onb.wf.s1.d")}
         </li>
         <li>
-          <strong>Scrub to mark segments.</strong> Hit <kbd>I</kbd>{" "}
-          at the in point, scrub forward, hit <kbd>O</kbd> at the
-          out point. Repeat for multiple cuts from the same source.
+          <strong>{t("onb.wf.s2.t")}</strong>{t("onb.wf.s2.d1")}<kbd>I</kbd>
+          {t("onb.wf.s2.d2")}<kbd>O</kbd>{t("onb.wf.s2.d3")}
         </li>
         <li>
-          <strong>Pick a format + transcode preset</strong>, then
-          download. yt-dlp pulls the source once and ffmpeg trims
-          each segment locally — bandwidth saved.
+          <strong>{t("onb.wf.s3.t")}</strong>{t("onb.wf.s3.d")}
         </li>
         <li>
-          <strong>Files land in your library</strong>, tagged with
-          the channel + source URL. Open them straight in your NLE.
+          <strong>{t("onb.wf.s4.t")}</strong>{t("onb.wf.s4.d")}
         </li>
       </ol>
 
       <div className="onb-callout onb-callout-pro">
         <Icon.folder width={14} height={14} />
         <div>
-          <strong>Pro tip — watch folder integration.</strong> Point
-          your NLE's media browser at{" "}
-          <code>~/Media Hub/Library/raw/</code> (or your project's{" "}
-          <code>raw/</code> folder). Every clip you download
-          auto-imports. Resolve calls it "Auto-Sync Bin"; Premiere
-          has Media Browser; FCP uses watched event folders.
+          <strong>{t("onb.wf.proLabel")}</strong> {t("onb.wf.proBody")}
         </div>
       </div>
     </div>
