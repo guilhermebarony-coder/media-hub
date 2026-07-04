@@ -165,27 +165,13 @@ function SourcesSection() {
                 </option>
               ))}
             </select>
-            <span className="hint-text faint">
-              Closed-browser rule applies on Windows — Chromium locks
-              the cookie SQLite while running.
-            </span>
+            <span className="hint-text faint">{t("set.src.closedRule")}</span>
           </div>
           {src.browser !== "firefox" && src.browser !== "safari" && (
             <div className="settings-warn">
-              <strong>⚠ Chromium browsers are currently broken</strong>
-              <div>
-                As of Chrome 127+ (Aug 2024), yt-dlp can't decrypt
-                cookies from Chrome / Brave / Edge / Vivaldi / Opera
-                due to Google's "App-Bound Encryption" change
-                (yt-dlp issue #10927). You'll get a{" "}
-                <code>Failed to decrypt with DPAPI</code> error even
-                with the browser closed.
-              </div>
-              <div>
-                <strong>Working alternatives:</strong> switch to{" "}
-                <strong>Firefox</strong> above, or use the{" "}
-                <strong>cookies.txt file mode</strong> instead.
-              </div>
+              <strong>{t("set.src.warnTitle")}</strong>
+              <div>{t("set.src.warnBody1")}</div>
+              <div>{t("set.src.warnBody2")}</div>
             </div>
           )}
         </>
@@ -225,12 +211,7 @@ function SourcesSection() {
             >
               <Icon.folder width={12} height={12} /> {t("set.browse")}
             </button>
-            <span className="hint-text faint">
-              Netscape-format cookies.txt. Tip: avoid paths with
-              non-ASCII characters (e.g. "Área de Trabalho") — they
-              can break yt-dlp file access. Try{" "}
-              <code>C:\cookies.txt</code> as a test.
-            </span>
+            <span className="hint-text faint">{t("set.src.pathHint")}</span>
           </div>
           <CookiesFileStatus path={src.path} />
         </>
@@ -290,14 +271,7 @@ function OverridesEditor() {
     <div className="settings-subsection">
       <div className="settings-row">
         <span className="settings-label">{t("set.src.perSite")}</span>
-        <span className="hint-text faint">
-          Override the default for specific platforms. Typical setup:
-          default <strong>None</strong>, then add{" "}
-          <strong>Instagram → From browser</strong> — Instagram uses
-          your login, YouTube stays cookie-free (logged-in cookies often
-          break YouTube). The right cookies go to the right site
-          automatically, based on the URL.
-        </span>
+        <span className="hint-text faint">{t("set.src.perSiteHint")}</span>
       </div>
 
       {active.length === 0 && (
@@ -441,6 +415,7 @@ type CookiesFileStatusPayload = {
 };
 
 function CookiesFileStatus({ path }: { path: string }) {
+  const t = useT();
   const [status, setStatus] = useState<CookiesFileStatusPayload | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -471,7 +446,7 @@ function CookiesFileStatus({ path }: { path: string }) {
     return (
       <div className="settings-row">
         <span className="settings-label" />
-        <span className="hint-text faint">Checking file…</span>
+        <span className="hint-text faint">{t("set.src.checking")}</span>
       </div>
     );
   }
@@ -483,8 +458,7 @@ function CookiesFileStatus({ path }: { path: string }) {
       <div className="settings-row">
         <span className="settings-label" />
         <span className="hint-text" style={{ color: "var(--accent)" }}>
-          ✓ {status.youtube_cookies} youtube.com cookies, auth token detected.
-          Should work for age-restricted videos.
+          {t("set.src.fileOk").replace("{n}", String(status.youtube_cookies))}
         </span>
       </div>
     );
@@ -495,7 +469,7 @@ function CookiesFileStatus({ path }: { path: string }) {
   // same urgency in the user's mental model.
   return (
     <div className="settings-warn">
-      <strong>⚠ This cookies file is missing YouTube login</strong>
+      <strong>{t("set.src.fileWarnTitle")}</strong>
       <div style={{ marginTop: 4 }}>{status.warning}</div>
       <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
         Found: {status.total_cookies} total cookies,{" "}
@@ -677,11 +651,7 @@ function LibrarySection() {
           <Icon.folder width={12} height={12} />
           {migrating ? t("set.lib.moving") : t("set.lib.moveBtn")}
         </button>
-        <span className="hint-text faint">
-          Physically moves Library/, Projects/, _thumbnails/ and
-          rewrites every asset's file path. Refuses if any download
-          is in flight.
-        </span>
+        <span className="hint-text faint">{t("set.src.lib.moveHint")}</span>
       </div>
 
       <div className="settings-row">
@@ -716,12 +686,7 @@ function LibrarySection() {
           onChange={(e) => setTemplate(e.target.value)}
           spellCheck={false}
         />
-        <span className="hint-text faint">
-          Tokens: <code>&#123;title&#125;</code> ·{" "}
-          <code>&#123;channel&#125;</code> · <code>&#123;date&#125;</code> ·{" "}
-          <code>&#123;id&#125;</code>. Empty = legacy default. Extension
-          appended automatically.
-        </span>
+        <span className="hint-text faint">{t("set.lib.templateHint")}</span>
       </div>
     </section>
   );
@@ -897,9 +862,7 @@ function DownloadsSection() {
           onChange={(e) => setConcurrency(Number(e.target.value))}
           style={{ flex: 1 }}
         />
-        <span className="hint-text faint">
-          Applies to the batch queue. Single-URL downloads ignore this.
-        </span>
+        <span className="hint-text faint">{t("set.dl.workersHint")}</span>
       </div>
 
       {/* 1.3.x — Preferred max video quality. Applies to queue jobs
@@ -923,10 +886,7 @@ function DownloadsSection() {
           <option value="">{t("set.dl.qualitySource")}</option>
         </select>
         <span className="hint-text faint">
-          Cap for batch queue + extension sends. Picks the highest
-          variant ≤ cap; falls back to source if the video doesn't
-          go that high. The Download page's format picker overrides
-          this — it stays explicit.
+          {t("set.dl.qualityHint")}
         </span>
       </div>
 
@@ -952,10 +912,7 @@ function DownloadsSection() {
           onChange={(e) => setLimitDraft(e.target.value)}
           onBlur={(e) => commitLimit(e.target.value)}
         />
-        <span className="hint-text faint">
-          KiB/s per worker. Off = unlimited. e.g. <code>5000</code> ≈ 5
-          MB/s per parallel download.
-        </span>
+        <span className="hint-text faint">{t("set.dl.bandwidthHint")}</span>
       </div>
 
       {/* 1.10.0 — aria2c external downloader. Opt-in; the binary is
@@ -975,8 +932,8 @@ function DownloadsSection() {
           {aria2Busy
             ? t("set.dl.fastFetching")
             : settings.use_aria2c
-              ? "On — best for very large / long videos, or when a download is crawling (YouTube throttling one connection). For normal downloads the built-in engine is usually just as fast, so you can leave this off."
-              : "Only helps when YouTube throttles a single connection — i.e. big / long videos or a download stuck well below your real speed. Otherwise the built-in engine is as fast or faster, so keep this off unless a download is crawling. Fetched once on enable (~3 MB, Windows)."}
+              ? t("set.dl.fastOn")
+              : t("set.dl.fastOff")}
         </span>
       </div>
 
@@ -1020,15 +977,7 @@ function DownloadsSection() {
             {t("set.dl.openFolder")}
           </button>
         )}
-        <span className="hint-text faint">
-          The scrubber downloads a small local copy for buttery seeking,
-          plus tiny frame-exact windows where you pause.
-          <strong> Auto</strong> picks the best quality that stays small to
-          download — 720p when under ~1.5&nbsp;GB, else 360p (tiny even for
-          multi-hour videos), only streaming if 360p would top 3&nbsp;GB.
-          Cache lives at <code>{cacheInfo?.path ?? "…/cache/preview"}</code>,
-          auto-caps at 2&nbsp;GB; “Clear cache” wipes it now.
-        </span>
+        <span className="hint-text faint">{t("set.dl.previewHint")}</span>
       </div>
 
       <div className="settings-row">
@@ -1101,11 +1050,7 @@ function DownloadsSection() {
         >
           {settings.jog_sensitivity.toFixed(2)}×
         </span>
-        <span className="hint-text faint">
-          Mouse-drag sensitivity on the scrubber's fine-jog disc.
-          Higher = less drag needed per second of timeline.
-          Frame-step keys (←/→) ignore this. Default 1.00×.
-        </span>
+        <span className="hint-text faint">{t("set.dl.jogHint")}</span>
       </div>
     </section>
   );
@@ -1527,11 +1472,7 @@ function DiagnosticsSection() {
           {updating ? t("set.diag.updating") : t("set.diag.updateEngine")}
         </button>
       </div>
-      <p className="hint">
-        The download engine (yt-dlp) auto-updates silently on launch so
-        sites that change frequently keep working. Use this if something
-        breaks mid-session and you want the latest build immediately.
-      </p>
+      <p className="hint">{t("set.diag.engineHint")}</p>
       {updateMsg && (
         <div className="msg-row">
           <span className="label">engine</span>
@@ -1553,10 +1494,7 @@ function DiagnosticsSection() {
           {appUpdating ? t("set.diag.working") : t("set.diag.checkUpdates")}
         </button>
       </div>
-      <p className="hint">
-        Updates the whole app to the latest signed release. The installer
-        verifies the signature, runs silently, then relaunches Media Hub.
-      </p>
+      <p className="hint">{t("set.diag.appHint")}</p>
       {appUpdateMsg && (
         <div className="msg-row">
           <span className="label">app</span>
@@ -1584,15 +1522,15 @@ function DiagnosticsSection() {
 
       <dl className="settings-kv">
         <div>
-          <dt>Library</dt>
+          <dt>{t("set.diag.dtLibrary")}</dt>
           <dd>{libraryDir}</dd>
         </div>
         <div>
-          <dt>Thumbnails</dt>
+          <dt>{t("set.diag.dtThumbnails")}</dt>
           <dd>{thumbsDir}</dd>
         </div>
         <div>
-          <dt>Settings</dt>
+          <dt>{t("set.diag.dtSettings")}</dt>
           <dd>%APPDATA%\com.guilherme.mediahub\settings.json</dd>
         </div>
       </dl>
@@ -1606,12 +1544,7 @@ function DiagnosticsSection() {
           {t("set.diag.openLogs")}
         </button>
       </div>
-      <p className="hint">
-        If a download or transcode fails, open this folder and send{" "}
-        <code>media-hub.log</code> — it records the exact command, the full
-        ffmpeg output, and what the input file actually was (which ffmpeg
-        build, codecs, streams). That's everything needed to diagnose it.
-      </p>
+      <p className="hint">{t("set.diag.logHint")}</p>
       {logMsg && (
         <div className="msg-row err">
           <span className="label">logs</span>
