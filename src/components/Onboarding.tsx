@@ -69,8 +69,11 @@ function OnboardingModal() {
   // Draft state — collected across screens, committed on Finish.
   // Defaults match the existing settings defaults so a user who
   // hits Next without touching anything still gets sensible config.
+  // Transcode defaults to "none" ON PURPOSE — people click through the
+  // wizard without reading, and a non-none default silently transcodes
+  // every download (slow + huge files). Opt in, don't opt out.
   const [libraryRoot, setLibraryRoot] = useState<string>("");
-  const [preset, setPreset] = useState<TranscodePreset>("prores_422_lt");
+  const [preset, setPreset] = useState<TranscodePreset>("none");
   const [cookies, setCookies] = useState<CookiesSource>({ kind: "none" });
   const [filePath, setFilePath] = useState<string>("");
   const [browser, setBrowser] = useState<string>(BROWSERS[0]);
