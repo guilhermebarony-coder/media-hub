@@ -9,6 +9,28 @@ a structural decision).
 Format: dated sections, newest at top. Each entry self-contained —
 written so future-me (or future-Claude) can pick it up cold.
 
+## 2026-07-04 — Monolith split, part 1 (IMPROVEMENTS §2.4)
+
+`lib.rs` was 3325 lines. Started carving cohesive leaf commands into their
+own modules — behavior-neutral moves, verified by `cargo test` + the smoke
+test (transcode) passing unchanged after each.
+
+- `transcode.rs` (318 lines): `TranscodeProgress/Result`, `resolve_preset`
+  (+ its unit test), `media_transcode`.
+- `media_extract.rs` (238 lines): `ThumbnailResult`, `media_extract_thumbnail`
+  + `media_extract_waveform`.
+- lib.rs 3325 → 2863. Handler entries are now `transcode::…` / `media_extract::…`.
+
+Pattern for the next ones: sed the block out, prepend a module header +
+`use crate::{…}` imports, bump the moved commands to `pub`, register with
+the module prefix, `cargo check` + `cargo test`. NEXT candidates:
+- `preview.rs` (~310 lines: preview_proxy/intra/cache) — needs `js_runtime_args`,
+  `resolve_cookie_args`, `yt_dlp_capture` exposed `pub(crate)` first (they're
+  the shared yt-dlp helpers; ideally they move to a future `ytdlp.rs`).
+- Frontend `Library.tsx` (5004 lines) — the big one; split by concern
+  (grid / drawer / tag editor / filters). Riskier (React state), tsc-only
+  verification, so do it in small verified slices.
+
 ## 2026-07-03 — Lazy media tools (1.12.0): installer 140 MB → ~40 MB
 
 Addresses IMPROVEMENTS §2.1/2.2/2.3 (bundle bloat). ffmpeg (202 MB) + deno
