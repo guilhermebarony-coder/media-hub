@@ -98,11 +98,13 @@ button { font-family: inherit; }
 }
 /* MH app logo. Empty element (div in the TopBar, span in Onboarding) —
    rendered via background-image so both swap from one place, no JSX. */
+/* In-app mark: transparent lime "MH" glyph (no box) — the UI is always
+   dark, so letters-only reads cleaner than the boxed app icon. `contain`
+   keeps the letters uncropped. The boxed logo stays the OS/app icon. */
 .brand-mark {
   width: 16px; height: 16px;
-  border-radius: 4px;
   flex: 0 0 16px;
-  background: url('./assets/logo.png') center / cover no-repeat;
+  background: url('./assets/logo-mark.png') center / contain no-repeat;
 }
 .brand-name {
   font-size: 13px;
