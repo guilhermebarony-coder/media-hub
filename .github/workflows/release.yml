@@ -29,10 +29,12 @@ jobs:
             rust_target: aarch64-apple-darwin
             tauri_args: "--target aarch64-apple-darwin"
             fetch_sidecars: bash scripts/fetch-sidecars-mac.sh
+            smoke_test: bash scripts/smoke-test.sh
           - platform: windows-latest
             rust_target: x86_64-pc-windows-msvc
             tauri_args: ""
             fetch_sidecars: pwsh scripts/fetch-sidecars.ps1
+            smoke_test: pwsh scripts/smoke-test.ps1
 
     runs-on: ${{ matrix.platform }}
 
@@ -58,8 +60,22 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      # Layer A — pure-logic unit tests (parsers, JSON deserialization,
+      # preset resolution). Catches regressions like the null-chapters
+      # crash before they ship. Fast, no sidecars needed.
+      - name: Unit tests (cargo test)
+        working-directory: src-tauri
+        run: cargo test --lib
+
       - name: Fetch sidecars (yt-dlp + ffmpeg)
         run: ${{ matrix.fetch_sidecars }}
+
+      # Layer B — real pipeline smoke test with the ACTUAL fetched ffmpeg,
+      # BEFORE building. Catches "the bundled binary behaves differently"
+      # bugs (the transcode "no packets" failure) that unit tests can't see.
+      # Fails the release job -> no bad build reaches a tester.
+      - name: Smoke test (real ffmpeg pipeline)
+        run: ${{ matrix.smoke_test }}
 
       - name: Build + release
         uses: tauri-apps/tauri-action@v0

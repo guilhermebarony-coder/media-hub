@@ -9,6 +9,31 @@ a structural decision).
 Format: dated sections, newest at top. Each entry self-contained —
 written so future-me (or future-Claude) can pick it up cold.
 
+## 2026-07-03 — Test safety net (why + what)
+
+Two shipped-broken releases in one cycle (null-chapters crash in 1.11.0;
+transcode "no packets" from a bad ffmpeg nightly) exposed that we had zero
+automated checks. Added two complementary layers — they're blind to each
+other, which is the point:
+
+- **Layer A — unit tests** (`#[cfg(test)] mod tests` at the bottom of
+  `lib.rs`): pure parsers + JSON deserialization + preset resolution. Fast,
+  no sidecars. Includes the exact regression tests for both bugs above
+  (`metadata_tolerates_null_chapters`, `..._null_fragments_in_formats`).
+  Runs via `cargo test --lib`.
+- **Layer B — release smoke test** (`scripts/smoke-test.ps1` / `.sh`): runs
+  the REAL transcode pipeline with the ACTUAL fetched ffmpeg, before the
+  installer is built. Synthetic input (no YouTube flakiness); trims + runs
+  every CPU preset; fails if any output is empty. This is what would have
+  caught the ffmpeg-master transcode bug — nothing was wrong in our code,
+  so unit tests would have passed.
+
+Wiring: `.github/workflows/ci.yml` runs Layer A + `tsc` on every push/PR;
+`release.yml` runs Layer A **and** Layer B before `tauri build`, so a
+failing check blocks the release (no bad build reaches a tester). NVENC is
+skipped in the smoke test (CI runners have no NVIDIA GPU). Keep the smoke
+preset args in sync with `resolve_preset()`.
+
 ## 2026-07-02 — Transcode "no packets" saga + diagnostics system (1.11.3)
 
 Testers hit `Transcode failed: ffmpeg failed: [out#0/mp4] Nothing was

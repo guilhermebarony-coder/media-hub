@@ -3323,3 +3323,104 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+// =====================================================================
+// Unit tests (1.11.4) — pure parsing/decision logic.
+//
+// These run with `cargo test` (no network, no sidecars) and exist to
+// catch the class of regression that shipped broken releases this cycle:
+// a JSON field we couldn't deserialize, a progress token we misparsed, a
+// preset that silently changed. Each test below maps to a real bug or a
+// real invariant. The end-to-end pipeline (real ffmpeg/yt-dlp) is covered
+// separately by the release smoke test, not here.
+// =====================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn human_size_parses_units_and_edges() {
+        assert_eq!(parse_human_size("0B"), Some(0));
+        assert_eq!(parse_human_size("19MiB"), Some(19 * 1024 * 1024));
+        assert_eq!(parse_human_size("1.5GiB"), Some((1.5 * 1024.0 * 1024.0 * 1024.0) as u64));
+        assert_eq!(parse_human_size("1024"), Some(1024)); // no suffix = raw bytes
+        assert_eq!(parse_human_size(" 512KiB "), Some(512 * 1024));
+        // Aria emits these before it has an estimate — must be None, not 0.
+        assert_eq!(parse_human_size("--"), None);
+        assert_eq!(parse_human_size(""), None);
+    }
+
+    #[test]
+    fn aria_eta_parses_compound_tokens() {
+        assert_eq!(parse_aria_eta("8s"), Some(8));
+        assert_eq!(parse_aria_eta("1m6s"), Some(66));
+        assert_eq!(parse_aria_eta("1h2m3s"), Some(3723));
+        assert_eq!(parse_aria_eta("--"), None);
+        assert_eq!(parse_aria_eta("INF"), None);
+    }
+
+    #[test]
+    fn segment_label_is_filesystem_safe() {
+        assert_eq!(fmt_segment_label(0.0), "00-00-00");
+        assert_eq!(fmt_segment_label(3775.0), "01-02-55");
+        assert_eq!(fmt_segment_label(-5.0), "00-00-00"); // clamps, never negative
+    }
+
+    #[test]
+    fn presets_resolve_known_and_reject_unknown() {
+        let (_, ext, suffix) = resolve_preset("h264_mp4").unwrap();
+        assert_eq!((ext, suffix), ("mp4", "h264"));
+        assert_eq!(resolve_preset("prores_422_lt").unwrap().1, "mov");
+        assert_eq!(resolve_preset("dnxhr_sq").unwrap().2, "dnxhrsq");
+        assert_eq!(resolve_preset("h264_nvenc_mp4").unwrap().1, "mp4");
+        // Guards against the renderer smuggling arbitrary ffmpeg flags.
+        assert!(resolve_preset("rm -rf /").is_err());
+        assert!(resolve_preset("").is_err());
+    }
+
+    // REGRESSION (1.11.0): yt-dlp sends `"chapters": null` for videos with
+    // no chapters. `#[serde(default)]` alone rejected the explicit null and
+    // broke fetch for MOST videos. This is the exact payload that failed.
+    #[test]
+    fn metadata_tolerates_null_chapters() {
+        let json = r#"{"id":"abc","title":"t","chapters":null}"#;
+        let raw: RawYtDlp = serde_json::from_str(json).expect("null chapters must parse");
+        assert!(raw.chapters.is_empty());
+    }
+
+    #[test]
+    fn metadata_handles_missing_and_present_chapters() {
+        let missing: RawYtDlp = serde_json::from_str(r#"{"id":"a","title":"t"}"#).unwrap();
+        assert!(missing.chapters.is_empty());
+        let present: RawYtDlp = serde_json::from_str(
+            r#"{"id":"a","title":"t","chapters":[{"start_time":0.0,"end_time":5.0,"title":"Intro"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(present.chapters.len(), 1);
+    }
+
+    // REGRESSION (1.11.0): storyboard formats can carry `"fragments": null`;
+    // the same null-vs-missing trap. A whole metadata payload must survive.
+    #[test]
+    fn metadata_tolerates_null_fragments_in_formats() {
+        let json = r#"{"id":"a","title":"t","formats":[
+            {"format_id":"18","fragments":null},
+            {"format_id":"sb0","protocol":"mhtml","rows":10,"columns":10,
+             "width":160,"height":90,
+             "fragments":[{"url":"http://x/0.jpg","duration":10.0}]}
+        ]}"#;
+        let raw: RawYtDlp = serde_json::from_str(json).expect("null fragments must parse");
+        let sb = pick_storyboard(&raw.formats).expect("should pick the mhtml board");
+        assert_eq!((sb.tile_w, sb.rows, sb.cols), (160, 10, 10));
+        assert_eq!(sb.fragments.len(), 1);
+    }
+
+    #[test]
+    fn storyboard_absent_when_no_mhtml_format() {
+        let raw: RawYtDlp = serde_json::from_str(
+            r#"{"id":"a","title":"t","formats":[{"format_id":"18","vcodec":"avc1","acodec":"mp4a"}]}"#,
+        )
+        .unwrap();
+        assert!(pick_storyboard(&raw.formats).is_none());
+    }
+}

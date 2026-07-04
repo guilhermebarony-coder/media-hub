@@ -1,0 +1,46 @@
+name: CI
+
+# Fast feedback on every push / PR: typecheck + Rust unit tests. No
+# sidecars, no build — just the cheap checks that catch logic regressions
+# (like the null-chapters JSON crash) the moment they're committed, instead
+# of at release time. The full pipeline smoke test lives in release.yml.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Typecheck frontend
+        run: npx tsc --noEmit
+
+      - name: Rust unit tests
+        working-directory: src-tauri
+        run: cargo test --lib
