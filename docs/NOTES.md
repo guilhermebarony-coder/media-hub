@@ -32,8 +32,18 @@ test (transcode) passing unchanged after each.
   `#[derive(Serialize)]` was on the line above — cargo check caught the
   missing derive ("cannot find attribute serde"). Watch struct/derive
   boundaries when sed-slicing.
-- **lib.rs 3325 → 2184 (−34%, −1141 lines).** Handler entries now
-  `transcode::…` / `media_extract::…` / `preview::…` / `metadata::…`.
+- `playlist.rs` (202 lines): PlaylistInfo/Entry/RawEntry + `yt_fetch_playlist`.
+  GOTCHA: a `Deserialize` import used ONLY via `#[derive(Deserialize)]`
+  (no explicit trait call) trips a false "unused import" lint — fully-qualify
+  the derive (`#[derive(serde::Deserialize)]`) and drop the import, OR keep it
+  if there's a real trait use (as in metadata.rs's `null_default`). Moving the
+  deserializing structs out also left lib.rs's own `Deserialize` import unused.
+- **lib.rs 3325 → 1966 (−41%, −1359 lines).** Handler entries prefixed by
+  module (`transcode::` / `media_extract::` / `preview::` / `metadata::` /
+  `playlist::`). Remaining big items in lib.rs: `yt_download` (~810 lines, the
+  coupled core → future `download.rs`), the yt-dlp helpers + progress parsers,
+  `yt_resolve_stream_url`, `run()`/handler, JobRegistry. Also caught + fixed a
+  doc-comment that got split across the preview extraction.
 
 Pattern for the next ones: sed the block out, prepend a module header +
 `use crate::{…}` imports, bump the moved commands to `pub`, register with
