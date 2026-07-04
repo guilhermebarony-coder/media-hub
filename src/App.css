@@ -96,18 +96,13 @@ button { font-family: inherit; }
   border-right: 1px solid var(--line);
   height: 28px;
 }
+/* MH app logo. Empty element (div in the TopBar, span in Onboarding) —
+   rendered via background-image so both swap from one place, no JSX. */
 .brand-mark {
-  width: 14px; height: 14px;
-  border: 1.5px solid var(--accent);
-  border-radius: 3px;
-  position: relative;
-  flex: 0 0 14px;
-}
-.brand-mark::after {
-  content: '';
-  position: absolute;
-  inset: 2px;
-  border-top: 1.5px solid var(--accent);
+  width: 16px; height: 16px;
+  border-radius: 4px;
+  flex: 0 0 16px;
+  background: url('./assets/logo.png') center / cover no-repeat;
 }
 .brand-name {
   font-size: 13px;
