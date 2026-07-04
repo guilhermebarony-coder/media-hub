@@ -24,8 +24,16 @@ test (transcode) passing unchanged after each.
   exposing `js_runtime_args` / `resolve_cookie_args` / `yt_dlp_capture` as
   `pub(crate)` (shared yt-dlp helpers — flag for a future `ytdlp.rs`).
   Gotcha: pub commands returning a struct need the struct `pub` too (E0446).
-- **lib.rs 3325 → 2552 (−23%).** Handler entries now `transcode::…` /
-  `media_extract::…` / `preview::…`.
+- `metadata.rs` (374 lines): VideoMetadata/FormatOption/Chapter/Storyboard
+  structs, the Raw* deserialization + `null_default`, `project_format`,
+  `pick_storyboard`, `yt_fetch_metadata` (+ the 4 null-tolerance regression
+  tests). The yt-dlp helpers stayed in lib.rs (used here via `crate::`).
+  GOTCHA: the extraction started at `pub struct VideoMetadata` but its
+  `#[derive(Serialize)]` was on the line above — cargo check caught the
+  missing derive ("cannot find attribute serde"). Watch struct/derive
+  boundaries when sed-slicing.
+- **lib.rs 3325 → 2184 (−34%, −1141 lines).** Handler entries now
+  `transcode::…` / `media_extract::…` / `preview::…` / `metadata::…`.
 
 Pattern for the next ones: sed the block out, prepend a module header +
 `use crate::{…}` imports, bump the moved commands to `pub`, register with
