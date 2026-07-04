@@ -9,6 +9,35 @@ a structural decision).
 Format: dated sections, newest at top. Each entry self-contained —
 written so future-me (or future-Claude) can pick it up cold.
 
+## 2026-07-04 — i18n foundation + pt-BR (phase 1) + README + ext icon
+
+Goal (user): a Brazilian friend who doesn't read English can *operate* the app,
+not just read a translated manual → this is full-UI i18n, done in **verified
+phases** (not one mega-diff).
+
+- **i18n engine** `src/lib/i18n.tsx` — dependency-free. `LanguageProvider`
+  (wraps App, outermost), `useLang()` / `useT()`, flat string keys, English
+  fallback for any missing key. Lang persisted in `localStorage` ("mh.lang"),
+  auto-detects `pt` from `navigator.language` on first run. Dictionaries:
+  `src/locales/en.ts` (source) + `src/locales/pt.ts`. **Add a string:** add the
+  key to en.ts, use `t("key")`, then translate in pt.ts. **Add a language:**
+  new locale file + entry in `LANGS` + line in `DICTS`.
+- **Language switcher** `src/components/LanguagePicker.tsx` — globe + code
+  (EN/PT) dropdown in the top bar (next to background/settings). Icon.globe added.
+- **Phase 1 translated:** the app **shell** — left nav (Workspace/System +
+  all items), top bar (Active picker, search, background, settings, activity
+  badge). Verified tsc clean; switching flips these live.
+- **STILL ENGLISH (phase 2+, tracked):** Onboarding wizard, Download, Library,
+  Scrubber, Projects, Settings pages, and the in-app Help/manual content
+  (`helpContent.pt.ts` — the getHelpContent i18n path is ready, PT content not
+  written yet). These fall back to English until translated. Retrofit each by
+  swapping literals for `t("…")` and adding keys to both locales.
+
+Also: **README.md** fully rewritten (idiot-proof: download/install incl. the
+Windows SmartScreen "More info → Run anyway" step, macOS Gatekeeper, first-run,
+2-min tour, updating, extension install/pair, troubleshooting, dev setup, privacy).
+**Extension icons** regenerated to the MH mark (extension/icons/icon16/48/128).
+
 ## 2026-07-04 — Docs expansion + (?) hints + transcode-default fix
 
 Three things, pre-release:

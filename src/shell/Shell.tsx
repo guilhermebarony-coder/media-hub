@@ -4,8 +4,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { Icon } from "../lib/icons";
 import { useActiveProject } from "../lib/activeProject";
 import { useDownloads } from "../lib/downloads";
+import { useT } from "../lib/i18n";
 import { APP_VERSION } from "../lib/version";
 import { CommandPalette } from "../components/CommandPalette";
+import { LanguagePicker } from "../components/LanguagePicker";
 
 // 1.1.3 — lazy-load pages here (moved from App.tsx) so the Shell owns
 // the keep-alive lifecycle. Vite still produces one chunk per page;
@@ -218,6 +220,7 @@ function useNavShortcuts() {
 }
 
 function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
+  const t = useT();
   return (
     <div className="topbar">
       <div className="brand">
@@ -237,16 +240,17 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
         className="topbar-search"
         type="button"
         onClick={onOpenPalette}
-        title="Search clips (Ctrl+Space)"
+        title={t("topbar.searchTitle")}
       >
         <Icon.search width={13} height={13} />
-        <span>Search clips…</span>
+        <span>{t("topbar.searchClips")}</span>
         <span className="kbd">Ctrl Space</span>
       </button>
       <div className="topbar-icons">
         <TrayTooltipSync />
+        <LanguagePicker />
         <BackgroundModeButton />
-        <NavLink to="/settings" className="ic-btn" title="Settings">
+        <NavLink to="/settings" className="ic-btn" title={t("topbar.settings")}>
           <Icon.settings width={14} height={14} />
         </NavLink>
       </div>
@@ -272,7 +276,7 @@ function BackgroundModeButton() {
       type="button"
       className="ic-btn"
       onClick={() => void enterBackground()}
-      title="Run in background — hides to the tray, keeps downloading"
+      title={useT()("topbar.background")}
     >
       <Icon.eye width={15} height={15} />
     </button>
@@ -297,18 +301,17 @@ function TrayTooltipSync() {
 
 function ActivityBadge() {
   const { activeCount } = useDownloads();
+  const t = useT();
   if (activeCount === 0) return null;
+  const label = activeCount === 1 ? t("topbar.downloadingOne") : t("topbar.downloadingMany");
+  const title = t("topbar.activeDownloadsTitle")
+    .replace("{n}", String(activeCount))
+    .replace("{label}", label);
   return (
-    <NavLink
-      to="/download"
-      className="topbar-activity"
-      title={`${activeCount} active ${activeCount === 1 ? "download" : "downloads"} — click to view`}
-    >
+    <NavLink to="/download" className="topbar-activity" title={title}>
       <span className="topbar-activity-dot" />
       <span className="topbar-activity-count mono">{activeCount}</span>
-      <span className="topbar-activity-label">
-        {activeCount === 1 ? "downloading" : "downloads"}
-      </span>
+      <span className="topbar-activity-label">{label}</span>
     </NavLink>
   );
 }
@@ -328,6 +331,7 @@ function ActivityBadge() {
  */
 function ActiveProject() {
   const { scope, setScope, projects } = useActiveProject();
+  const t = useT();
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
@@ -350,7 +354,7 @@ function ActiveProject() {
   }, [open]);
 
   const isLibrary = scope.kind === "library";
-  const label = isLibrary ? "Library" : scope.name;
+  const label = isLibrary ? t("topbar.library") : scope.name;
 
   return (
     <div className="proj-picker-wrap" ref={wrapRef}>
@@ -362,7 +366,7 @@ function ActiveProject() {
         aria-expanded={open}
       >
         <div className="col">
-          <span className="label">Active</span>
+          <span className="label">{t("topbar.activeLabel")}</span>
           <span className="name-row">
             <span className="dot" />
             <span className="name">{label}</span>
@@ -386,8 +390,8 @@ function ActiveProject() {
             }}
           >
             <span className="dot lib" />
-            <span className="label">Library</span>
-            <span className="hint">reusable, lives forever</span>
+            <span className="label">{t("topbar.library")}</span>
+            <span className="hint">{t("topbar.libraryHint")}</span>
           </button>
 
           {projects.length > 0 && <div className="proj-menu-sep" />}
@@ -409,7 +413,7 @@ function ActiveProject() {
                 <span className="dot proj" />
                 <span className="label">{p.name}</span>
                 <span className="hint mono">
-                  {p.asset_count} {p.asset_count === 1 ? "clip" : "clips"}
+                  {p.asset_count} {p.asset_count === 1 ? t("topbar.clip") : t("topbar.clips")}
                 </span>
               </button>
             );
@@ -426,7 +430,7 @@ function ActiveProject() {
             }}
           >
             <Icon.plus width={11} height={11} />
-            <span className="label">New project…</span>
+            <span className="label">{t("topbar.newProject")}</span>
           </button>
         </div>
       )}
@@ -435,20 +439,21 @@ function ActiveProject() {
 }
 
 function Nav() {
+  const t = useT();
   return (
     <nav className="nav">
-      <div className="nav-section">Workspace</div>
-      <NavItem to="/download" label="Download" icon={<Icon.download className="ico" width={14} height={14} />} kbd="1" />
-      <NavItem to="/library" label="Library" icon={<Icon.library className="ico" width={14} height={14} />} kbd="2" />
-      <NavItem to="/projects" label="Projects" icon={<Icon.projects className="ico" width={14} height={14} />} kbd="3" />
+      <div className="nav-section">{t("nav.workspace")}</div>
+      <NavItem to="/download" label={t("nav.download")} icon={<Icon.download className="ico" width={14} height={14} />} kbd="1" />
+      <NavItem to="/library" label={t("nav.library")} icon={<Icon.library className="ico" width={14} height={14} />} kbd="2" />
+      <NavItem to="/projects" label={t("nav.projects")} icon={<Icon.projects className="ico" width={14} height={14} />} kbd="3" />
 
-      <div className="nav-section">System</div>
-      <NavItem to="/settings" label="Settings" icon={<Icon.settings className="ico" width={14} height={14} />} kbd="," />
-      <NavItem to="/help" label="Help" icon={<Icon.help className="ico" width={14} height={14} />} />
+      <div className="nav-section">{t("nav.system")}</div>
+      <NavItem to="/settings" label={t("nav.settings")} icon={<Icon.settings className="ico" width={14} height={14} />} kbd="," />
+      <NavItem to="/help" label={t("nav.help")} icon={<Icon.help className="ico" width={14} height={14} />} />
 
       <div className="nav-foot">
         <span className="stat-dot" />
-        <span>ready</span>
+        <span>{t("nav.ready")}</span>
         <span style={{ marginLeft: "auto" }} className="mono faint">
           dev
         </span>

@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Shell } from "./shell/Shell";
 import { ActiveProjectProvider } from "./lib/activeProject";
 import { SettingsProvider, useSettings } from "./lib/settings";
+import { LanguageProvider } from "./lib/i18n";
 import { DownloadsProvider, useDownloads } from "./lib/downloads";
 import { confirmDialog } from "./lib/dialog";
 import { DialogHost } from "./components/DialogHost";
@@ -258,6 +259,7 @@ function CookieConsentPrompt() {
 
 export default function App() {
   return (
+    <LanguageProvider>
     <SettingsProvider>
       {/* First-run onboarding overlay (0.8.D). Shows itself when
        *  settings.onboarding_complete is false; renders nothing
@@ -291,5 +293,6 @@ export default function App() {
           renders nothing. Highest layer so it covers everything. */}
       <ToolsGate />
     </SettingsProvider>
+    </LanguageProvider>
   );
 }

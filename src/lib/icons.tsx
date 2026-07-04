@@ -51,6 +51,12 @@ export const Icon = {
       <path d="M8 11.6h.01" />
     </svg>
   ),
+  globe: (p: P = {}) => (
+    <svg viewBox="0 0 16 16" {...base} {...p}>
+      <circle cx="8" cy="8" r="6" />
+      <path d="M2 8h12M8 2c1.8 1.6 2.8 3.8 2.8 6S9.8 12.4 8 14M8 2C6.2 3.6 5.2 5.8 5.2 8S6.2 12.4 8 14" />
+    </svg>
+  ),
   filter: (p: P = {}) => (
     <svg viewBox="0 0 16 16" {...base} {...p}>
       <path d="M2 4h12M4 8h8M6 12h4" />
