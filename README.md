@@ -305,8 +305,9 @@ file) and testing releases genuinely help.
 
 ## License
 
-See [LICENSE](LICENSE) if present; otherwise all rights reserved by the author
-pending a license decision.
+Media Hub is released under the **[MIT License](LICENSE)** — free to use,
+modify, and distribute.
 
-Media Hub bundles/uses **yt-dlp**, **ffmpeg**, and **deno**, each under their
-own licenses.
+It uses **yt-dlp**, **ffmpeg**, and **deno** as separate helper binaries, each
+under its own license (The Unlicense, LGPL/GPL, and MIT respectively). They are
+downloaded on first run, not bundled into this repository.
