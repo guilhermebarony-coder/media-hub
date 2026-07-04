@@ -32,9 +32,12 @@ on first launch + as a safety anchor).
 - `externalBin` in tauri.conf.json is now just `binaries/yt-dlp`.
   fetch-sidecars still pulls ffmpeg (the smoke test needs it locally).
 
-RISK: catastrophic failure mode (first run can't transcode until download
-finishes). MUST manual-test the first-run flow in dev before releasing:
-delete `<app_data>/com.guilherme.mediahub/bin`, launch, watch the gate.
+VERIFIED (2026-07-04, dev): on a machine with no ffmpeg in `bin`, launch
+showed the setup gate, ffmpeg.exe downloaded into
+`%APPDATA%\com.guilherme.mediahub\bin`, and fetch + transcode worked. Note
+the `bin` dir is Roaming `app_data_dir` (%APPDATA%), NOT the Local cache dir
+(%LOCALAPPDATA%, which holds `preview/` + `EBWebView/`). The old bundled
+ffmpeg next to the installed .exe is ignored by 1.12.0 — it only uses `bin`.
 
 ## 2026-07-03 — Test safety net (why + what)
 

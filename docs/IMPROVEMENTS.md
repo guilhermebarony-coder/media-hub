@@ -83,30 +83,27 @@ that's N sequential ffmpeg spawns. Batch them with a small worker pool
 
 ## 2. Bloat
 
-### 2.1 ~322 MB of bundled sidecars — shipped in EVERY auto-update ⚠️ (biggest weight win)
+### 2.1 ~322 MB of bundled sidecars — shipped in EVERY auto-update ⚠️ (biggest weight win) — ✅ DONE v1.12.0
 - `ffmpeg` **202 MB**, `deno` **101 MB**, `yt-dlp` 18 MB.
 - They're bundled into the installer **and** the updater artifact, so
   **every 1.x→1.y auto-update re-downloads ~322 MB.** That's the single
   worst weight problem and it grows with each release.
 
-**Fix (high value): lazy-download on first run.** We already have the
-pattern — `updater::resolve_yt_dlp` prefers a managed binary in appdata
-over the bundled one. Extend it to ffmpeg + deno: ship a ~10 MB
-installer, fetch the three tools to appdata on first launch (progress
-UI), and updates become tiny. This also lets the engines update
-independently of the app.
+**DONE (v1.12.0): lazy-download on first run.** ffmpeg + deno now download
+to `<app_data>/bin` on first launch via `tools.rs` + a `ToolsGate` setup
+screen (verified 2026-07-04). Only yt-dlp stays bundled. Installer ~140 MB
+→ ~40 MB; auto-updates no longer re-ship the engines. See NOTES 2026-07-03.
 
-### 2.2 ffmpeg is the full BtbN GPL static build (202 MB)
-We only use a handful of muxers/encoders (copy mux, ProRes, DNxHR,
-H.264, AAC/MP3, thumbnail/waveform). A **custom-stripped ffmpeg** (or a
-shared-libs build) lands ~30–60 MB. Even without lazy-download, this
-roughly halves the bundle.
+### 2.2 ffmpeg is the full BtbN GPL static build (202 MB) — ✅ mostly moot after 2.1
+ffmpeg is no longer in the installer at all (2.1). If we ever want the
+first-run *download* smaller too, a custom-stripped ffmpeg (~30–60 MB vs
+the full n7.1 GPL build) is the lever — lower priority now that it's not
+shipped in every update.
 
-### 2.3 deno 101 MB just to solve JS challenges
-Deno is the *reliable* runtime, but heavy. Options: bundle **QuickJS**
-(~1 MB, yt-dlp supports it) and fall back to a lazy-downloaded Deno only
-if QuickJS fails the challenge; or lazy-download Deno (2.1). Worth a spike
-to see if QuickJS handles current YouTube sig/nsig.
+### 2.3 deno 101 MB just to solve JS challenges — ✅ moot after 2.1 (still an option to shrink first-run)
+deno is lazy-downloaded now (2.1), so it's off the installer. A future
+spike could swap it for **QuickJS** (~1 MB, yt-dlp supports it) to shrink
+the first-run download further, but no longer urgent.
 
 ### 2.4 `Library.tsx` is 5,004 lines; `library.rs` 2,978; `lib.rs` 2,497
 Not a *runtime* cost, but a real maintainability tax (and big React files
