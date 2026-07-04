@@ -2,6 +2,31 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { getHelpContent, type HelpEntry } from "../lib/helpContent";
+import { buildHelpIndex, searchHelp } from "../lib/helpSearch";
+
+/** One help topic card. Shows a category label when it appears in flat
+ *  (search) results, so people know which screen it belongs to. */
+function HelpArticle({ entry, categoryLabel }: { entry: HelpEntry; categoryLabel?: string }) {
+  return (
+    <article id={`help-${entry.id}`} className="help-entry">
+      <div className="help-entry-head">
+        <h3>{entry.title}</h3>
+        {entry.shortcut && <span className="kbd">{entry.shortcut}</span>}
+        {categoryLabel && <span className="help-entry-cat">{categoryLabel}</span>}
+      </div>
+      {entry.body.map((p, i) => (
+        <p key={i} className="help-p">
+          {p}
+        </p>
+      ))}
+      {entry.tip && (
+        <p className="help-tip">
+          <strong>Tip</strong> {entry.tip}
+        </p>
+      )}
+    </article>
+  );
+}
 
 /**
  * Help / Manual page. Searchable, grouped by screen, with stable per-entry
@@ -22,34 +47,32 @@ export default function HelpPage() {
   // for any unknown locale, so wiring an app language later is a one-liner.
   const { categories, entries } = getHelpContent();
 
-  const q = query.trim().toLowerCase();
-  const tokens = q ? q.split(/\s+/) : [];
+  const searching = query.trim().length > 0;
 
-  // Filtered entries. A query matches when every token appears somewhere in
-  // the title, keywords, or body — so people can search by the words they'd
-  // actually use, not just the exact button label.
-  const filtered = useMemo<HelpEntry[]>(() => {
-    if (tokens.length === 0) return entries;
-    return entries.filter((e) => {
-      const hay = (
-        e.title +
-        " " +
-        e.keywords.join(" ") +
-        " " +
-        e.body.join(" ") +
-        (e.tip ? " " + e.tip : "")
-      ).toLowerCase();
-      return tokens.every((t) => hay.includes(t));
-    });
-  }, [tokens, entries]);
+  // Category id → title, for labelling flat search results.
+  const catTitle = useMemo(
+    () => new Map(categories.map((c) => [c.id, c.title])),
+    [categories],
+  );
 
-  // Group filtered entries back under their categories, preserving order.
+  // Build the scored-search index once per content set (see lib/helpSearch).
+  const index = useMemo(() => buildHelpIndex(entries, categories), [entries, categories]);
+
+  // Ranked results for the current query. Empty when not searching (we show
+  // the grouped browse view instead). The scorer is typo- and phrasing-
+  // tolerant, so "what does fast download do" still finds the right topic.
+  const results = useMemo<HelpEntry[]>(
+    () => (searching ? searchHelp(index, query) : []),
+    [index, query, searching],
+  );
+
+  // Grouped browse view (no query): entries under their categories, in order.
   const grouped = useMemo(() => {
     return categories.map((cat) => ({
       cat,
-      entries: filtered.filter((e) => e.category === cat.id),
+      entries: entries.filter((e) => e.category === cat.id),
     })).filter((g) => g.entries.length > 0);
-  }, [filtered, categories]);
+  }, [entries, categories]);
 
   // Deep-link: scroll to #<id> and flash it. Runs on hash change and when
   // the search is cleared (so a (?) target that was filtered out reappears).
@@ -70,7 +93,7 @@ export default function HelpPage() {
       window.clearTimeout(t);
       window.removeEventListener("hashchange", jump);
     };
-  }, [location.hash, q]);
+  }, [location.hash, searching]);
 
   // Focus search on "/" (common help-page convention), unless already typing.
   useEffect(() => {
@@ -95,14 +118,15 @@ export default function HelpPage() {
   }
 
   const totalCount = entries.length;
-  const searching = tokens.length > 0;
 
   return (
     <div className="content">
       <div className="content-header">
         <div className="ch-title">Help &amp; Manual</div>
         <span className="ch-meta">
-          {searching ? `${filtered.length} / ${totalCount} topics` : `${totalCount} topics`}
+          {searching
+            ? `${results.length} result${results.length === 1 ? "" : "s"}`
+            : `${totalCount} topics`}
         </span>
         <div className="ch-spacer" />
         <span className="mono faint" style={{ fontSize: 11 }}>
@@ -158,40 +182,36 @@ export default function HelpPage() {
             )}
 
             <div className="help-sections">
-              {grouped.length === 0 && (
+              {/* --- Searching: flat, relevance-ranked results --- */}
+              {searching && results.length === 0 && (
                 <div className="help-empty">
                   <Icon.help width={22} height={22} />
                   <p>No topics match “{query}”.</p>
+                  <p className="faint" style={{ fontSize: 12 }}>
+                    Try fewer or simpler words — e.g. “audio”, “slow”, “trash”.
+                  </p>
                   <button type="button" className="btn btn-secondary" onClick={() => setQuery("")}>
                     Clear search
                   </button>
                 </div>
               )}
 
-              {grouped.map(({ cat, entries }) => (
-                <section key={cat.id} className="help-group" id={`help-cat-${cat.id}`}>
-                  <h2 className="help-group-title">{cat.title}</h2>
-                  {cat.blurb && !searching && <p className="help-group-blurb">{cat.blurb}</p>}
-                  {entries.map((e) => (
-                    <article key={e.id} id={`help-${e.id}`} className="help-entry">
-                      <div className="help-entry-head">
-                        <h3>{e.title}</h3>
-                        {e.shortcut && <span className="kbd">{e.shortcut}</span>}
-                      </div>
-                      {e.body.map((p, i) => (
-                        <p key={i} className="help-p">
-                          {p}
-                        </p>
-                      ))}
-                      {e.tip && (
-                        <p className="help-tip">
-                          <strong>Tip</strong> {e.tip}
-                        </p>
-                      )}
-                    </article>
-                  ))}
-                </section>
-              ))}
+              {searching &&
+                results.map((e) => (
+                  <HelpArticle key={e.id} entry={e} categoryLabel={catTitle.get(e.category)} />
+                ))}
+
+              {/* --- Browsing: grouped by category --- */}
+              {!searching &&
+                grouped.map(({ cat, entries }) => (
+                  <section key={cat.id} className="help-group" id={`help-cat-${cat.id}`}>
+                    <h2 className="help-group-title">{cat.title}</h2>
+                    {cat.blurb && <p className="help-group-blurb">{cat.blurb}</p>}
+                    {entries.map((e) => (
+                      <HelpArticle key={e.id} entry={e} />
+                    ))}
+                  </section>
+                ))}
             </div>
           </div>
         </div>

@@ -4773,6 +4773,19 @@ body.lib-resizing-h * {
   font-weight: 600;
   color: var(--text-0);
 }
+/* Category label shown on flat search results so people know which screen
+   a matched topic lives on. Pushed to the right of the row. */
+.help-entry-cat {
+  margin-left: auto;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-2);
+  background: var(--bg-3);
+  border-radius: 4px;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
 .help-p {
   margin: 4px 0;
   font-size: 12.5px;

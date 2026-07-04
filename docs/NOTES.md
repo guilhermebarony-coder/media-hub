@@ -48,6 +48,18 @@ entries if the UI adds/removes buttons.
   locales fall back to en. No Help.tsx / CSS changes. (App has no global
   locale yet — when one lands, pass it into `getHelpContent`.)
 
+**Smart search (`lib/helpSearch.ts`, dependency-free).** Natural-language +
+typo-tolerant, no ML/deps (pure JS, instant over ~60 entries). Pipeline:
+drop stopwords → SCORE + RANK (not all-must-match) → field weighting
+(title 10 > keywords 7 > category 3 > body 2) → bounded Levenshtein for typos
+→ small SYNONYMS map (convert→transcode, login→cookies, laggy→slow, mp3→audio,
+fast→speed/aria2…) so people can phrase it their way. Verified: "what does
+fast download do"→fast-download topics, "how do i get mp3"→Audio tab,
+"convert to prores"→presets, "downlod slow"/"cookis login" (typos) resolve.
+While searching the page shows a **flat relevance-ranked list** with a
+per-result category chip; browsing (no query) stays grouped w/ the nav.
+To tune: edit `STOPWORDS` / `SYNONYMS` / field weights in helpSearch.ts.
+
 UI fixes after first review: search is now a full-bleed **opaque sticky bar**
 (`.help-searchbar`, breaks out of `.content-body` padding) so scrolled content
 can't peek around/under it; and searching switches `.help-layout` to a single
