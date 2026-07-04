@@ -19,7 +19,13 @@ test (transcode) passing unchanged after each.
   (+ its unit test), `media_transcode`.
 - `media_extract.rs` (238 lines): `ThumbnailResult`, `media_extract_thumbnail`
   + `media_extract_waveform`.
-- lib.rs 3325 → 2863. Handler entries are now `transcode::…` / `media_extract::…`.
+- `preview.rs` (323 lines): preview_proxy / intra_window / cache_info /
+  cache_clear + prune_preview_cache + the Preview* structs. Required
+  exposing `js_runtime_args` / `resolve_cookie_args` / `yt_dlp_capture` as
+  `pub(crate)` (shared yt-dlp helpers — flag for a future `ytdlp.rs`).
+  Gotcha: pub commands returning a struct need the struct `pub` too (E0446).
+- **lib.rs 3325 → 2552 (−23%).** Handler entries now `transcode::…` /
+  `media_extract::…` / `preview::…`.
 
 Pattern for the next ones: sed the block out, prepend a module header +
 `use crate::{…}` imports, bump the moved commands to `pub`, register with
