@@ -60,15 +60,20 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      # Fetch sidecars FIRST — `cargo test` below compiles the crate, and
+      # tauri-build validates that the externalBin resource
+      # (binaries/yt-dlp-<triple>) exists at compile time. If we run tests
+      # before fetching, that check fails with "resource path ... doesn't
+      # exist" (exit 101). So: fetch, then test, then smoke, then build.
+      - name: Fetch sidecars (yt-dlp + ffmpeg)
+        run: ${{ matrix.fetch_sidecars }}
+
       # Layer A — pure-logic unit tests (parsers, JSON deserialization,
       # preset resolution). Catches regressions like the null-chapters
-      # crash before they ship. Fast, no sidecars needed.
+      # crash before they ship.
       - name: Unit tests (cargo test)
         working-directory: src-tauri
         run: cargo test --lib
-
-      - name: Fetch sidecars (yt-dlp + ffmpeg)
-        run: ${{ matrix.fetch_sidecars }}
 
       # Layer B — real pipeline smoke test with the ACTUAL fetched ffmpeg,
       # BEFORE building. Catches "the bundled binary behaves differently"
