@@ -16,6 +16,7 @@ const LibraryPage = lazy(() => import("../pages/Library"));
 const DownloadPage = lazy(() => import("../pages/Download"));
 const ProjectsPage = lazy(() => import("../pages/Projects"));
 const SettingsPage = lazy(() => import("../pages/Settings"));
+const HelpPage = lazy(() => import("../pages/Help"));
 
 /**
  * Suspense fallback for the first load of each page's chunk. After
@@ -68,7 +69,7 @@ export function Shell() {
 
   // Default route — if the user lands on a path we don't recognize,
   // bounce them to /library (same as the old wildcard route).
-  const known = pathname === "/library" || pathname === "/download" || pathname === "/projects" || pathname === "/settings";
+  const known = pathname === "/library" || pathname === "/download" || pathname === "/projects" || pathname === "/settings" || pathname === "/help";
 
   return (
     <div className="mh">
@@ -103,6 +104,13 @@ export function Shell() {
             <div className="keep-page" hidden={pathname !== "/settings"}>
               <Suspense fallback={<RouteLoading />}>
                 <SettingsPage />
+              </Suspense>
+            </div>
+          )}
+          {visited.has("/help") && (
+            <div className="keep-page" hidden={pathname !== "/help"}>
+              <Suspense fallback={<RouteLoading />}>
+                <HelpPage />
               </Suspense>
             </div>
           )}
@@ -436,6 +444,7 @@ function Nav() {
 
       <div className="nav-section">System</div>
       <NavItem to="/settings" label="Settings" icon={<Icon.settings className="ico" width={14} height={14} />} kbd="," />
+      <NavItem to="/help" label="Help" icon={<Icon.help className="ico" width={14} height={14} />} />
 
       <div className="nav-foot">
         <span className="stat-dot" />

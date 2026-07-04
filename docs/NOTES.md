@@ -9,6 +9,74 @@ a structural decision).
 Format: dated sections, newest at top. Each entry self-contained —
 written so future-me (or future-Claude) can pick it up cold.
 
+## 2026-07-04 — User manual / FAQ (docs/MANUAL.md)
+
+Wrote `docs/MANUAL.md` — a plain-language manual covering **every screen and
+button**, aimed at non-editors too. Organized by screen (top bar, nav,
+Download, Scrubber, Library, Projects, Settings) + a "core ideas" section
+(Library vs Projects, Trash, cookies, transcode presets, preview quality,
+background mode) + shortcuts + troubleshooting. Each entry has a `Keywords:`
+line (search by the words people actually use) and a **stable anchor id**
+in `{#kebab-id}`.
+
+**In-app Help page (built).** `src/pages/Help.tsx` + `src/lib/helpContent.ts`
+render the same content in-app: sticky **search box** (matches title +
+keywords + body, multi-token AND), category jump-nav, grouped sections.
+Reached via a **Help** item in the left nav under "System" (Icon.help added).
+Route `/help`, keep-alive'd by the Shell like the other pages.
+- `helpContent.ts` is the render SOURCE; its entry `id`s == MANUAL.md anchors.
+  Keep the two roughly in sync when the UI changes (or later generate one from
+  the other). tsc clean.
+- **Deep-link ready for the (?) plan:** navigating to `/help#<id>` scrolls to
+  that entry (id `help-<id>`) and pulses it (`.help-flash`). The effect also
+  listens to `hashchange` so re-clicking a (?) while Help is already mounted
+  re-jumps. So the future per-button (?) icon just needs to route to
+  `/help#dl-download` etc.
+
+**Rule: never rename an existing anchor/id once the (?) links point at it; add
+new ones, keep old.** Content is button-complete as of the current UI (audited
+Shell/Download/Scrubber/Library/Projects/Settings for real labels). Refresh
+entries if the UI adds/removes buttons.
+
+**Extending it later (both cheap):**
+- *Add a topic:* append a `HelpEntry` to `HELP_ENTRIES` with a `category`. No
+  page changes. (Add a category by appending to `HELP_CATEGORIES`.)
+- *Translate:* the page reads `getHelpContent(locale)`, not the arrays
+  directly. To add e.g. pt-BR: create `helpContent.pt.ts` exporting a
+  `HelpContent` with the **same entry/category ids** (only translate title /
+  body / tip / keywords), then add a `case "pt"` in `getHelpContent`. Unknown
+  locales fall back to en. No Help.tsx / CSS changes. (App has no global
+  locale yet — when one lands, pass it into `getHelpContent`.)
+
+UI fixes after first review: search is now a full-bleed **opaque sticky bar**
+(`.help-searchbar`, breaks out of `.content-body` padding) so scrolled content
+can't peek around/under it; and searching switches `.help-layout` to a single
+full-width column (`.flat`) instead of cramming results into the 160px nav slot.
+
+## 2026-07-04 — Monolith split banked here (IMPROVEMENTS §2.4, Rust side)
+
+Calling the Rust monolith split **substantially done at −41%.** Rationale:
+the safe, high-value slices are all extracted (5 modules, each behavior-
+neutral + test-verified). The only big Rust piece left is `yt_download`
+(~810 lines → `download.rs`), and it's a *different animal* — it's the
+coupled core (JobRegistry, aria2, progress atomics, segment trims, library
+inserts), it's the exact path every tester's download hits, and **relocating
+it wouldn't decouple it** (still one 810-line fn, just in another file). The
+real win there is *decomposing* it (progress / segments / finalize), which is
+a feature-risk project, not a mechanical move. Low reward for the risk → not
+worth doing as a cold refactor.
+
+Deferred (tracked, not abandoned):
+- `yt_download` **decomposition** (not just relocation) — do it when actively
+  reworking the download path, with extra verification.
+- Frontend `Library.tsx` (5004 lines) — the biggest *actual* maintainability
+  pain (hurts HMR + re-render reasoning). Best done when working in that file
+  anyway, via the two-phase plan (Phase A: `library/shared.ts` types+helpers;
+  Phase B: component clusters). Not a cold refactor.
+
+Momentum → **Proxy generation (IMPROVEMENTS §3.1)**, the top editor ask; the
+transcode engine already exists.
+
 ## 2026-07-04 — Monolith split, part 1 (IMPROVEMENTS §2.4)
 
 `lib.rs` was 3325 lines. Started carving cohesive leaf commands into their

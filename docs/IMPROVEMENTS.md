@@ -105,12 +105,24 @@ deno is lazy-downloaded now (2.1), so it's off the installer. A future
 spike could swap it for **QuickJS** (~1 MB, yt-dlp supports it) to shrink
 the first-run download further, but no longer urgent.
 
-### 2.4 `Library.tsx` is 5,004 lines; `library.rs` 2,978; `lib.rs` 2,497
+### 2.4 `Library.tsx` is 5,004 lines; `library.rs` 2,978; `lib.rs` 2,497 — 🟡 PARTIAL (Rust banked v1.12.x)
+**Rust side substantially done (2026-07-04).** `lib.rs` 3325 → 1966 (−41%)
+across 5 behavior-neutral, test-verified modules: `transcode.rs`,
+`media_extract.rs`, `preview.rs`, `metadata.rs`, `playlist.rs`. See NOTES
+2026-07-04. **Banked here on purpose** — the only big Rust piece left is
+`yt_download` (~810 lines), the coupled core; *relocating* it wouldn't
+decouple it, and it's the exact path every download hits, so it's high-risk
+/ low-reward as a cold move. Real work there is *decomposition* (progress /
+segments / finalize), deferred to when the download path is actively reworked.
+
+**Still open (tracked, deferred):** `Library.tsx` (5004 lines) — the biggest
+*actual* pain; do it when working in that file, two-phase (`library/shared.ts`
+then component clusters). `library.rs` (2978) split by schema/queries/tags.
+
 Not a *runtime* cost, but a real maintainability tax (and big React files
 hurt HMR + re-render reasoning). `Library.tsx` especially is doing grid +
 inspector + folders + context menus + drag + toasts in one file — split
 into `library/` submodules (FolderTree, Inspector, Grid, CardContextMenu).
-`lib.rs` could shed the yt-dlp/ffmpeg command builders into a `ytdlp.rs`.
 
 ---
 

@@ -44,6 +44,13 @@ export const Icon = {
       <path d="M13.5 13.5L10.5 10.5" />
     </svg>
   ),
+  help: (p: P = {}) => (
+    <svg viewBox="0 0 16 16" {...base} {...p}>
+      <circle cx="8" cy="8" r="6" />
+      <path d="M6.1 6.2a1.9 1.9 0 0 1 3.7.6c0 1.3-1.8 1.6-1.8 2.9" />
+      <path d="M8 11.6h.01" />
+    </svg>
+  ),
   filter: (p: P = {}) => (
     <svg viewBox="0 0 16 16" {...base} {...p}>
       <path d="M2 4h12M4 8h8M6 12h4" />
