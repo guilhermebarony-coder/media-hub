@@ -9,6 +9,10 @@ use tauri::{AppHandle, Manager};
 use crate::{settings, tools};
 use crate::{js_runtime_args, resolve_cookie_args, yt_dlp_capture};
 
+/// EXPERIMENT (exp/preview-proxy) — local proxy for buttery scrubbing.
+///
+/// Downloads a small (~360p, muxed) copy of the source into the app
+/// cache and returns its local path. The Scrubber plays the remote
 /// stream immediately (Tier 0), then swaps to this local file when it
 /// lands — local seeks have no network round-trip, so jogging/cutting
 /// feels far smoother. Cached per video id, so re-opening is instant.

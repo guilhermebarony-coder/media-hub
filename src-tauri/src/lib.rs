@@ -648,11 +648,6 @@ fn fmt_segment_label(sec: f64) -> String {
     format!("{:02}-{:02}-{:02}", h, m, s)
 }
 
-/// EXPERIMENT (exp/preview-proxy) — local proxy for buttery scrubbing.
-///
-/// Downloads a small (~360p, muxed) copy of the source into the app
-/// cache and returns its local path. The Scrubber plays the remote
-
 #[tauri::command]
 async fn yt_download(
     app: AppHandle,
