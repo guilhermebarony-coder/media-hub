@@ -6,6 +6,7 @@ import { Icon } from "../lib/icons";
 import { alertDialog, confirmDialog } from "../lib/dialog";
 import { HelpHint } from "../components/HelpHint";
 import { useSettings } from "../lib/settings";
+import { useT } from "../lib/i18n";
 import { APP_VERSION } from "../lib/version";
 import {
   RENAME_PRESETS,
@@ -28,11 +29,12 @@ import {
  */
 export default function SettingsPage() {
   const { ready } = useSettings();
+  const t = useT();
 
   return (
     <div className="content">
       <div className="content-header">
-        <div className="ch-title">Settings</div>
+        <div className="ch-title">{t("set.title")}</div>
         <span className="ch-meta">0.8 shipped · 0.9 polish in flight</span>
         <div className="ch-spacer" />
         <span className="mono faint" style={{ fontSize: 11 }}>
@@ -63,6 +65,7 @@ const BROWSERS = ["chrome", "firefox", "edge", "brave", "vivaldi", "opera", "chr
 
 function SourcesSection() {
   const { settings, save } = useSettings();
+  const t = useT();
   const src = settings.cookies_source;
 
   function setMode(kind: CookiesSource["kind"]) {
@@ -83,7 +86,7 @@ function SourcesSection() {
   return (
     <section className="card-box">
       <h2>
-        Sources <span className="chip">browser cookies</span>
+        {t("set.sec.sources")} <span className="chip">{t("set.chip.cookies")}</span>
         <HelpHint id="set-sources" title="Sources (cookies / login)">
           Some videos only play if you're signed in — age-restricted,
           members-only, that kind of thing. This lets Media Hub borrow your
@@ -96,20 +99,14 @@ function SourcesSection() {
           }
         />
       </h2>
-      <p className="hint">
-        Some videos require sign-in — age-restricted YouTube, private
-        Twitter/X posts, members-only content on any platform. Point
-        at a browser you're signed in to and yt-dlp will pull the
-        cookies for you. Public videos work without any of this —
-        leave at <strong>None</strong> if you don't hit the wall.
-      </p>
+      <p className="hint">{t("set.src.intro")}</p>
 
       {/* 1.8.x — master consent switch for the automatic browser-login
           cookie system (extension harvest → cache → use). Off by default;
           this is the always-available on/off control + the "lose faith,
           flip it off" lever. */}
       <div className="bar">
-        <span className="settings-label">Browser login</span>
+        <span className="settings-label">{t("set.src.browserLogin")}</span>
         <label className="switch">
           <input
             type="checkbox"
@@ -125,14 +122,12 @@ function SourcesSection() {
           <span className="switch-slider" />
         </label>
         <span className="hint-text">
-          {settings.cookies_enabled
-            ? "Media Hub uses cookies the extension syncs from your browser, for restricted downloads."
-            : "Off — restricted/private videos may fail until you enable this (or pick a source below)."}
+          {settings.cookies_enabled ? t("set.src.loginOn") : t("set.src.loginOff")}
         </span>
       </div>
 
       <div className="settings-row">
-        <span className="settings-label">Mode</span>
+        <span className="settings-label">{t("set.src.mode")}</span>
         <div className="settings-radio-group">
           {(["none", "browser", "file"] as const).map((m) => (
             <label key={m} className={"settings-radio" + (src.kind === m ? " active" : "")}>
@@ -143,7 +138,13 @@ function SourcesSection() {
                 checked={src.kind === m}
                 onChange={() => setMode(m)}
               />
-              <span>{m === "none" ? "None" : m === "browser" ? "From browser" : "From file"}</span>
+              <span>
+                {m === "none"
+                  ? t("set.opt.none")
+                  : m === "browser"
+                    ? t("set.opt.fromBrowser")
+                    : t("set.opt.fromFile")}
+              </span>
             </label>
           ))}
         </div>
@@ -152,7 +153,7 @@ function SourcesSection() {
       {src.kind === "browser" && (
         <>
           <div className="settings-row">
-            <span className="settings-label">Browser</span>
+            <span className="settings-label">{t("set.src.browser")}</span>
             <select
               className="field-select"
               value={src.browser}
@@ -193,7 +194,7 @@ function SourcesSection() {
       {src.kind === "file" && (
         <>
           <div className="settings-row">
-            <span className="settings-label">Path</span>
+            <span className="settings-label">{t("set.src.path")}</span>
             <input
               className="field-input"
               type="text"
@@ -222,7 +223,7 @@ function SourcesSection() {
                 }
               }}
             >
-              <Icon.folder width={12} height={12} /> Browse…
+              <Icon.folder width={12} height={12} /> {t("set.browse")}
             </button>
             <span className="hint-text faint">
               Netscape-format cookies.txt. Tip: avoid paths with
@@ -265,6 +266,7 @@ const PLATFORMS = [
 
 function OverridesEditor() {
   const { settings, save } = useSettings();
+  const t = useT();
   const overrides = settings.cookies_overrides ?? {};
   const used = new Set(Object.keys(overrides));
   const available = PLATFORMS.filter(([id]) => !used.has(id));
@@ -287,7 +289,7 @@ function OverridesEditor() {
   return (
     <div className="settings-subsection">
       <div className="settings-row">
-        <span className="settings-label">Per-site rules</span>
+        <span className="settings-label">{t("set.src.perSite")}</span>
         <span className="hint-text faint">
           Override the default for specific platforms. Typical setup:
           default <strong>None</strong>, then add{" "}
@@ -300,7 +302,7 @@ function OverridesEditor() {
 
       {active.length === 0 && (
         <p className="hint faint" style={{ margin: "2px 0 8px" }}>
-          No per-site rules yet — every site uses the default above.
+          {t("set.src.noRules")}
         </p>
       )}
 
@@ -320,9 +322,9 @@ function OverridesEditor() {
                 else setOverride(id, { kind: "file", path: "" });
               }}
             >
-              <option value="none">None</option>
-              <option value="browser">From browser</option>
-              <option value="file">From file</option>
+              <option value="none">{t("set.opt.none")}</option>
+              <option value="browser">{t("set.opt.fromBrowser")}</option>
+              <option value="file">{t("set.opt.fromFile")}</option>
             </select>
 
             {ov.kind === "browser" && (
@@ -374,7 +376,7 @@ function OverridesEditor() {
                     }
                   }}
                 >
-                  <Icon.folder width={12} height={12} /> Browse…
+                  <Icon.folder width={12} height={12} /> {t("set.browse")}
                 </button>
               </>
             )}
@@ -403,7 +405,7 @@ function OverridesEditor() {
               if (id) setOverride(id, { kind: "browser", browser: BROWSERS[0] });
             }}
           >
-            <option value="">+ Add site rule…</option>
+            <option value="">{t("set.src.addRule")}</option>
             {available.map(([id, label]) => (
               <option key={id} value={id}>
                 {label}
@@ -520,6 +522,7 @@ type MigrateResult = {
 
 function LibrarySection() {
   const { settings, save } = useSettings();
+  const t = useT();
   const root = settings.library_root ?? "";
   const template = settings.rename_template;
   const [migrating, setMigrating] = useState(false);
@@ -554,7 +557,7 @@ function LibrarySection() {
   return (
     <section className="card-box">
       <h2>
-        Library <span className="chip">root + rename</span>
+        {t("set.sec.library")} <span className="chip">{t("set.chip.library")}</span>
         <ResetButton
           onClick={() =>
             void save((s) => ({
@@ -565,18 +568,10 @@ function LibrarySection() {
           }
         />
       </h2>
-      <p className="hint">
-        Override where Media Hub stores downloads. Pick a rename
-        pattern (or write your own) for how files land on disk.
-        Editing the path here only redirects <em>future</em> downloads;
-        use the <strong>Move library</strong> button below if you also
-        want to relocate everything you've already downloaded.{" "}
-        <code>library.db</code> always lives at <code>~/Media Hub/</code>{" "}
-        so it survives root changes.
-      </p>
+      <p className="hint">{t("set.lib.intro")}</p>
 
       <div className="settings-row">
-        <span className="settings-label">Library root</span>
+        <span className="settings-label">{t("set.lib.root")}</span>
         <input
           className="field-input"
           type="text"
@@ -601,15 +596,13 @@ function LibrarySection() {
             }
           }}
         >
-          <Icon.folder width={12} height={12} /> Browse…
+          <Icon.folder width={12} height={12} /> {t("set.browse")}
         </button>
-        <span className="hint-text faint">
-          Empty = default. Editing here only affects new downloads.
-        </span>
+        <span className="hint-text faint">{t("set.lib.rootHint")}</span>
       </div>
 
       <div className="settings-row">
-        <span className="settings-label">Move library</span>
+        <span className="settings-label">{t("set.lib.move")}</span>
         <button
           type="button"
           className="btn btn-secondary"
@@ -682,7 +675,7 @@ function LibrarySection() {
           }}
         >
           <Icon.folder width={12} height={12} />
-          {migrating ? "Moving…" : "Move existing library to…"}
+          {migrating ? t("set.lib.moving") : t("set.lib.moveBtn")}
         </button>
         <span className="hint-text faint">
           Physically moves Library/, Projects/, _thumbnails/ and
@@ -692,7 +685,7 @@ function LibrarySection() {
       </div>
 
       <div className="settings-row">
-        <span className="settings-label">Rename preset</span>
+        <span className="settings-label">{t("set.lib.renamePreset")}</span>
         <select
           className="field-select"
           value={matchedPreset}
@@ -714,7 +707,7 @@ function LibrarySection() {
       </div>
 
       <div className="settings-row">
-        <span className="settings-label">Template</span>
+        <span className="settings-label">{t("set.lib.template")}</span>
         <input
           className="field-input"
           type="text"
@@ -740,6 +733,7 @@ function LibrarySection() {
 
 function DownloadsSection() {
   const { settings, save } = useSettings();
+  const t = useT();
   const concurrency = settings.download_concurrency;
   const limit = settings.bandwidth_limit_kbps;
   const limited = limit != null && limit > 0;
@@ -861,7 +855,7 @@ function DownloadsSection() {
   return (
     <section className="card-box">
       <h2>
-        Downloads <span className="chip">workers + throttle</span>
+        {t("set.sec.downloads")} <span className="chip">{t("set.chip.downloads")}</span>
         <HelpHint id="set-downloads" title="Downloads (speed)">
           Controls how fast things download. "Workers" is how many videos
           download at the same time. "Speed limit" slows downloads so they
@@ -881,15 +875,10 @@ function DownloadsSection() {
           }
         />
       </h2>
-      <p className="hint">
-        How many yt-dlp downloads run in parallel, optional bandwidth
-        ceiling, and per-platform format memory. Concurrency × throttle
-        is the effective ceiling — yt-dlp's <code>--limit-rate</code> is
-        per-process.
-      </p>
+      <p className="hint">{t("set.dl.intro")}</p>
 
       <div className="settings-row">
-        <span className="settings-label">Parallel workers</span>
+        <span className="settings-label">{t("set.dl.workers")}</span>
         <input
           type="number"
           className="field-input"
@@ -917,7 +906,7 @@ function DownloadsSection() {
           and extension/bridge sends — anywhere a download happens
           WITHOUT an explicit format pick on the Download page. */}
       <div className="settings-row">
-        <span className="settings-label">Preferred quality</span>
+        <span className="settings-label">{t("set.dl.quality")}</span>
         <select
           className="field-input"
           style={{ width: 130, flex: "0 0 130px" }}
@@ -931,7 +920,7 @@ function DownloadsSection() {
           <option value="1080">1080p (FHD)</option>
           <option value="720">720p (HD)</option>
           <option value="480">480p (SD)</option>
-          <option value="">Source (no cap)</option>
+          <option value="">{t("set.dl.qualitySource")}</option>
         </select>
         <span className="hint-text faint">
           Cap for batch queue + extension sends. Picks the highest
@@ -942,14 +931,14 @@ function DownloadsSection() {
       </div>
 
       <div className="settings-row">
-        <span className="settings-label">Bandwidth</span>
+        <span className="settings-label">{t("set.dl.bandwidth")}</span>
         <label className="settings-radio" style={{ flex: "0 0 auto" }}>
           <input
             type="checkbox"
             checked={limited}
             onChange={(e) => toggleLimit(e.target.checked)}
           />
-          <span>Throttle</span>
+          <span>{t("set.dl.throttle")}</span>
         </label>
         <input
           type="number"
@@ -972,7 +961,7 @@ function DownloadsSection() {
       {/* 1.10.0 — aria2c external downloader. Opt-in; the binary is
           fetched on first enable. Off by default. */}
       <div className="settings-row">
-        <span className="settings-label">Fast downloads</span>
+        <span className="settings-label">{t("set.dl.fast")}</span>
         <label className="switch" style={{ flex: "0 0 auto" }}>
           <input
             type="checkbox"
@@ -984,7 +973,7 @@ function DownloadsSection() {
         </label>
         <span className="hint-text faint">
           {aria2Busy
-            ? "Downloading the aria2c engine…"
+            ? t("set.dl.fastFetching")
             : settings.use_aria2c
               ? "On — best for very large / long videos, or when a download is crawling (YouTube throttling one connection). For normal downloads the built-in engine is usually just as fast, so you can leave this off."
               : "Only helps when YouTube throttles a single connection — i.e. big / long videos or a download stuck well below your real speed. Otherwise the built-in engine is as fast or faster, so keep this off unless a download is crawling. Fetched once on enable (~3 MB, Windows)."}
@@ -994,7 +983,7 @@ function DownloadsSection() {
       {/* EXPERIMENT (exp/preview-proxy) — scrubber preview quality +
           cache control. */}
       <div className="settings-row">
-        <span className="settings-label">Preview quality</span>
+        <span className="settings-label">{t("set.dl.preview")}</span>
         <select
           className="field-input"
           style={{ width: 160, flex: "0 0 160px" }}
@@ -1003,11 +992,11 @@ function DownloadsSection() {
             void save((s) => ({ ...s, preview_quality: e.target.value }))
           }
         >
-          <option value="auto">Auto (by length)</option>
+          <option value="auto">{t("set.dl.previewAuto")}</option>
           <option value="720">720p</option>
           <option value="480">480p</option>
           <option value="360">360p</option>
-          <option value="off">Streaming only</option>
+          <option value="off">{t("set.dl.previewStreaming")}</option>
         </select>
         <span className="mono faint" style={{ flex: "0 0 auto", fontSize: 11 }}>
           {cacheInfo ? `${(cacheInfo.bytes / 1048576).toFixed(0)} MB` : "—"}
@@ -1018,7 +1007,7 @@ function DownloadsSection() {
           style={{ flex: "0 0 auto" }}
           onClick={() => void clearPreviewCache()}
         >
-          Clear cache
+          {t("set.dl.clearCache")}
         </button>
         {cacheInfo && (
           <button
@@ -1028,7 +1017,7 @@ function DownloadsSection() {
             title={cacheInfo.path}
             onClick={() => void openPath(cacheInfo.path).catch(() => {})}
           >
-            Open folder
+            {t("set.dl.openFolder")}
           </button>
         )}
         <span className="hint-text faint">
@@ -1043,12 +1032,11 @@ function DownloadsSection() {
       </div>
 
       <div className="settings-row">
-        <span className="settings-label">Sticky formats</span>
+        <span className="settings-label">{t("set.dl.sticky")}</span>
         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
           {stickyEntries.length === 0 ? (
             <span className="faint mono" style={{ fontSize: 11 }}>
-              none yet — first downloaded format per platform is
-              remembered automatically
+              {t("set.dl.stickyNone")}
             </span>
           ) : (
             stickyEntries.map(([platform, fmt]) => (
@@ -1064,7 +1052,7 @@ function DownloadsSection() {
                   onClick={() => clearSticky(platform)}
                   style={{ fontSize: 10, padding: "2px 8px" }}
                 >
-                  Forget
+                  {t("set.dl.forget")}
                 </button>
               </div>
             ))
@@ -1076,13 +1064,13 @@ function DownloadsSection() {
             onClick={() => clearSticky()}
             style={{ flex: "0 0 auto" }}
           >
-            Forget all
+            {t("set.dl.forgetAll")}
           </button>
         )}
       </div>
 
       <div className="settings-row">
-        <span className="settings-label">Scrubber jog</span>
+        <span className="settings-label">{t("set.dl.jog")}</span>
         {/* Continuous slider (0.9.D, requested 2026-05-22 PM).
          *  Range 0.25× → 2.5× in 0.25 steps. The user can pick
          *  any granularity they like instead of 3 fixed presets. */}
@@ -1129,6 +1117,7 @@ function DownloadsSection() {
 
 function TranscodeSection() {
   const { settings, save } = useSettings();
+  const t = useT();
   const preset = settings.default_transcode_preset as TranscodePreset;
 
   function setPreset(p: TranscodePreset) {
@@ -1138,7 +1127,7 @@ function TranscodeSection() {
   return (
     <section className="card-box">
       <h2>
-        Transcode <span className="chip">default preset</span>
+        {t("set.sec.transcode")} <span className="chip">{t("set.chip.transcode")}</span>
         <HelpHint id="set-transcode" title="Transcode (convert)">
           Transcoding converts a video into a format editing apps handle more
           smoothly. Keep this on "None" unless your editor struggles with the
@@ -1151,14 +1140,10 @@ function TranscodeSection() {
           }
         />
       </h2>
-      <p className="hint">
-        New downloads default to this preset. You can still pick a
-        different preset per-download from the Download page. ProRes
-        422 LT is the editing sweet spot for most NLEs.
-      </p>
+      <p className="hint">{t("set.tr.intro")}</p>
 
       <div className="settings-row">
-        <span className="settings-label">Default preset</span>
+        <span className="settings-label">{t("set.tr.default")}</span>
         <select
           className="field-select"
           value={preset}
@@ -1190,6 +1175,7 @@ function TranscodeSection() {
 
 function BridgeSection() {
   const { settings, save } = useSettings();
+  const t = useT();
   const [copied, setCopied] = useState<"" | "token" | "port" | "url">("");
 
   async function copy(kind: "token" | "port" | "url", value: string) {
@@ -1231,7 +1217,7 @@ function BridgeSection() {
   return (
     <section className="card-box">
       <h2>
-        Browser bridge <span className="chip">extension + scripts</span>
+        {t("set.sec.bridge")} <span className="chip">{t("set.chip.bridge")}</span>
         <HelpHint id="set-bridge" title="Browser bridge (extension)">
           This connects the Media Hub browser add-on so a button in your web
           browser can send videos straight to the app. You pair them once
@@ -1239,16 +1225,10 @@ function BridgeSection() {
           ignore this whole section.
         </HelpHint>
       </h2>
-      <p className="hint">
-        Media Hub runs a tiny HTTP server on <code>127.0.0.1</code> so the
-        browser extension (or any local script) can send URLs straight
-        into the download queue. Loopback only — never exposed to the
-        network. Paste the token + URL below into the extension's
-        settings to pair it once.
-      </p>
+      <p className="hint">{t("set.br.intro")}</p>
 
       <div className="bar">
-        <span className="settings-label">Enabled</span>
+        <span className="settings-label">{t("set.br.enabled")}</span>
         <label className="switch">
           <input
             type="checkbox"
@@ -1260,9 +1240,7 @@ function BridgeSection() {
           <span className="switch-slider" />
         </label>
         <span className="hint-text">
-          {enabled
-            ? "server starts on next launch"
-            : "server is off — extension can't reach the app"}
+          {enabled ? t("set.br.enabledOn") : t("set.br.enabledOff")}
         </span>
       </div>
 
@@ -1274,12 +1252,12 @@ function BridgeSection() {
           onClick={() => void copy("url", url)}
           title="Copy URL"
         >
-          {copied === "url" ? "✓ Copied" : "Copy"}
+          {copied === "url" ? t("set.br.copied") : t("set.br.copy")}
         </button>
       </div>
 
       <div className="bar">
-        <span className="settings-label">Port</span>
+        <span className="settings-label">{t("set.br.port")}</span>
         <input
           type="number"
           className="field-input"
@@ -1293,11 +1271,11 @@ function BridgeSection() {
             void save((s) => ({ ...s, bridge_port: n }));
           }}
         />
-        <span className="hint-text">change requires app restart</span>
+        <span className="hint-text">{t("set.br.portHint")}</span>
       </div>
 
       <div className="bar">
-        <span className="settings-label">Token</span>
+        <span className="settings-label">{t("set.br.token")}</span>
         <code
           className="settings-mono settings-grow"
           style={{ fontSize: 11, wordBreak: "break-all" }}
@@ -1310,14 +1288,14 @@ function BridgeSection() {
           disabled={!token}
           title="Copy token"
         >
-          {copied === "token" ? "✓ Copied" : "Copy"}
+          {copied === "token" ? t("set.br.copied") : t("set.br.copy")}
         </button>
         <button
           className="btn btn-secondary"
           onClick={() => void regenerate()}
           title="Generate a new token (invalidates the current pairing)"
         >
-          Regenerate
+          {t("set.br.regenerate")}
         </button>
       </div>
 
@@ -1386,6 +1364,7 @@ interface EngineInfo {
 }
 
 function DiagnosticsSection() {
+  const t = useT();
   const [versions, setVersions] = useState<SidecarVersion[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1420,10 +1399,10 @@ function DiagnosticsSection() {
   // failed or a file got deleted.
   async function repairTools() {
     setRepairing(true);
-    setRepairMsg("Downloading media tools…");
+    setRepairMsg(t("set.diag.toolsDownloading"));
     try {
       await invoke("tools_ensure");
-      setRepairMsg("Media tools ready.");
+      setRepairMsg(t("set.diag.toolsReady"));
       await refresh();
     } catch (e) {
       setRepairMsg(`Setup failed: ${String(e)}`);
@@ -1508,15 +1487,12 @@ function DiagnosticsSection() {
   return (
     <section className="card-box">
       <h2>
-        Diagnostics <span className="chip">read-only</span>
+        {t("set.sec.diag")} <span className="chip">{t("set.chip.diag")}</span>
       </h2>
-      <p className="hint">
-        Quick sanity check on bundled tools + on-disk paths. If something
-        feels broken, this is the first place to look.
-      </p>
+      <p className="hint">{t("set.diag.intro")}</p>
 
       <div className="settings-row">
-        <span className="settings-label">Media tools</span>
+        <span className="settings-label">{t("set.diag.tools")}</span>
         <div style={{ display: "flex", gap: 8 }}>
           <button
             className="btn btn-secondary"
@@ -1524,10 +1500,10 @@ function DiagnosticsSection() {
             disabled={repairing}
             title="Re-download ffmpeg + deno if they're missing or broken"
           >
-            {repairing ? "Setting up…" : "Repair tools"}
+            {repairing ? t("set.diag.repairing") : t("set.diag.repair")}
           </button>
           <button className="btn btn-secondary" onClick={() => void refresh()} disabled={loading}>
-            {loading ? "Checking…" : "Re-check versions"}
+            {loading ? t("set.diag.checking") : t("set.diag.recheck")}
           </button>
         </div>
       </div>
@@ -1540,7 +1516,7 @@ function DiagnosticsSection() {
 
       <div className="settings-row">
         <span className="settings-label">
-          yt-dlp engine
+          {t("set.diag.engine")}
           {engine && (
             <span className="chip" style={{ marginLeft: 8 }}>
               {engine.managed ? "auto-updated" : "bundled"}
@@ -1548,7 +1524,7 @@ function DiagnosticsSection() {
           )}
         </span>
         <button className="btn btn-secondary" onClick={() => void updateEngine()} disabled={updating}>
-          {updating ? "Updating…" : "Update engine now"}
+          {updating ? t("set.diag.updating") : t("set.diag.updateEngine")}
         </button>
       </div>
       <p className="hint">
@@ -1568,13 +1544,13 @@ function DiagnosticsSection() {
           downloads + verifies + installs (the installer relaunches the
           app on success). */}
       <div className="settings-row">
-        <span className="settings-label">Media Hub app</span>
+        <span className="settings-label">{t("set.diag.app")}</span>
         <button
           className="btn btn-secondary"
           onClick={() => void checkAndInstallAppUpdate()}
           disabled={appUpdating}
         >
-          {appUpdating ? "Working…" : "Check for app updates"}
+          {appUpdating ? t("set.diag.working") : t("set.diag.checkUpdates")}
         </button>
       </div>
       <p className="hint">
@@ -1625,9 +1601,9 @@ function DiagnosticsSection() {
           records the full command + ffmpeg stderr + the input's actual
           streams here, so bug reports are self-contained. */}
       <div className="settings-row">
-        <span className="settings-label">Diagnostics log</span>
+        <span className="settings-label">{t("set.diag.log")}</span>
         <button className="btn btn-secondary" onClick={() => void openLogs()}>
-          Open logs folder
+          {t("set.diag.openLogs")}
         </button>
       </div>
       <p className="hint">
@@ -1651,23 +1627,21 @@ function DiagnosticsSection() {
 // =====================================================================
 
 function AboutSection() {
+  const t = useT();
   return (
     <section className="card-box">
       <h2>
-        About <span className="chip">media-hub</span>
+        {t("set.sec.about")} <span className="chip">media-hub</span>
       </h2>
-      <p className="hint">
-        Desktop sourcing + organizing tool for video editors. Built with
-        Tauri 2 + React + Rust. Bundles yt-dlp + ffmpeg.
-      </p>
+      <p className="hint">{t("set.about.intro")}</p>
 
       <dl className="settings-kv">
         <div>
-          <dt>Version</dt>
+          <dt>{t("set.about.version")}</dt>
           <dd>{APP_VERSION}</dd>
         </div>
         <div>
-          <dt>Identifier</dt>
+          <dt>{t("set.about.identifier")}</dt>
           <dd>com.guilherme.mediahub</dd>
         </div>
         <div>
@@ -1713,20 +1687,21 @@ function AboutSection() {
  *     that wipes settings.json
  */
 function ResetButton({ onClick }: { onClick: () => void }) {
+  const t = useT();
   return (
     <button
       type="button"
       className="settings-reset"
       onClick={async () => {
-        const ok = await confirmDialog("Reset this section to defaults?", {
-          title: "Reset section?",
+        const ok = await confirmDialog(t("set.reset.confirm"), {
+          title: t("set.reset.title"),
           kind: "warning",
         });
         if (ok) onClick();
       }}
-      title="Reset this section to defaults"
+      title={t("set.reset.confirm")}
     >
-      Reset
+      {t("set.reset.label")}
     </button>
   );
 }
