@@ -39,7 +39,7 @@ fn binary_name() -> &'static str {
 
 /// `<app_data>/bin` — shared with the managed yt-dlp (updater.rs). The
 /// dir is created on demand by `ensure`.
-fn managed_bin_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn managed_bin_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app
         .path()
         .app_data_dir()
@@ -110,7 +110,7 @@ fn archive_url() -> Result<String, String> {
 }
 
 /// Recursively search `dir` for a file named exactly `name`.
-fn find_file(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
+pub(crate) fn find_file(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
     let entries = std::fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
@@ -133,7 +133,7 @@ fn find_file(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
 /// ahead of System32, `tar` resolves to GNU tar — which can't read a zip
 /// and fails. So we call System32\tar.exe by absolute path, and fall back
 /// to PowerShell's Expand-Archive if that's somehow missing (pre-1803).
-fn extract_zip(zip: &std::path::Path, dest_dir: &std::path::Path) -> Result<(), String> {
+pub(crate) fn extract_zip(zip: &std::path::Path, dest_dir: &std::path::Path) -> Result<(), String> {
     std::fs::create_dir_all(dest_dir).map_err(|e| format!("create extract dir: {e}"))?;
 
     #[cfg(windows)]

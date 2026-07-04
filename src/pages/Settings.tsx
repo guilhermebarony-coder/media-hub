@@ -1373,6 +1373,9 @@ function DiagnosticsSection() {
   const [appUpdating, setAppUpdating] = useState(false);
   const [appUpdateMsg, setAppUpdateMsg] = useState<string | null>(null);
 
+  const [repairing, setRepairing] = useState(false);
+  const [repairMsg, setRepairMsg] = useState<string | null>(null);
+
   async function refresh() {
     setLoading(true);
     setErr(null);
@@ -1384,6 +1387,23 @@ function DiagnosticsSection() {
       setErr(String(e));
     } finally {
       setLoading(false);
+    }
+  }
+
+  // 1.12.0 — re-download ffmpeg/deno if they're missing or broken. Safe to
+  // run anytime (idempotent); mostly a recovery path if first-run setup
+  // failed or a file got deleted.
+  async function repairTools() {
+    setRepairing(true);
+    setRepairMsg("Downloading media tools…");
+    try {
+      await invoke("tools_ensure");
+      setRepairMsg("Media tools ready.");
+      await refresh();
+    } catch (e) {
+      setRepairMsg(`Setup failed: ${String(e)}`);
+    } finally {
+      setRepairing(false);
     }
   }
 
@@ -1471,11 +1491,27 @@ function DiagnosticsSection() {
       </p>
 
       <div className="settings-row">
-        <span className="settings-label">Bundled tools</span>
-        <button className="btn btn-secondary" onClick={() => void refresh()} disabled={loading}>
-          {loading ? "Checking…" : "Re-check versions"}
-        </button>
+        <span className="settings-label">Media tools</span>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            className="btn btn-secondary"
+            onClick={() => void repairTools()}
+            disabled={repairing}
+            title="Re-download ffmpeg + deno if they're missing or broken"
+          >
+            {repairing ? "Setting up…" : "Repair tools"}
+          </button>
+          <button className="btn btn-secondary" onClick={() => void refresh()} disabled={loading}>
+            {loading ? "Checking…" : "Re-check versions"}
+          </button>
+        </div>
       </div>
+      {repairMsg && (
+        <div className="msg-row">
+          <span className="label">tools</span>
+          <code>{repairMsg}</code>
+        </div>
+      )}
 
       <div className="settings-row">
         <span className="settings-label">

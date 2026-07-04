@@ -7,6 +7,7 @@ import { SettingsProvider, useSettings } from "./lib/settings";
 import { DownloadsProvider, useDownloads } from "./lib/downloads";
 import { confirmDialog } from "./lib/dialog";
 import { DialogHost } from "./components/DialogHost";
+import { ToolsGate } from "./components/ToolsGate";
 import { lazy } from "react";
 import "./App.css";
 
@@ -285,6 +286,10 @@ export default function App() {
           Mounted at root so confirm/alert modals overlay everything. */}
       <DialogHost />
       <CookieConsentPrompt />
+      {/* 1.12.0 — first-run tool setup. ffmpeg/deno are downloaded on first
+          launch; this blocks with progress until ffmpeg is ready, then
+          renders nothing. Highest layer so it covers everything. */}
+      <ToolsGate />
     </SettingsProvider>
   );
 }

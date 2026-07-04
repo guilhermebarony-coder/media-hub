@@ -19,7 +19,6 @@
 
 use std::io::Write;
 use tauri::{AppHandle, Manager};
-use tauri_plugin_shell::ShellExt;
 
 const CAP_BYTES: u64 = 4 * 1024 * 1024; // rotate to .1 past 4 MB
 
@@ -61,8 +60,8 @@ pub fn log(app: &AppHandle, tag: &str, msg: &str) {
 /// because no output was requested, which is expected). Used to log what
 /// an input file *actually* is when a transcode of it fails.
 pub async fn probe_media(app: &AppHandle, path: &str) -> String {
-    let Ok(cmd) = app.shell().sidecar("ffmpeg") else {
-        return "(probe: ffmpeg sidecar unavailable)".into();
+    let Ok(cmd) = crate::tools::ffmpeg_command(app) else {
+        return "(probe: ffmpeg not installed)".into();
     };
     match cmd.args(["-hide_banner", "-i", path]).output().await {
         Ok(out) => {

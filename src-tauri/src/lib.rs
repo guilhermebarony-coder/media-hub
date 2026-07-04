@@ -10,6 +10,7 @@ mod direct;
 mod eagle;
 mod library;
 mod settings;
+mod tools;
 mod tray;
 mod updater;
 
@@ -109,15 +110,18 @@ pub struct SidecarVersion {
 /// Run a sidecar with the given args and return the first non-empty stdout line.
 async fn run_version(app: &AppHandle, sidecar: &str, args: &[&str]) -> SidecarVersion {
     let shell = app.shell();
-    // yt-dlp routes through the updater resolver so the version we report
-    // reflects the managed (auto-updated) binary when present. ffmpeg has
-    // no auto-updater, so it stays on the bundled sidecar.
-    let resolved = if sidecar == "yt-dlp" {
-        updater::resolve_yt_dlp(app)
-    } else {
-        shell
-            .sidecar(sidecar)
-            .map_err(|e| format!("sidecar resolve failed: {e}"))
+    // yt-dlp routes through the updater resolver (managed, auto-updated,
+    // bundled fallback). ffmpeg + deno are lazily downloaded to app-data
+    // (see tools.rs), so resolve them there. Anything else = bundled sidecar.
+    let resolved = match sidecar {
+        "yt-dlp" => updater::resolve_yt_dlp(app),
+        "ffmpeg" => tools::ffmpeg_command(app),
+        "deno" => tools::deno_path(app)
+            .map(|p| shell.command(p.to_string_lossy().to_string()))
+            .ok_or_else(|| "deno not installed".to_string()),
+        other => shell
+            .sidecar(other)
+            .map_err(|e| format!("sidecar resolve failed: {e}")),
     };
     let cmd = match resolved {
         Ok(c) => c,
@@ -168,7 +172,8 @@ async fn run_version(app: &AppHandle, sidecar: &str, args: &[&str]) -> SidecarVe
 async fn binaries_version(app: AppHandle) -> Result<Vec<SidecarVersion>, String> {
     let ytdlp = run_version(&app, "yt-dlp", &["--version"]).await;
     let ffmpeg = run_version(&app, "ffmpeg", &["-version"]).await;
-    Ok(vec![ytdlp, ffmpeg])
+    let deno = run_version(&app, "deno", &["--version"]).await;
+    Ok(vec![ytdlp, ffmpeg, deno])
 }
 
 // =====================================================================
@@ -466,25 +471,14 @@ async fn yt_dlp_capture(
 /// never invoke the runtime. Added to the shared `opts`, so the cookie
 /// retry-without-cookies fallback (yt_dlp_capture) keeps it on both
 /// attempts.
-fn js_runtime_args() -> Vec<String> {
-    let deno = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .map(|dir| {
-            if cfg!(windows) {
-                dir.join("deno.exe")
-            } else {
-                dir.join("deno")
-            }
-        })
-        .filter(|p| p.exists());
-    match deno {
+fn js_runtime_args(app: &AppHandle) -> Vec<String> {
+    match tools::deno_path(app) {
         Some(p) => vec![
             "--js-runtimes".to_string(),
             format!("deno:{}", p.to_string_lossy()),
         ],
         None => {
-            eprintln!("[js-runtime] deno sidecar not found — yt-dlp will use its built-in solver");
+            eprintln!("[js-runtime] managed deno not found — yt-dlp will use its built-in solver");
             Vec::new()
         }
     }
@@ -551,7 +545,7 @@ async fn yt_fetch_metadata(
         "--socket-timeout".into(), "15".into(),
     ];
     opts.extend(yt_args.iter().cloned());
-    opts.extend(js_runtime_args()); // Deno JS runtime for sig/nsig solving
+    opts.extend(js_runtime_args(&app)); // Deno JS runtime for sig/nsig solving
 
     // 1.4.x — auto-retry without cookies if the cookie'd attempt fails.
     let out = yt_dlp_capture(&app, &opts, &cookies, trimmed).await?;
@@ -747,7 +741,7 @@ async fn yt_fetch_playlist(
         "--socket-timeout".into(), "30".into(),
     ];
     opts.extend(yt_args.iter().cloned());
-    opts.extend(js_runtime_args()); // Deno JS runtime for sig/nsig solving
+    opts.extend(js_runtime_args(&app)); // Deno JS runtime for sig/nsig solving
 
     let out = yt_dlp_capture(&app, &opts, &cookies, trimmed).await?;
 
@@ -1112,7 +1106,7 @@ async fn preview_proxy(
         opts.push(ff.to_string_lossy().to_string());
     }
     opts.extend(settings::youtube_extractor_args());
-    opts.extend(js_runtime_args());
+    opts.extend(js_runtime_args(&app));
 
     let output = yt_dlp_capture(&app, &opts, &cookies, trimmed).await?;
     if !output.status.success() {
@@ -1206,10 +1200,7 @@ async fn preview_intra_window(
     let dur_s = format!("{dur}");
     let out_s = out.to_string_lossy().to_string();
     let proxy_s = proxy.to_string_lossy().to_string();
-    let ff = app
-        .shell()
-        .sidecar("ffmpeg")
-        .map_err(|e| format!("sidecar ffmpeg: {e}"))?;
+    let ff = tools::ffmpeg_command(&app)?;
     // -ss before -i = fast seek; all-intra + ultrafast for a quick cut.
     let output = ff
         .args([
@@ -1507,7 +1498,7 @@ async fn yt_download(
     }
     // Deno JS runtime for YouTube sig/nsig solving (see js_runtime_args).
     // Owned outside the loop so the &str references outlive the spawn.
-    let js_args = js_runtime_args();
+    let js_args = js_runtime_args(&app);
     for a in &js_args {
         args.push(a.as_str());
     }
@@ -2024,10 +2015,7 @@ async fn yt_download(
             .and_then(|e| e.to_str())
             .unwrap_or("mp4");
 
-        let ffmpeg_cmd_path = app
-            .shell()
-            .sidecar("ffmpeg")
-            .map_err(|e| format!("sidecar resolve ffmpeg: {e}"))?;
+        let ffmpeg_cmd_path = tools::ffmpeg_command(&app)?;
         // Resolving the sidecar each iteration is cheap — it doesn't
         // re-spawn, just builds the Command struct. But the type isn't
         // Clone, so we re-resolve in the loop.
@@ -2051,10 +2039,7 @@ async fn yt_download(
                 .ok_or("segment path is not valid UTF-8")?
                 .to_string();
 
-            let ffmpeg_cmd = app
-                .shell()
-                .sidecar("ffmpeg")
-                .map_err(|e| format!("sidecar resolve ffmpeg: {e}"))?;
+            let ffmpeg_cmd = tools::ffmpeg_command(&app)?;
             let ff_out = ffmpeg_cmd
                 .args([
                     "-y", // overwrite if exists
@@ -2242,10 +2227,7 @@ async fn media_transcode(
     // Build full ffmpeg command. -progress pipe:1 emits structured
     // key=value progress lines on stdout — much cleaner than parsing
     // ffmpeg's human-readable banner output.
-    let ffmpeg = app
-        .shell()
-        .sidecar("ffmpeg")
-        .map_err(|e| format!("sidecar resolve ffmpeg: {e}"))?;
+    let ffmpeg = tools::ffmpeg_command(&app)?;
 
     let mut args: Vec<&str> = vec![
         "-y",                // overwrite output if it exists
@@ -2475,10 +2457,7 @@ async fn media_extract_thumbnail(
         .unwrap_or(1.0);
     let seek_str = format!("{:.3}", seek);
 
-    let ffmpeg = app
-        .shell()
-        .sidecar("ffmpeg")
-        .map_err(|e| format!("sidecar resolve ffmpeg: {e}"))?;
+    let ffmpeg = tools::ffmpeg_command(&app)?;
 
     let args: Vec<&str> = vec![
         "-y",
@@ -2581,10 +2560,7 @@ async fn media_extract_waveform(
         .ok_or("waveform path is not valid UTF-8")?
         .to_string();
 
-    let ffmpeg = app
-        .shell()
-        .sidecar("ffmpeg")
-        .map_err(|e| format!("sidecar resolve ffmpeg: {e}"))?;
+    let ffmpeg = tools::ffmpeg_command(&app)?;
 
     // Filter chain:
     //   aformat=channel_layouts=mono  — collapse stereo so we get a
@@ -2705,7 +2681,7 @@ async fn yt_resolve_stream_url(
         format_spec.into(),
     ];
     opts.extend(yt_args.iter().cloned());
-    opts.extend(js_runtime_args()); // Deno JS runtime for sig/nsig solving
+    opts.extend(js_runtime_args(&app)); // Deno JS runtime for sig/nsig solving
 
     // 1.4.x — per-site cookies + retry-without-cookies fallback.
     let output = yt_dlp_capture(&app, &opts, &cookies, trimmed).await?;
@@ -3265,6 +3241,8 @@ pub fn run() {
             os_open_path,
             diag_snapshot,
             diag_open_logs,
+            tools::tools_status,
+            tools::tools_ensure,
             media_transcode,
             media_extract_thumbnail,
             media_extract_waveform,

@@ -9,6 +9,33 @@ a structural decision).
 Format: dated sections, newest at top. Each entry self-contained —
 written so future-me (or future-Claude) can pick it up cold.
 
+## 2026-07-03 — Lazy media tools (1.12.0): installer 140 MB → ~40 MB
+
+Addresses IMPROVEMENTS §2.1/2.2/2.3 (bundle bloat). ffmpeg (202 MB) + deno
+(101 MB) are no longer bundled — they download to `<app_data>/bin` on first
+run. Only the tiny yt-dlp stays bundled (so the app can fetch/list instantly
+on first launch + as a safety anchor).
+
+- `src-tauri/src/tools.rs`: `ensure()` streams the archive (flat memory,
+  `tools:progress` events), extracts (reuses aria2's `extract_zip`/`find_file`),
+  installs to `<app_data>/bin`. `ffmpeg_command(app)` + `deno_path(app)` are
+  the resolvers; commands `tools_status` / `tools_ensure`. Executes via
+  `shell.command(<path>)` — same mechanism the managed yt-dlp already uses,
+  so no new shell-scope permission.
+- ffmpeg pinned to **stable n7.1** (same URL as the smoke test).
+- The 6 `sidecar("ffmpeg")` sites now call `tools::ffmpeg_command(&app)`;
+  `js_runtime_args(app)` uses `tools::deno_path`; `run_version` resolves
+  ffmpeg/deno from app-data (Diagnostics now shows deno too).
+- Frontend `ToolsGate` (`components/ToolsGate.tsx`): full-screen first-run
+  overlay, auto-runs `tools_ensure`, shows live download %; renders nothing
+  once ffmpeg is present. Settings → Diagnostics has a "Repair tools" button.
+- `externalBin` in tauri.conf.json is now just `binaries/yt-dlp`.
+  fetch-sidecars still pulls ffmpeg (the smoke test needs it locally).
+
+RISK: catastrophic failure mode (first run can't transcode until download
+finishes). MUST manual-test the first-run flow in dev before releasing:
+delete `<app_data>/com.guilherme.mediahub/bin`, launch, watch the gate.
+
 ## 2026-07-03 — Test safety net (why + what)
 
 Two shipped-broken releases in one cycle (null-chapters crash in 1.11.0;
