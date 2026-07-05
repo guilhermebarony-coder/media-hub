@@ -10,6 +10,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { alertDialog, confirmDialog } from "../lib/dialog";
 import { scopeToFilter, useActiveProject } from "../lib/activeProject";
+import { useT } from "../lib/i18n";
 import type { Asset, AssetKind, Folder, FolderFilter, LibraryFilters, SiblingSummary, TagCount } from "../lib/types";
 
 // "now" is the "I just downloaded this" bucket — last 5 min. Surfaces
@@ -2503,6 +2504,7 @@ function CardContextMenu({
   /** 1.4 — push the whole selection to the open Eagle library. */
   onSendToEagle: (ids: string[]) => void | Promise<void>;
 }) {
+  const t = useT();
   const menuRef = useRef<HTMLDivElement>(null);
   // Adjust position to fit in viewport. ResizeObserver / layout effect
   // would be over-engineered for a transient menu — pick a sensible
@@ -2571,18 +2573,18 @@ function CardContextMenu({
       {/* Per-file: act on the right-clicked card only. */}
       <button className="ctx-item" onClick={withClose(() => openFileInDefaultApp(asset.file_path))}>
         <Icon.folder width={11} height={11} />
-        Open
+        {t("ctx.open")}
       </button>
       <button className="ctx-item" onClick={withClose(() => revealFile(asset.file_path))}>
         <Icon.folder width={11} height={11} />
-        Reveal in Explorer
+        {t("ctx.reveal")}
       </button>
       <div className="ctx-sep" />
       <button className="ctx-item" onClick={withClose(() => copyToClipboard(asset.source_url))}>
-        Copy source URL
+        {t("ctx.copyUrl")}
       </button>
       <button className="ctx-item" onClick={withClose(() => copyToClipboard(asset.file_path))}>
-        Copy file path
+        {t("ctx.copyPath")}
       </button>
       {!inTrash && (
         <>
@@ -2590,10 +2592,10 @@ function CardContextMenu({
           <button
             className={"ctx-item" + (eagleRunning ? "" : " ctx-dim")}
             onClick={withClose(() => onSendToEagle(selectionIds))}
-            title={eagleRunning ? "Add to your open Eagle library" : "Eagle isn't running"}
+            title={eagleRunning ? t("ctx.eagleOn") : t("ctx.eagleOff")}
           >
             <Icon.eagle width={12} height={12} />
-            Send to Eagle{suffix}
+            {t("ctx.sendEagle")}{suffix}
           </button>
         </>
       )}
@@ -2607,14 +2609,14 @@ function CardContextMenu({
             onClick={withClose(() => onRestore(selectionIds))}
           >
             <Icon.retry width={11} height={11} />
-            Restore{suffix}
+            {t("ctx.restore")}{suffix}
           </button>
           <button
             className="ctx-item ctx-danger"
             onClick={withClose(() => onDeleteForever(selectionIds))}
           >
             <Icon.trash width={11} height={11} />
-            Delete forever{suffix}
+            {t("ctx.deleteForever")}{suffix}
           </button>
         </>
       ) : (
@@ -2623,7 +2625,7 @@ function CardContextMenu({
           onClick={withClose(() => onMoveToTrash(selectionIds))}
         >
           <Icon.trash width={11} height={11} />
-          Move to Trash{suffix}
+          {t("ctx.moveTrash")}{suffix}
         </button>
       )}
     </div>
@@ -2676,6 +2678,7 @@ function FolderContextMenu({
   onMoveToRoot: () => void;
   onSetColor: (color: string | null) => void;
 }) {
+  const t = useT();
   const isBulk = bulkCount > 1;
   const menuRef = useRef<HTMLDivElement>(null);
   const ESTIMATED_HEIGHT = 200;
@@ -2712,29 +2715,29 @@ function FolderContextMenu({
       style={{ top: adjY, left: adjX }}
       onContextMenu={(e) => e.preventDefault()}
       role="menu"
-      aria-label={`Folder actions for ${folder.name}`}
+      aria-label={t("ctx.folderActions").replace("{name}", folder.name)}
     >
       {/* Mirror CardContextMenu's class structure (.ctx-item, .ctx-sep,
           .ctx-danger) so the two menus share the same visual treatment
           via the existing .ctx-menu CSS. The folder name shows at the
           top as a non-interactive label — same row pattern but in a
           dimmed style via .ctx-label. */}
-      <div className="ctx-label">{isBulk ? `${bulkCount} folders selected` : folder.name}</div>
+      <div className="ctx-label">{isBulk ? t("ctx.foldersSelected").replace("{n}", String(bulkCount)) : folder.name}</div>
       <div className="ctx-sep" />
       {!isBulk && (
         <>
           <button className="ctx-item" onClick={onNewSubfolder}>
             <Icon.plus width={11} height={11} />
-            New subfolder
+            {t("ctx.newSubfolder")}
           </button>
           <button className="ctx-item" onClick={onRename}>
             <Icon.folder width={11} height={11} />
-            Rename
+            {t("proj.rename")}
           </button>
           {folder.parent_id && (
             <button className="ctx-item" onClick={onMoveToRoot}>
               <Icon.chev width={11} height={11} style={{ transform: "rotate(90deg)" }} />
-              Move to top level
+              {t("ctx.moveTop")}
             </button>
           )}
           <div className="ctx-sep" />
@@ -2743,7 +2746,7 @@ function FolderContextMenu({
             <button
               className="ctx-color ctx-color-clear"
               onClick={() => onSetColor(null)}
-              title="No color"
+              title={t("ctx.noColor")}
             >
               <Icon.x width={9} height={9} />
             </button>
@@ -2762,7 +2765,7 @@ function FolderContextMenu({
       )}
       <button className="ctx-item ctx-danger" onClick={onDelete}>
         <Icon.trash width={11} height={11} />
-        {isBulk ? `Delete ${bulkCount} folders` : "Delete folder"}
+        {isBulk ? t("ctx.deleteFolders").replace("{n}", String(bulkCount)) : t("ctx.deleteFolder")}
       </button>
     </div>
   );

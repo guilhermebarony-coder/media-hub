@@ -338,4 +338,23 @@ export const pt: Record<string, string> = {
   "proj.dlg.deleteFailed": "Falha ao excluir",
   "proj.dlg.openFolderTitle": "Abrir pasta",
   "proj.dlg.openFolderErr": "Não foi possível abrir a pasta.\n\n{err}\n\nSe for um projeto gerenciado ainda sem downloads, a pasta é criada no primeiro download.",
+
+  // Menus de clique direito (Biblioteca)
+  "ctx.open": "Abrir",
+  "ctx.reveal": "Mostrar no Explorer",
+  "ctx.copyUrl": "Copiar URL de origem",
+  "ctx.copyPath": "Copiar caminho do arquivo",
+  "ctx.sendEagle": "Enviar para o Eagle",
+  "ctx.eagleOn": "Adicionar à sua biblioteca aberta do Eagle",
+  "ctx.eagleOff": "O Eagle não está aberto",
+  "ctx.restore": "Restaurar",
+  "ctx.deleteForever": "Excluir definitivamente",
+  "ctx.moveTrash": "Mover para a Lixeira",
+  "ctx.foldersSelected": "{n} pastas selecionadas",
+  "ctx.newSubfolder": "Nova subpasta",
+  "ctx.moveTop": "Mover para o nível superior",
+  "ctx.noColor": "Sem cor",
+  "ctx.deleteFolder": "Excluir pasta",
+  "ctx.deleteFolders": "Excluir {n} pastas",
+  "ctx.folderActions": "Ações da pasta {name}",
 };

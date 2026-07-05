@@ -340,4 +340,23 @@ export const en: Record<string, string> = {
   "proj.dlg.deleteFailed": "Delete failed",
   "proj.dlg.openFolderTitle": "Open folder",
   "proj.dlg.openFolderErr": "Couldn't open the folder.\n\n{err}\n\nIf this is a managed project with no downloads yet, the folder is created on the first download.",
+
+  // Right-click menus (Library)
+  "ctx.open": "Open",
+  "ctx.reveal": "Reveal in Explorer",
+  "ctx.copyUrl": "Copy source URL",
+  "ctx.copyPath": "Copy file path",
+  "ctx.sendEagle": "Send to Eagle",
+  "ctx.eagleOn": "Add to your open Eagle library",
+  "ctx.eagleOff": "Eagle isn't running",
+  "ctx.restore": "Restore",
+  "ctx.deleteForever": "Delete forever",
+  "ctx.moveTrash": "Move to Trash",
+  "ctx.foldersSelected": "{n} folders selected",
+  "ctx.newSubfolder": "New subfolder",
+  "ctx.moveTop": "Move to top level",
+  "ctx.noColor": "No color",
+  "ctx.deleteFolder": "Delete folder",
+  "ctx.deleteFolders": "Delete {n} folders",
+  "ctx.folderActions": "Folder actions for {name}",
 };
