@@ -5,6 +5,7 @@ import { useTauriEvent } from "../lib/useTauriEvent";
 import { confirmDialog, alertDialog } from "../lib/dialog";
 import { Icon } from "../lib/icons";
 import { useActiveProject } from "../lib/activeProject";
+import { useT } from "../lib/i18n";
 import type { Project } from "../lib/types";
 
 /**
@@ -37,6 +38,8 @@ export default function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const { scope, setScope } = useActiveProject();
+  const t = useT();
+  const clipsWord = (n: number) => `${n} ${n === 1 ? t("topbar.clip") : t("topbar.clips")}`;
   // mode drives the right-hand panel: nothing selected, creating, or
   // inspecting a specific project.
   const [mode, setMode] = useState<{ kind: "empty" } | { kind: "create" } | { kind: "detail"; id: string }>(
@@ -82,9 +85,8 @@ export default function ProjectsPage() {
       await invoke("os_open_path", { path: dir });
     } catch (e) {
       await alertDialog(
-        `Couldn't open the folder.\n\n${String(e)}\n\n` +
-          `If this is a managed project with no downloads yet, the folder is created on the first download.`,
-        { title: "Open folder", kind: "warning" },
+        t("proj.dlg.openFolderErr").replace("{err}", String(e)),
+        { title: t("proj.dlg.openFolderTitle"), kind: "warning" },
       );
     }
   }
@@ -94,16 +96,15 @@ export default function ProjectsPage() {
   async function closeProject(p: Project) {
     const msg =
       p.asset_count > 0
-        ? `Close "${p.name}"?\n\n${p.asset_count} ${p.asset_count === 1 ? "clip" : "clips"} return to the Library. ` +
-          `Files on disk are NOT moved or deleted — only the project grouping is removed.`
-        : `Close "${p.name}"?\n\nThe (empty) project is removed. Nothing on disk is touched.`;
-    if (!(await confirmDialog(msg, { title: "Close project?", kind: "warning" }))) return;
+        ? t("proj.dlg.close").replace("{name}", p.name).replace("{clips}", clipsWord(p.asset_count))
+        : t("proj.dlg.closeEmpty").replace("{name}", p.name);
+    if (!(await confirmDialog(msg, { title: t("proj.dlg.closeTitle"), kind: "warning" }))) return;
     try {
       await invoke("project_delete", { id: p.id });
       if (scope.kind === "project" && scope.id === p.id) setScope({ kind: "library" });
       setMode({ kind: "empty" });
     } catch (e) {
-      await alertDialog(String(e), { title: "Close failed" });
+      await alertDialog(String(e), { title: t("proj.dlg.closeFailed") });
     }
   }
 
@@ -111,34 +112,34 @@ export default function ProjectsPage() {
   // Recycle Bin; a custom (user) folder is left untouched on disk.
   async function deleteProject(p: Project) {
     const custom = !!p.root_path;
-    const clips = `${p.asset_count} ${p.asset_count === 1 ? "clip" : "clips"}`;
+    const clips = clipsWord(p.asset_count);
     const msg = custom
-      ? `Delete "${p.name}"?\n\n${clips} will be removed from Media Hub.\n\n` +
-        `Your folder is LEFT UNTOUCHED on disk:\n${p.root_path}\n\n` +
-        `(Media Hub never deletes a folder you chose — remove it yourself if you want.)`
-      : `Delete "${p.name}"?\n\n${clips} AND the project folder will be moved to the Recycle Bin.\n\n` +
-        `Recoverable from the OS Recycle Bin, but not from inside Media Hub.`;
-    if (!(await confirmDialog(msg, { title: "Delete project?", kind: "error" }))) return;
+      ? t("proj.dlg.deleteCustom")
+          .replace("{name}", p.name)
+          .replace("{clips}", clips)
+          .replace("{path}", p.root_path ?? "")
+      : t("proj.dlg.deleteManaged").replace("{name}", p.name).replace("{clips}", clips);
+    if (!(await confirmDialog(msg, { title: t("proj.dlg.deleteTitle"), kind: "error" }))) return;
     try {
       await invoke("project_finish", { id: p.id, promote: false });
       if (scope.kind === "project" && scope.id === p.id) setScope({ kind: "library" });
       setMode({ kind: "empty" });
     } catch (e) {
-      await alertDialog(String(e), { title: "Delete failed" });
+      await alertDialog(String(e), { title: t("proj.dlg.deleteFailed") });
     }
   }
 
   return (
     <div className="content">
       <div className="content-header">
-        <div className="ch-title">Projects</div>
+        <div className="ch-title">{t("proj.title")}</div>
         <span className="ch-meta">
-          {projects.length} {projects.length === 1 ? "project" : "projects"}
+          {projects.length} {projects.length === 1 ? t("proj.countOne") : t("proj.countMany")}
         </span>
         <div className="ch-spacer" />
         <button className="btn" onClick={() => setMode({ kind: "create" })}>
           <Icon.plus width={12} height={12} />
-          New project
+          {t("proj.new")}
         </button>
       </div>
 
@@ -158,11 +159,11 @@ export default function ProjectsPage() {
           {/* ---- BOTTOM: project list ---- */}
           <aside>
             <section className="card-box">
-              <h2>All projects</h2>
+              <h2>{t("proj.all")}</h2>
               {projects.length === 0 ? (
                 <div className="empty" style={{ padding: "26px 18px" }}>
                   <Icon.projects width={22} height={22} style={{ color: "var(--text-3)" }} />
-                  <p>No projects yet. Create one to scope your downloads into their own folder.</p>
+                  <p>{t("proj.emptyList")}</p>
                 </div>
               ) : (
                 <ul className="proj-list">
@@ -180,12 +181,10 @@ export default function ProjectsPage() {
                         <div className="proj-row-body">
                           <div className="proj-row-name">{p.name}</div>
                           <div className="proj-row-meta mono">
-                            <span>
-                              {p.asset_count} {p.asset_count === 1 ? "clip" : "clips"}
-                            </span>
+                            <span>{clipsWord(p.asset_count)}</span>
                             <span className="sep">·</span>
-                            <span className="faint" title={p.root_path ?? "Default managed location"}>
-                              {p.root_path ? baseName(p.root_path) : "Default"}
+                            <span className="faint" title={p.root_path ?? t("proj.defaultLoc")}>
+                              {p.root_path ? baseName(p.root_path) : t("proj.default")}
                             </span>
                           </div>
                         </div>
@@ -197,10 +196,10 @@ export default function ProjectsPage() {
                               activate(p);
                             }}
                           >
-                            Activate
+                            {t("proj.activate")}
                           </button>
                         )}
-                        {isActive && <span className="chip">active</span>}
+                        {isActive && <span className="chip">{t("proj.active")}</span>}
                       </li>
                     );
                   })}
@@ -236,7 +235,7 @@ export default function ProjectsPage() {
               <div className="card-box">
                 <div className="empty" style={{ padding: "40px 24px" }}>
                   <Icon.projects width={26} height={26} style={{ color: "var(--text-3)" }} />
-                  <p>Select a project to manage it, or create a new one.</p>
+                  <p>{t("proj.selectHint")}</p>
                 </div>
               </div>
             )}
@@ -258,6 +257,7 @@ function CreateProject({
   onCancel: () => void;
   onCreated: (p: Project) => void;
 }) {
+  const t = useT();
   const [name, setName] = useState("");
   const [folder, setFolder] = useState<string | null>(null);
   const [useDefault, setUseDefault] = useState(true);
@@ -266,7 +266,7 @@ function CreateProject({
 
   async function chooseFolder() {
     try {
-      const sel = await open({ directory: true, multiple: false, title: "Choose project folder" });
+      const sel = await open({ directory: true, multiple: false, title: t("proj.chooseTitle") });
       if (typeof sel === "string") {
         setFolder(sel);
         setUseDefault(false);
@@ -281,7 +281,7 @@ function CreateProject({
     const n = name.trim();
     if (!n || busy) return;
     if (!useDefault && !folder) {
-      setErr("Pick a folder, or switch to the default location.");
+      setErr(t("proj.pickFolderErr"));
       return;
     }
     setBusy(true);
@@ -300,17 +300,17 @@ function CreateProject({
   return (
     <section className="card-box">
       <h2>
-        New project <span className="chip">name + location</span>
+        {t("proj.new")} <span className="chip">{t("proj.chipNameLoc")}</span>
       </h2>
       <form className="stack" onSubmit={submit} style={{ gap: 16 }}>
         <div>
           <label className="settings-label" style={{ display: "block", marginBottom: 6 }}>
-            Name
+            {t("proj.name")}
           </label>
           <input
             className="field-input"
             type="text"
-            placeholder="e.g. BrandSpot 001 · Drone Reel · Tutorial Vol 2"
+            placeholder={t("proj.namePlaceholder")}
             value={name}
             onChange={(e) => setName(e.target.value)}
             disabled={busy}
@@ -323,7 +323,7 @@ function CreateProject({
 
         <div>
           <label className="settings-label" style={{ display: "block", marginBottom: 6 }}>
-            Folder location
+            {t("proj.folderLoc")}
           </label>
           <label className="radio-row" style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
             <input
@@ -336,9 +336,9 @@ function CreateProject({
               disabled={busy}
             />
             <span>
-              Default managed location{" "}
+              {t("proj.defaultManaged")}{" "}
               <span className="faint mono" style={{ fontSize: 11 }}>
-                (~/Media Hub/Projects/&lt;name&gt;/)
+                {t("proj.defaultManagedPath")}
               </span>
             </span>
           </label>
@@ -349,7 +349,7 @@ function CreateProject({
               onChange={() => setUseDefault(false)}
               disabled={busy}
             />
-            <span>Custom folder — clips land directly in it</span>
+            <span>{t("proj.customFolder")}</span>
           </label>
 
           {!useDefault && (
@@ -364,10 +364,10 @@ function CreateProject({
             >
               <button type="button" className="btn btn-secondary" onClick={() => void chooseFolder()} disabled={busy}>
                 <Icon.folder width={12} height={12} />
-                {folder ? "Change…" : "Choose folder…"}
+                {folder ? t("proj.change") : t("proj.choose")}
               </button>
               <code className="mono faint" style={{ fontSize: 12, wordBreak: "break-all" }}>
-                {folder ?? "no folder chosen"}
+                {folder ?? t("proj.noFolder")}
               </code>
             </div>
           )}
@@ -383,10 +383,10 @@ function CreateProject({
         <div style={{ display: "flex", gap: 8 }}>
           <button type="submit" className="btn" disabled={busy || !name.trim()}>
             <Icon.plus width={12} height={12} />
-            {busy ? "Creating…" : "Create project"}
+            {busy ? t("proj.creating") : t("proj.create")}
           </button>
           <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={busy}>
-            Cancel
+            {t("proj.cancel")}
           </button>
         </div>
       </form>
@@ -415,6 +415,7 @@ function ProjectDetail({
   onDelete: () => void;
   onRenamed: () => void;
 }) {
+  const t = useT();
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(project.name);
   const [err, setErr] = useState<string | null>(null);
@@ -460,31 +461,31 @@ function ProjectDetail({
           <h2 style={{ margin: 0 }}>{project.name}</h2>
         )}
         {isActive ? (
-          <span className="chip">active</span>
+          <span className="chip">{t("proj.active")}</span>
         ) : (
           <button className="btn btn-secondary" onClick={onActivate}>
-            Activate
+            {t("proj.activate")}
           </button>
         )}
       </div>
 
       <dl className="settings-kv" style={{ marginTop: 14 }}>
         <div>
-          <dt>Location</dt>
+          <dt>{t("proj.dtLocation")}</dt>
           <dd className="mono" style={{ wordBreak: "break-all" }}>
             {project.root_path ? (
               project.root_path
             ) : (
-              <span className="faint">Default — ~/Media Hub/Projects/{project.slug}/raw/</span>
+              <span className="faint">{t("proj.default")} — ~/Media Hub/Projects/{project.slug}/raw/</span>
             )}
           </dd>
         </div>
         <div>
-          <dt>Clips</dt>
+          <dt>{t("proj.dtClips")}</dt>
           <dd>{project.asset_count}</dd>
         </div>
         <div>
-          <dt>Created</dt>
+          <dt>{t("proj.dtCreated")}</dt>
           <dd>{new Date(project.created_at * 1000).toLocaleString()}</dd>
         </div>
       </dl>
@@ -499,7 +500,7 @@ function ProjectDetail({
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 16 }}>
         <button className="btn btn-secondary" onClick={onOpenFolder}>
           <Icon.folder width={12} height={12} />
-          Open folder
+          {t("dl.openFolder")}
         </button>
         <button
           className="btn btn-secondary"
@@ -508,24 +509,21 @@ function ProjectDetail({
             setRenaming(true);
           }}
         >
-          Rename
+          {t("proj.rename")}
         </button>
         <div style={{ flex: 1 }} />
-        <button className="btn btn-secondary" onClick={onClose} title="Return clips to Library; files stay on disk">
-          Close project
+        <button className="btn btn-secondary" onClick={onClose} title={t("proj.closeTitle")}>
+          {t("proj.close")}
         </button>
         <button className="btn btn-danger" onClick={onDelete}>
           <Icon.trash width={12} height={12} />
-          Delete
+          {t("proj.delete")}
         </button>
       </div>
 
       <p className="hint" style={{ marginTop: 12 }}>
-        <strong>Close</strong> returns clips to the Library and leaves every file on disk — just
-        drops the grouping. <strong>Delete</strong> removes the clips from Media Hub
-        {project.root_path
-          ? " but never touches your chosen folder on disk."
-          : " and moves the managed project folder to the Recycle Bin."}
+        {t("proj.hintPre")}
+        {project.root_path ? t("proj.hintCustom") : t("proj.hintManaged")}
       </p>
     </section>
   );
