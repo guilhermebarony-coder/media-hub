@@ -86,6 +86,24 @@ answer is "close enough to love." Decide with your own eyes on a split-screen.
 Read the **EULA** during step 2 — redistribution rights are the go/no-go for
 shipping it at all.
 
+### The runtime DLL / licensing crux (important, but NOT a POC blocker)
+- The RTX VSR runtime is **`nvngx_vsr.dll`**, which ships in the RTX Video SDK.
+  The community CLI (`RTXVideoProcessor`) distributes only its `.exe` and makes
+  the user download the SDK + copy the DLL — because **redistributing NVIDIA's
+  proprietary DLL without permission isn't allowed.**
+- **This only matters for SHIPPING to other users, not for our own testing.**
+  The POC runs entirely on our machine with our own SDK download → do it freely,
+  no license question needed. Only *after* the visual result earns it do we deal
+  with distribution.
+- **If NVIDIA won't allow bundling `nvngx_vsr.dll`**, the graceful fallback (same
+  pattern as apps that need proprietary codecs) is: on first "Enable RTX
+  Upscale", **open NVIDIA's official SDK page + guide the user to drop the DLL
+  in**, and have Media Hub locate it. Our worker (~20 MB) is fine to ship; the
+  ~60 MB SDK number is moot — the real question is purely *"can we legally hand
+  over the proprietary runtime, or must the user fetch it?"*
+- Size reality: worker ≈ tens of MB, not hundreds. Weight is never the blocker;
+  the license is.
+
 ---
 
 ## If it graduates: architecture
