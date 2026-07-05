@@ -3,10 +3,12 @@ import { useLocation } from "react-router-dom";
 import { Icon } from "../lib/icons";
 import { getHelpContent, type HelpEntry } from "../lib/helpContent";
 import { buildHelpIndex, searchHelp } from "../lib/helpSearch";
+import { useLang, useT } from "../lib/i18n";
 
 /** One help topic card. Shows a category label when it appears in flat
  *  (search) results, so people know which screen it belongs to. */
 function HelpArticle({ entry, categoryLabel }: { entry: HelpEntry; categoryLabel?: string }) {
+  const t = useT();
   return (
     <article id={`help-${entry.id}`} className="help-entry">
       <div className="help-entry-head">
@@ -21,7 +23,7 @@ function HelpArticle({ entry, categoryLabel }: { entry: HelpEntry; categoryLabel
       ))}
       {entry.tip && (
         <p className="help-tip">
-          <strong>Tip</strong> {entry.tip}
+          <strong>{t("help.tip")}</strong> {entry.tip}
         </p>
       )}
     </article>
@@ -43,9 +45,10 @@ export default function HelpPage() {
   const bodyRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // Locale-driven content. English today; getHelpContent falls back to en
-  // for any unknown locale, so wiring an app language later is a one-liner.
-  const { categories, entries } = getHelpContent();
+  // Locale-driven content: pulls the active language's help set (falls back
+  // to English for any entry/locale not yet translated).
+  const { lang, t } = useLang();
+  const { categories, entries } = getHelpContent(lang);
 
   const searching = query.trim().length > 0;
 
@@ -87,10 +90,10 @@ export default function HelpPage() {
       window.setTimeout(() => el.classList.remove("help-flash"), 1600);
     }
     // Defer a tick so the target exists after any filter re-render.
-    const t = window.setTimeout(jump, 30);
+    const timer = window.setTimeout(jump, 30);
     window.addEventListener("hashchange", jump);
     return () => {
-      window.clearTimeout(t);
+      window.clearTimeout(timer);
       window.removeEventListener("hashchange", jump);
     };
   }, [location.hash, searching]);
@@ -122,15 +125,15 @@ export default function HelpPage() {
   return (
     <div className="content">
       <div className="content-header">
-        <div className="ch-title">Help &amp; Manual</div>
+        <div className="ch-title">{t("help.title")}</div>
         <span className="ch-meta">
           {searching
-            ? `${results.length} result${results.length === 1 ? "" : "s"}`
-            : `${totalCount} topics`}
+            ? (results.length === 1 ? t("help.result") : t("help.results")).replace("{n}", String(results.length))
+            : t("help.topics").replace("{n}", String(totalCount))}
         </span>
         <div className="ch-spacer" />
         <span className="mono faint" style={{ fontSize: 11 }}>
-          press / to search
+          {t("help.pressSlash")}
         </span>
       </div>
 
@@ -144,7 +147,7 @@ export default function HelpPage() {
               <input
                 ref={searchRef}
                 type="text"
-                placeholder="Search help — try “mp3”, “cookies”, “laggy preview”, “delete”…"
+                placeholder={t("help.placeholder")}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 autoComplete="off"
@@ -155,8 +158,8 @@ export default function HelpPage() {
                   type="button"
                   className="help-search-clear"
                   onClick={() => setQuery("")}
-                  title="Clear search"
-                  aria-label="Clear search"
+                  title={t("help.clearSearch")}
+                  aria-label={t("help.clearSearch")}
                 >
                   ✕
                 </button>
@@ -186,12 +189,12 @@ export default function HelpPage() {
               {searching && results.length === 0 && (
                 <div className="help-empty">
                   <Icon.help width={22} height={22} />
-                  <p>No topics match “{query}”.</p>
+                  <p>{t("help.noMatch").replace("{q}", query)}</p>
                   <p className="faint" style={{ fontSize: 12 }}>
-                    Try fewer or simpler words — e.g. “audio”, “slow”, “trash”.
+                    {t("help.trySimpler")}
                   </p>
                   <button type="button" className="btn btn-secondary" onClick={() => setQuery("")}>
-                    Clear search
+                    {t("help.clearSearch")}
                   </button>
                 </div>
               )}

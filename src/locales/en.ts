@@ -359,4 +359,17 @@ export const en: Record<string, string> = {
   "ctx.deleteFolder": "Delete folder",
   "ctx.deleteFolders": "Delete {n} folders",
   "ctx.folderActions": "Folder actions for {name}",
+
+  // Help page (chrome)
+  "help.title": "Help & Manual",
+  "help.topics": "{n} topics",
+  "help.result": "{n} result",
+  "help.results": "{n} results",
+  "help.pressSlash": "press / to search",
+  "help.placeholder": "Search help — try “mp3”, “cookies”, “laggy preview”, “delete”…",
+  "help.noMatch": "No topics match “{q}”.",
+  "help.trySimpler": "Try fewer or simpler words — e.g. “audio”, “slow”, “trash”.",
+  "help.clearSearch": "Clear search",
+  "help.tip": "Tip",
+  "help.readMore": "Click the ? for the full guide →",
 };

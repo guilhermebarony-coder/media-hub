@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { Icon } from "../lib/icons";
+import { useT } from "../lib/i18n";
 
 /**
  * A small "(?)" help affordance placed next to a control. Hovering it for a
@@ -28,6 +29,7 @@ export function HelpHint({
   const [open, setOpen] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   const navigate = useNavigate();
+  const t = useT();
 
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
@@ -56,7 +58,7 @@ export function HelpHint({
         <span className="help-hint-pop" role="tooltip">
           {title && <span className="help-hint-title">{title}</span>}
           <span className="help-hint-body">{children}</span>
-          {id && <span className="help-hint-more">Click the ? for the full guide →</span>}
+          {id && <span className="help-hint-more">{t("help.readMore")}</span>}
         </span>
       )}
     </span>

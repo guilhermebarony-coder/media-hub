@@ -357,4 +357,17 @@ export const pt: Record<string, string> = {
   "ctx.deleteFolder": "Excluir pasta",
   "ctx.deleteFolders": "Excluir {n} pastas",
   "ctx.folderActions": "Ações da pasta {name}",
+
+  // Página de Ajuda (interface)
+  "help.title": "Ajuda & Manual",
+  "help.topics": "{n} tópicos",
+  "help.result": "{n} resultado",
+  "help.results": "{n} resultados",
+  "help.pressSlash": "aperte / para buscar",
+  "help.placeholder": "Buscar na ajuda — tente “mp3”, “cookies”, “prévia travando”, “excluir”…",
+  "help.noMatch": "Nenhum tópico corresponde a “{q}”.",
+  "help.trySimpler": "Tente palavras mais simples — ex.: “áudio”, “lento”, “lixeira”.",
+  "help.clearSearch": "Limpar busca",
+  "help.tip": "Dica",
+  "help.readMore": "Clique no ? para o guia completo →",
 };
