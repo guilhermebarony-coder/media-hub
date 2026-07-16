@@ -1,4 +1,33 @@
-# RTX Video upscale — research & POC plan (PARKED, not scheduled)
+# RTX Video upscale — research & POC plan (POC PASSED ✅, not yet scheduled)
+
+Status: **POC passed 2026-07-05 — quality + speed validated.** Not yet on the
+roadmap (still a weeks-long native effort), but the go/no-go question is
+answered: **GO on quality.** This doc captures the assessment + POC result.
+
+## POC RESULT (2026-07-05) — PASSED
+Ran the community CLI **RTXVideoProcessor** with the official RTX Video SDK
+`nvngx_vsr.dll` (quality 4 = Ultra) on real clips, on the author's own RTX GPU.
+- **Quality:** "almost 100% better, pretty similar to DaVinci's." Cleans a good
+  amount of compression **without wrecking the image** (no plastic/over-smoothed
+  look). Verified on compression-heavy live-action AND several anime clips
+  (edges, gradients/sky banding, flat areas all improved).
+- **Speed:** ~**44 fps** processing → faster than real-time. Kills the "too slow"
+  worry that sinks Topaz/Real-ESRGAN-class tools.
+- **Correctness:** exact 2× upscale confirmed via ffprobe (1080p→2160p,
+  480p→960p). Output files clean (the green box the author saw was the NVIDIA
+  App "Alt+Z" overlay, NOT baked into the file).
+- **Verdict:** the "fixes it without ruining it" result the author wanted is
+  reproducible outside Resolve. → Quality no longer the blocker; remaining cost
+  is purely the native C++/CUDA integration effort (see architecture below).
+- Test kit lives at `E:\TESTE RTX VIDEO` (drop-and-click ENHANCE + COMPARE bats)
+  — scratch, deletable, outside the repo.
+
+Next decision (not started): schedule the native worker integration vs. keep it
+parked behind other roadmap items. Quality risk is retired; only effort remains.
+
+---
+
+Original assessment (pre-POC) below.
 
 Status: **brainstorm / not on the roadmap.** No production code. This doc
 captures the assessment so we can pick it up if/when a proof-of-concept
@@ -86,23 +115,47 @@ answer is "close enough to love." Decide with your own eyes on a split-screen.
 Read the **EULA** during step 2 — redistribution rights are the go/no-go for
 shipping it at all.
 
-### The runtime DLL / licensing crux (important, but NOT a POC blocker)
-- The RTX VSR runtime is **`nvngx_vsr.dll`**, which ships in the RTX Video SDK.
-  The community CLI (`RTXVideoProcessor`) distributes only its `.exe` and makes
-  the user download the SDK + copy the DLL — because **redistributing NVIDIA's
-  proprietary DLL without permission isn't allowed.**
-- **This only matters for SHIPPING to other users, not for our own testing.**
-  The POC runs entirely on our machine with our own SDK download → do it freely,
-  no license question needed. Only *after* the visual result earns it do we deal
-  with distribution.
-- **If NVIDIA won't allow bundling `nvngx_vsr.dll`**, the graceful fallback (same
-  pattern as apps that need proprietary codecs) is: on first "Enable RTX
-  Upscale", **open NVIDIA's official SDK page + guide the user to drop the DLL
-  in**, and have Media Hub locate it. Our worker (~20 MB) is fine to ship; the
-  ~60 MB SDK number is moot — the real question is purely *"can we legally hand
-  over the proprietary runtime, or must the user fetch it?"*
-- Size reality: worker ≈ tens of MB, not hundreds. Weight is never the blocker;
-  the license is.
+### Can we rely on the driver already having the DLL? — NO (checked 2026-07-05)
+Searched a live RTX machine (System32, DriverStore/FileRepository, NVIDIA App,
+ProgramData). **`nvngx_vsr.dll` is NOT present by that name anywhere the driver
+installs.** The driver ships its own internal VSR as **`nvsvsr.dll` +
+`nvvitvsr.dll`** (used by the NVIDIA App's browser-video enhancement) — same
+tech family, but **different filenames and a different interface**; the SDK's
+NGX loader specifically requests `nvngx_vsr.dll` and won't load those. So we
+**cannot** assume the runtime is already on a user's machine — it only comes
+from the RTX Video SDK. → Shipping still requires either (1) NVIDIA's OK to
+bundle `nvngx_vsr.dll` (~19 MB) or (2) the user-fetches-DLL fallback below.
+
+### The runtime DLL / licensing — READ THE EULA (done 2026-07-05)
+Read the full `NVIDIA_RTX_Video_SDK_License.pdf` (v. Feb 23 2024 + supplement).
+**Revises the earlier "can't redistribute" assumption — bundling IS permitted
+under conditions.** (Not legal advice; plain reading of the terms.)
+
+- **Redistribution allowed.** §1(c) grants the right to *"distribute any software
+  and materials within the SDK ... incorporated in object code format into a
+  software application."* → **We can bundle `nvngx_vsr.dll` inside Media Hub**;
+  users do NOT have to fetch it. (The community CLI just *chose* not to bundle.)
+- **Conditions to satisfy before public/commercial release:**
+  - §2(a) app has material functionality beyond the SDK → ✅ Media Hub does.
+  - §4(b) can't ship the DLL as a stand-alone product → ✅ it's bundled.
+  - §2(c) distribute under terms "at least as protective" of NVIDIA's IP → **add
+    an app EULA/NOTICE** (no reverse-engineer, NVIDIA retains ownership, etc.).
+  - §4(a) keep NVIDIA copyright notices intact → ship the DLL untouched.
+  - §4(e) don't place the SDK under a copyleft/OSS license requiring source
+    disclosure or free redistribution → **MIT is fine (permissive), but the DLL
+    must be clearly scoped OUT of our MIT** — a `THIRD-PARTY-NOTICES` entry:
+    "nvngx_vsr.dll © NVIDIA, used under the RTX SDK License."
+  - Supplement §4 **notify NVIDIA before release** (NGX-based) via
+    developer.nvidia.com/sw-notification (company, app, ship date, link).
+  - Supplement §5 codec (H.264/H.265) patent licensing is our responsibility —
+    already true because of ffmpeg/NVENC, nothing new.
+  - Supplement §7 trademark rules if we say "NVIDIA RTX" — attribute correctly.
+- **None of this blocks TESTING.** POC runs on our own SDK download → go freely.
+  The conditions only attach when we ship it bundled.
+- **Fallback still available** if we ever want to avoid bundling: on first enable,
+  open NVIDIA's SDK page + have the user drop the DLL in, and Media Hub locates
+  it. Now optional (a UX choice), not a legal necessity.
+- Size reality: worker ≈ tens of MB, DLL ≈ 19 MB. Weight was never the blocker.
 
 ---
 

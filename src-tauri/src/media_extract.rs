@@ -123,6 +123,106 @@ pub async fn media_extract_thumbnail(
     })
 }
 
+/// 1.12.x — fetch the platform's own thumbnail (the YouTube/X CDN art
+/// from yt-dlp metadata) and store it as the asset's local thumbnail.
+/// The platform art is what the user saw when they picked the video, so
+/// a library card matching it beats a mid-clip frame grab. Downloads to
+/// a temp sidecar, then normalizes through ffmpeg into the standard
+/// 480px `_thumbnails/<asset_id>.jpg` (ffmpeg sniffs the container from
+/// content, so webp/png/jpg CDNs all work). The caller falls back to
+/// `media_extract_thumbnail` when the URL is missing or this fails.
+#[tauri::command]
+pub async fn media_fetch_thumbnail(
+    app: AppHandle,
+    settings: tauri::State<'_, settings::SettingsState>,
+    url: String,
+    asset_id: String,
+) -> Result<ThumbnailResult, String> {
+    if url.trim().is_empty() {
+        return Err("url is empty".into());
+    }
+    if asset_id.trim().is_empty() {
+        return Err("asset_id is empty".into());
+    }
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| format!("resolve home dir: {e}"))?;
+    let thumb_dir = settings::content_root(&settings, &home).join("_thumbnails");
+    std::fs::create_dir_all(&thumb_dir).map_err(|e| format!("create thumbnails dir: {e}"))?;
+
+    let resp = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("thumbnail fetch: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("thumbnail fetch: HTTP {}", resp.status()));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("thumbnail read: {e}"))?;
+    if bytes.is_empty() {
+        return Err("thumbnail fetch: empty body".into());
+    }
+    let tmp_path = thumb_dir.join(format!("{asset_id}.src"));
+    std::fs::write(&tmp_path, &bytes).map_err(|e| format!("write temp thumbnail: {e}"))?;
+
+    let out_path = thumb_dir.join(format!("{asset_id}.jpg"));
+    let out_path_str = out_path
+        .to_str()
+        .ok_or("thumbnail path is not valid UTF-8")?
+        .to_string();
+    let tmp_str = tmp_path
+        .to_str()
+        .ok_or("temp thumbnail path is not valid UTF-8")?
+        .to_string();
+
+    let ffmpeg = tools::ffmpeg_command(&app)?;
+    let args: Vec<&str> = vec![
+        "-y",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-i", tmp_str.as_str(),
+        "-frames:v", "1",
+        "-vf", "scale=480:-2:flags=lanczos",
+        "-q:v", "4",
+        out_path_str.as_str(),
+    ];
+    let (mut rx, _child) = ffmpeg
+        .args(args)
+        .spawn()
+        .map_err(|e| format!("ffmpeg spawn: {e}"))?;
+
+    let mut stderr_tail: Vec<String> = Vec::new();
+    let mut exit_code: Option<i32> = None;
+    while let Some(event) = rx.recv().await {
+        match event {
+            CommandEvent::Stderr(bytes) => {
+                let line = String::from_utf8_lossy(&bytes).trim().to_string();
+                if !line.is_empty() {
+                    stderr_tail.push(line);
+                    if stderr_tail.len() > 20 {
+                        stderr_tail.remove(0);
+                    }
+                }
+            }
+            CommandEvent::Terminated(payload) => {
+                exit_code = payload.code;
+            }
+            _ => {}
+        }
+    }
+    let _ = std::fs::remove_file(&tmp_path);
+    if exit_code != Some(0) {
+        let tail = stderr_tail
+            .last()
+            .cloned()
+            .unwrap_or_else(|| "(no stderr)".into());
+        return Err(format!("ffmpeg thumbnail convert failed: {tail}"));
+    }
+    Ok(ThumbnailResult { path: out_path_str })
+}
+
 // =====================================================================
 // Waveform thumbnail extraction (1.2.0 — audio)
 // =====================================================================

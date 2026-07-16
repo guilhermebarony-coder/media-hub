@@ -54,3 +54,7 @@ src-tauri/target.lnk
 *cookies*.txt
 cookies*.txt
 *.cookies
+
+# Temp audit scratch (research crops, regenerable)
+.tmp_twilight_audit/
+tmp_iter9_frames/

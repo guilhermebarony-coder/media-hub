@@ -90,6 +90,36 @@ export async function attachLocalThumbnail(
 }
 
 /**
+ * 1.12.x — prefer the platform's own thumbnail (the art the user saw
+ * when picking the video) over a mid-clip frame grab. Fetches the CDN
+ * image through Rust (normalized to the standard 480px jpg) and falls
+ * back to frame extraction when there's no URL or the fetch fails.
+ * Segment cuts should pass `thumbUrl: null` — each cut deserves its own
+ * distinct frame, and N cuts sharing one platform thumb would be
+ * indistinguishable in the grid.
+ */
+export async function attachBestThumbnail(
+  assetId: string,
+  thumbUrl: string | null,
+  srcPath: string,
+  durationSec: number | null,
+): Promise<void> {
+  if (thumbUrl) {
+    try {
+      const res = await invoke<{ path: string }>("media_fetch_thumbnail", {
+        url: thumbUrl,
+        assetId,
+      });
+      await invoke("library_set_thumbnail", { assetId, path: res.path });
+      return;
+    } catch (e) {
+      console.warn("platform thumbnail fetch failed, falling back to frame:", e);
+    }
+  }
+  await attachLocalThumbnail(assetId, srcPath, durationSec);
+}
+
+/**
  * 1.2.0 — generate a waveform PNG for an audio-only asset and store
  * it as the asset's thumbnail. Same shape as attachLocalThumbnail
  * above (fire-and-forget post-download), just calls the waveform

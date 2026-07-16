@@ -1187,7 +1187,17 @@ textarea.field-input {
 }
 .facet .ct { font-family: var(--mono); font-size: 11px; color: var(--text-3); }
 
-.lib-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.lib-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* Container for the toolbar's responsive rules below — lets the toolbar
+     react to the actual pane width (sidebar + inspector eat window width),
+     not the window itself. */
+  container-type: inline-size;
+  container-name: libmain;
+}
 .lib-toolbar {
   height: 40px;
   flex: 0 0 40px;
@@ -1200,6 +1210,9 @@ textarea.field-input {
 .lib-search {
   flex: 1;
   max-width: 380px;
+  /* Shrink floor — without this the input's intrinsic min-width (~20ch)
+     blocks flex shrinking and the buttons overflow under the inspector. */
+  min-width: 110px;
   height: 28px;
   background: var(--bg-2);
   border: 1px solid var(--line-hi);
@@ -1212,6 +1225,7 @@ textarea.field-input {
 }
 .lib-search input {
   flex: 1;
+  min-width: 0; /* allow the flex item to shrink below the input's default size */
   background: transparent;
   border: none;
   outline: none;
@@ -1307,19 +1321,6 @@ textarea.field-input {
 .lib-card:focus-visible:not(.selected) {
   outline: 1px dashed var(--text-3);
   outline-offset: -3px;
-}
-
-/* "Just downloaded" highlight (0.9 UX win #7) — subtle lime left
-   border + glow on cards whose downloaded_at is within the last
-   5 minutes. Fades away as cards age out of the window on next
-   library:changed event. */
-.lib-card.just-now {
-  border-left: 2px solid var(--accent);
-  box-shadow: -2px 0 12px -4px color-mix(in srgb, var(--accent) 60%, transparent);
-}
-.lib-card.just-now.selected {
-  /* "selected" wins on the right + glow combo; left accent stays. */
-  border-left-color: var(--accent);
 }
 
 /* 1.1 Phase 2 — folders list in the left sidebar. Sits above the
@@ -2037,6 +2038,8 @@ body.lib-resizing-h * {
 }
 .ctx-item:hover { background: var(--bg-3); color: var(--text-0); }
 .ctx-item:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+/* 1.12.x — disabled entries (e.g. Trash menu with an empty trash). */
+.ctx-item:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
 .ctx-sep {
   height: 1px;
   background: var(--line);
@@ -2050,6 +2053,68 @@ body.lib-resizing-h * {
    Still clickable — the click surfaces a friendly "open Eagle" dialog. */
 .ctx-dim { color: var(--text-2); opacity: 0.6; }
 .insp-action-dim { opacity: 0.5; }
+
+/* 1.12.x — transient "added to queue" chip beside the Download button. */
+.dl-queued-flash {
+  font-size: 11px;
+  color: var(--accent);
+  animation: update-notice-in 140ms ease;
+  white-space: nowrap;
+}
+
+/* 1.12.x — thin divider between top-bar icon groups (separates the
+   hide-to-tray action from the regular icons). */
+.topbar-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--line-hi);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+/* 1.12.x — once-per-version update notice (UpdateNotice.tsx). Bottom-right
+   pill, deliberately quiet: no animation loop, no backdrop, dismissible. */
+.update-notice {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-hi);
+  border-radius: 7px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  font-size: 12.5px;
+  color: var(--text-0);
+  animation: update-notice-in 140ms ease;
+}
+@keyframes update-notice-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.update-notice-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.update-notice-text { white-space: nowrap; }
+.update-notice .btn { height: 26px; padding: 0 10px; font-size: 12px; }
+.update-notice-x {
+  background: transparent;
+  border: none;
+  color: var(--text-2);
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.update-notice-x:hover { color: var(--text-0); background: var(--bg-3); }
 
 /* 1.4 — transient non-blocking status toast. Bottom-center, above the
    inspector; auto-dismisses (timer in Library.tsx). */
@@ -2082,6 +2147,16 @@ body.lib-resizing-h * {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  flex-shrink: 0; /* never squash the buttons — the search shrinks instead */
+  white-space: nowrap;
+}
+/* Narrow pane (sidebar + inspector eating the width): drop the button labels
+   (icons + title tooltips remain), the search kbd hint, and the count so the
+   toolbar never overflows under the inspector. */
+@container libmain (max-width: 560px) {
+  .lib-filter-btn .lib-btn-label { display: none; }
+  .lib-search .kbd { display: none; }
+  .lib-toolbar .lib-count { display: none; }
 }
 .lib-filter-btn.open {
   background: color-mix(in srgb, var(--accent) 20%, var(--bg-2));
@@ -4406,9 +4481,6 @@ body.lib-resizing-h * {
   outline: 1px dashed var(--text-3);
   outline-offset: -2px;
 }
-.lib-row.just-now {
-  box-shadow: inset 2px 0 0 var(--accent);
-}
 .lib-row.is-missing {
   opacity: 0.65;
 }
@@ -4957,3 +5029,698 @@ body.lib-resizing-h * {
   .help-layout { grid-template-columns: 1fr; }
   .help-nav { display: none; }
 }
+
+/* ============================================================
+   RTX enhance queue dock (bottom-left status popup, Phase 1)
+   ============================================================ */
+.rtx-dock {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  width: 300px;
+  max-height: 46vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  z-index: 900;
+  overflow: hidden;
+}
+.rtx-dock-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-3);
+  border: none;
+  color: var(--text-0);
+  cursor: pointer;
+  font: inherit;
+  width: 100%;
+  text-align: left;
+}
+.rtx-dock-head:hover { background: var(--bg-4); }
+.rtx-dock-title { font-size: 12.5px; font-weight: 600; }
+.rtx-dock-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.rtx-dock-spacer { flex: 1; }
+.rtx-dock-list {
+  overflow-y: auto;
+  /* Pin to ~5 rows tall, then scroll (a job row ≈ 56px + 4px gap). */
+  max-height: 300px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rtx-job {
+  position: relative;
+  padding: 8px 28px 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+}
+.rtx-job-main { display: flex; align-items: baseline; gap: 6px; }
+.rtx-job-title {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rtx-job-dims { font-size: 10.5px; color: var(--text-3); flex-shrink: 0; }
+.rtx-job-status { font-size: 10.5px; color: var(--text-2); margin-top: 2px; }
+.rtx-job-failed .rtx-job-status { color: #ff8080; }
+.rtx-job-done .rtx-job-status { color: var(--accent); }
+.rtx-job-track {
+  margin-top: 6px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-4);
+  overflow: hidden;
+}
+.rtx-job-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.2s ease;
+}
+.rtx-job-x {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--bg-3);
+  color: var(--text-1);
+  cursor: pointer;
+  border-radius: 6px;
+}
+.rtx-job-x:hover { background: var(--bg-4); color: var(--text-0); }
+/* Running jobs: a clearly red Stop button (color reads even in glare). */
+.rtx-job-stop {
+  background: rgba(255, 90, 90, 0.16);
+  border-color: rgba(255, 90, 90, 0.55);
+  color: #ff7676;
+}
+.rtx-job-stop:hover {
+  background: rgba(255, 90, 90, 0.32);
+  border-color: #ff7676;
+  color: #fff;
+}
+.rtx-dock-clear {
+  padding: 8px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.rtx-dock-clear:hover { background: var(--bg-3); color: var(--text-0); }
+
+/* RTX-enhanced badge on a library card thumbnail. */
+.lib-card-rtx {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  z-index: 2;
+}
+
+/* Dock header buttons (open window / collapse). */
+.rtx-dock-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  border-radius: 5px;
+}
+.rtx-dock-btn:hover { background: var(--bg-4); color: var(--text-0); }
+.rtx-job { cursor: pointer; }
+.rtx-job:hover { border-color: var(--accent-line); }
+
+/* ============================================================
+   RTX before/after window (Phase 2)
+   ============================================================ */
+.rtxw-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(2px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+}
+.rtxw {
+  width: min(1600px, 97vw);
+  height: min(950px, 95vh);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+.rtxw-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-0);
+}
+.rtxw-title { font-size: 13px; font-weight: 600; }
+.rtxw-spacer { flex: 1; }
+.rtxw-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  border-radius: 6px;
+}
+.rtxw-close:hover { background: var(--bg-4); color: var(--text-0); }
+.rtxw-body { flex: 1; display: flex; min-height: 0; }
+.rtxw-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.rtxw-placeholder { color: var(--text-1); text-align: center; font-size: 13px; line-height: 1.6; padding: 0 28px; }
+
+/* Drop-in feedback — a video is being dragged over the open window. */
+.rtxw.drop-hover { outline: 2px dashed var(--accent-line); outline-offset: -6px; }
+.rtxw-droplabel {
+  position: absolute;
+  inset: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--accent-line);
+  border-radius: 10px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* A/B viewer = comparison surface (flex:1) + transport bar. */
+.rtxw-viewer {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+/* A/B comparison surface — the zoom/pan viewport. */
+.rtxw-compare {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+  user-select: none;
+}
+/* Each video sits in its own un-transformed layer (so the after-layer can be
+   clipped in SCREEN space); zoom/pan is applied to the <video> itself. */
+.rtxw-layer { position: absolute; inset: 0; }
+.rtxw-vid {
+  transform-origin: center center;
+  will-change: transform;
+}
+.rtxw-vid {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+.rtxw-after { position: absolute; inset: 0; }
+.rtxw-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  transform: translateX(-1px);
+  pointer-events: none;
+}
+.rtxw-handle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  /* Grabbable at any zoom even though the parent divider ignores pointers. */
+  pointer-events: auto;
+  cursor: ew-resize;
+}
+.rtxw-tag {
+  position: absolute;
+  top: 10px;
+  padding: 2px 8px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+.rtxw-tag-l { left: 10px; }
+.rtxw-tag-r { right: 10px; background: var(--accent); color: var(--accent-ink); }
+
+/* Queue sidebar */
+.rtxw-side {
+  width: 320px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-1);
+  display: flex;
+  flex-direction: column;
+}
+.rtxw-side-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.rtxw-group { display: flex; flex-direction: column; gap: 2px; }
+.rtxw-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.rtxw-row-meta { font-size: 10px; color: var(--text-3); flex-shrink: 0; white-space: nowrap; }
+.rtxw-side-head {
+  padding: 10px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-2);
+  border-bottom: 1px solid var(--border);
+}
+.rtxw-side-list { flex: 1; overflow-y: auto; padding: 6px; }
+.rtxw-empty { padding: 16px; text-align: center; font-size: 12px; }
+.rtxw-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 32px 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.rtxw-row:hover { background: var(--bg-2); }
+.rtxw-row.sel { background: var(--bg-2); border-color: var(--accent-line); }
+.rtxw-row-title {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rtxw-row-status { font-size: 10px; text-transform: uppercase; color: var(--text-3); flex-shrink: 0; }
+.rtxw-row-status.s-done { color: var(--accent); }
+.rtxw-row-status.s-failed { color: #ff8080; }
+.rtxw-row-status.s-running { color: var(--text-0); }
+.rtxw-row-x {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  border-radius: 5px;
+}
+.rtxw-row-x:hover { background: var(--bg-4); color: #ff8080; }
+.rtxw-settings {
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rtxw-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-0);
+  cursor: pointer;
+}
+.rtxw-note { font-size: 11px; }
+
+/* RTX window settings fields (quality / scale dropdowns). */
+.rtxw-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.rtxw-field-label { font-size: 12px; color: var(--text-0); }
+.rtxw-select {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text-0);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.rtxw-select:disabled { color: var(--text-3); cursor: not-allowed; }
+
+/* ---- Pre-clean (deblock/deband) tuning panel — bare testing rig ---- */
+.rtxw-preclean {
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rtxw-preclean-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 4px;
+  border-left: 2px solid var(--border);
+  padding-bottom: 2px;
+}
+.rtxw-toggle.sub { font-size: 11px; color: var(--text-1); }
+.rtxw-pc-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+  padding-left: 8px;
+}
+.rtxw-pc-grid label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-1);
+}
+.rtxw-pc-grid input[type="number"] {
+  width: 62px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text-0);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 5px;
+  border-radius: 5px;
+}
+.rtxw-pc-grid select {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text-0);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 5px;
+  border-radius: 5px;
+}
+.rtxw-pc-cb { justify-content: flex-start !important; gap: 6px; cursor: pointer; }
+.rtxw-pc-raw {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-1);
+}
+.rtxw-pc-raw input {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text-0);
+  font: 11px/1.4 var(--mono, monospace);
+  padding: 3px 6px;
+  border-radius: 5px;
+}
+
+/* ---- A/B transport bar (play/scrub/frame-step/offset/zoom) ---- */
+.rtxw-transport {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--border);
+}
+.rtxw-tbtn {
+  height: 26px;
+  min-width: 26px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-0);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+.rtxw-tbtn:hover { background: var(--bg-3); }
+.rtxw-tbtn:disabled { opacity: 0.4; cursor: not-allowed; }
+.rtxw-play { min-width: 34px; color: var(--accent); font-size: 11px; }
+.rtxw-scrub { flex: 1; min-width: 60px; accent-color: var(--accent); cursor: pointer; }
+.rtxw-time { font-size: 11px; color: var(--text-2); flex-shrink: 0; }
+.rtxw-tlabel { font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-3); }
+.rtxw-tsep { width: 1px; align-self: stretch; background: var(--border); margin: 2px 2px; }
+
+/* ---- Staging ("Setting up") ---- */
+.rtxw-stagebox { border-bottom: 1px solid var(--border); display: flex; flex-direction: column; max-height: 46%; }
+.rtxw-stagebox .rtxw-side-head { display: flex; align-items: center; gap: 6px; }
+.rtxw-stagebox .rtxw-side-list { flex: 1; }
+.rtxw-linkbtn {
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.rtxw-linkbtn:hover { color: var(--text-0); background: var(--bg-3); }
+.rtxw-startall {
+  border: 1px solid var(--accent-line);
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.rtxw-startall:hover { background: var(--accent); color: var(--accent-ink); }
+.rtxw-staged {
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  margin-bottom: 6px;
+  background: var(--bg-2);
+}
+.rtxw-staged-top { display: flex; align-items: center; gap: 6px; }
+.rtxw-staged-top .rtxw-row-title { flex: 1; }
+.rtxw-startone {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--accent-line);
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 9px;
+  flex-shrink: 0;
+}
+.rtxw-startone:hover { background: var(--accent); color: var(--accent-ink); }
+.rtxw-staged-ctrls { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.rtxw-mini {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  color: var(--text-0);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.rtxw-mini-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+/* ---- Settings card (context-aware: selected clip or defaults) ---- */
+.rtxw-settings-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; }
+.rtxw-settings-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rtxw-settings-sub { font-size: 10px; }
+.rtxw-settings-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+
+/* ---- Preview: busy overlay, "pick another frame", preview button ---- */
+.rtxw-busy {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--text-0);
+  font-size: 13px;
+  z-index: 6;
+}
+.rtxw-spin {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--text-3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: rtxspin 0.8s linear infinite;
+}
+@keyframes rtxspin { to { transform: rotate(360deg); } }
+.rtxw-newframe {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 6;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--text-0);
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.rtxw-newframe:hover { background: rgba(0, 0, 0, 0.85); }
+/* Preview control bar (pick-frame + VSR toggle), floated top-left over the viewer. */
+.rtxw-prevbar {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rtxw-prevbar .rtxw-newframe { position: static; top: auto; left: auto; }
+.rtxw-vsrtoggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--accent-line);
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--text-0);
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rtxw-vsrtoggle:hover { background: rgba(0, 0, 0, 0.85); }
+.rtxw-vsrtoggle.disabled { opacity: 0.45; cursor: not-allowed; }
+.rtxw-preview-btn {
+  border: 1px solid var(--accent-line);
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rtxw-preview-btn:hover:not(:disabled) { background: var(--accent); color: var(--accent-ink); }
+.rtxw-preview-btn:disabled { opacity: 0.5; cursor: not-allowed; }

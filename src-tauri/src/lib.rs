@@ -13,6 +13,7 @@ mod media_extract;
 mod metadata;
 mod playlist;
 mod preview;
+mod rtx;
 mod settings;
 mod tools;
 mod transcode;
@@ -367,6 +368,61 @@ fn sum_live_dir_bytes(dir: &std::path::Path, video_id: &str) -> u64 {
                 .sum()
         })
         .unwrap_or(0)
+}
+
+/// True when `name` (lowercased) carries a yt-dlp per-format intermediate
+/// marker like ".f303." / ".f251." — the pre-merge single-stream files.
+fn has_fmt_intermediate_marker(name: &str) -> bool {
+    let mut i = 0;
+    while let Some(pos) = name[i..].find(".f") {
+        let start = i + pos + 2;
+        let digits = name[start..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+        if digits > 0 && name[start + digits..].starts_with('.') {
+            return true;
+        }
+        i = start;
+    }
+    false
+}
+
+/// 1.12.x — sweep partial-download artifacts for `video_id` out of `dir`
+/// after a user cancel. Deliberately conservative: a file is only removed
+/// when it BOTH carries this download's `[video_id]` marker AND looks like
+/// an in-flight artifact —
+///   *.part, *.part-Frag*   (partial data)
+///   *.ytdl, *.aria2        (downloader state)
+///   "<title> [id].fNNN.*"  (pre-merge per-format intermediates)
+/// The id requirement protects other queue jobs downloading concurrently
+/// into the same folder; the suffix requirement protects a COMPLETED
+/// earlier download of the same video ("<title> [id].mp4"). Best-effort:
+/// files still locked by the just-killed child are skipped, not retried.
+fn cleanup_partial_downloads(dir: &std::path::Path, video_id: &str) -> u32 {
+    if video_id.trim().is_empty() {
+        return 0;
+    }
+    let id_marker = format!("[{}]", video_id.to_lowercase());
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0u32;
+    for e in entries.filter_map(|e| e.ok()) {
+        let name = e.file_name().to_string_lossy().to_lowercase();
+        if !name.contains(&id_marker) {
+            continue;
+        }
+        let is_artifact = name.ends_with(".part")
+            || name.contains(".part-frag")
+            || name.ends_with(".ytdl")
+            || name.ends_with(".aria2")
+            || has_fmt_intermediate_marker(&name);
+        if is_artifact && std::fs::remove_file(e.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// Parse aria2c's human-readable size tokens ("19MiB", "1.27GiB",
@@ -1073,6 +1129,18 @@ async fn yt_download(
     // code 1 on windows), so we check the canceled-flag set instead.
     if let Some(jid) = job_id.as_ref() {
         if registry_take_canceled(&registry, jid) {
+            // 1.12.x — sweep this download's partial artifacts. Small
+            // delay first: on Windows the killed child's file handles
+            // take a beat to release, and remove_file would just fail.
+            tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+            let removed = cleanup_partial_downloads(&dest, &video_id);
+            if removed > 0 {
+                diag::log(
+                    &app,
+                    "download",
+                    &format!("cancel cleanup: removed {removed} partial file(s) for [{video_id}]"),
+                );
+            }
             return Err("__canceled__".to_string());
         }
     }
@@ -1864,6 +1932,7 @@ pub fn run() {
             tools::tools_ensure,
             transcode::media_transcode,
             media_extract::media_extract_thumbnail,
+            media_extract::media_fetch_thumbnail,
             media_extract::media_extract_waveform,
             direct::media_direct_download,
             library::library_insert,
@@ -1916,6 +1985,17 @@ pub fn run() {
             tray::app_set_tray_tooltip,
             eagle::eagle_detect,
             eagle::eagle_send,
+            rtx::rtx_capability,
+            rtx::rtx_worker_status,
+            rtx::rtx_enhance,
+            rtx::rtx_enhance_path,
+            rtx::rtx_preview,
+            rtx::rtx_slice_extract,
+            rtx::rtx_slice_filter,
+            rtx::rtx_slice_vsr,
+            rtx::rtx_slice_post,
+            rtx::rtx_slice_diff,
+            rtx::rtx_enhance_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

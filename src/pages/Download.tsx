@@ -314,10 +314,8 @@ function MetadataCard() {
   const [audioFormat, setAudioFormat] = useState<AudioFormat>("mp3");
   // 1.1.3 — downloading/dlErr/dlResult/progress/transcodeProgress/phase/
   // downloadedPaths now live in DownloadsContext (see useDownloads()
-  // call below). The `submitting` local exists only to gate the form's
-  // double-click between user click and the context state actually
-  // updating (one render tick).
-  const [submitting, setSubmitting] = useState(false);
+  // call below). (The old `submitting` double-click gate is gone —
+  // 1.12.x enqueues synchronously, so there's no async tick to guard.)
   // 0.6.1: list of segments to trim from the single source download.
   // Empty = full video. N = N independent clip files on disk after
   // ffmpeg trims. The scrubber drives this entirely.
@@ -364,11 +362,15 @@ function MetadataCard() {
   // and the provider drives the state from there).
   const {
     singleDownload,
-    startSingleDownload,
+    enqueueSingleSpec,
     startDirectDownload,
     cancelSingleDownload,
     resetSingleDownload,
   } = useDownloads();
+  // 1.12.x — brief "added to queue" confirmation after the Download
+  // button hands the job to the queue (which is now instant).
+  const [queuedFlash, setQueuedFlash] = useState(false);
+  const queuedFlashTimer = useRef<number | null>(null);
   const progress = singleDownload?.progress ?? null;
   const transcodeProgress = singleDownload?.transcodeProgress ?? null;
   const phase: "idle" | "downloading" | "transcoding" =
@@ -379,9 +381,9 @@ function MetadataCard() {
   const dlErr = validationErr ?? singleDownload?.error ?? null;
   const dlResult = singleDownload?.result ?? null;
   const downloadedPaths = singleDownload?.downloadedPaths ?? [];
-  // `downloading` was previously a local useState; now derived from
-  // phase. `submitting` covers the click-to-state-update tick.
-  const downloading = submitting || phase !== "idle";
+  // `downloading` now only reflects the direct-download fallback (the
+  // regular card download enqueues into the queue and never blocks).
+  const downloading = phase !== "idle";
 
   // 1.1 — keep urlKind in sync with the input. Classification is
   // cheap (regex + URL parse), no debounce needed. Cleared playlist
@@ -622,32 +624,29 @@ function MetadataCard() {
       })).catch(() => {});
     }
 
-    // 1.1.3 — Hand off to the app-level DownloadsProvider. The provider
-    // owns the invoke + transcode + library-record + thumbnail
-    // backfill. UI here just reads singleDownload for progress and
-    // result. The `submitting` flag gates double-clicks for the one
-    // tick before the provider's phase flips to "downloading".
-    setSubmitting(true);
-    try {
-      await startSingleDownload({
-        url,
-        formatSpec: spec,
-        mergeContainer,
-        // In audio mode we don't know exact bytes (yt-dlp picks "best"
-        // and the post-extract converts container) — the progress bar
-        // shows live-bytes without percent until done. Fine for audio.
-        totalBytesHint: downloadMode === "audio" ? null : bytesHint,
-        videoId: meta.id ?? "",
-        segments: effectiveSegments.length > 0 ? effectiveSegments : null,
-        projectId: targetProjectId,
-        transcodePreset,
-        meta,
-        pickedFormat: downloadMode === "audio" ? null : selectedFormat,
-        audioFormat: downloadMode === "audio" ? audioFormat : null,
-      });
-    } finally {
-      setSubmitting(false);
-    }
+    // 1.12.x — hand the fully-specified job to the QUEUE instead of the
+    // blocking single-URL runner. Enqueue is synchronous: the card frees
+    // immediately, so the user can fetch/download the next URL while
+    // this one runs in the queue panel below (progress renders there).
+    enqueueSingleSpec({
+      url,
+      formatSpec: spec,
+      mergeContainer,
+      // In audio mode we don't know exact bytes (yt-dlp picks "best"
+      // and the post-extract converts container) — the progress bar
+      // shows live-bytes without percent until done. Fine for audio.
+      totalBytesHint: downloadMode === "audio" ? null : bytesHint,
+      videoId: meta.id ?? "",
+      segments: effectiveSegments.length > 0 ? effectiveSegments : null,
+      projectId: targetProjectId,
+      transcodePreset,
+      meta,
+      pickedFormat: downloadMode === "audio" ? null : selectedFormat,
+      audioFormat: downloadMode === "audio" ? audioFormat : null,
+    });
+    if (queuedFlashTimer.current != null) window.clearTimeout(queuedFlashTimer.current);
+    setQueuedFlash(true);
+    queuedFlashTimer.current = window.setTimeout(() => setQueuedFlash(false), 2600);
   }
 
   // 1.1.3 — delegated to context. Keeping the wrapper so the cancel
@@ -1064,6 +1063,13 @@ function MetadataCard() {
                       ? `${t("dl.download")} ${segments.length} ${t("dl.segmentsWord")}`
                       : t("dl.download")}
             </button>
+            {/* 1.12.x — download now enqueues instead of blocking; this
+                transient chip points the user at the queue below. */}
+            {queuedFlash && (
+              <span className="dl-queued-flash mono" role="status">
+                ✓ {t("dl.queuedFlash")}
+              </span>
+            )}
           </div>
 
           {/* 1.3.x — Direct-download fallback. Shows whenever yt-dlp
@@ -1683,6 +1689,7 @@ function QueueCard() {
 }
 
 function QueueRow({ job, onCancel }: { job: QueueJob; onCancel: (id: string) => void }) {
+  const t = useT();
   const pillClass =
     job.status === "done"
       ? "pill ok"
@@ -1783,7 +1790,7 @@ function QueueRow({ job, onCancel }: { job: QueueJob; onCancel: (id: string) => 
         {job.status === "failed" && <div className="queue-error">{job.error}</div>}
         {job.status === "canceled" && (
           <div className="queue-error" style={{ color: "var(--text-3)" }}>
-            Canceled · partial file (if any) left on disk
+            {t("dl.canceledCleaned")}
           </div>
         )}
       </div>

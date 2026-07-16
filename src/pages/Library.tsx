@@ -11,6 +11,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { alertDialog, confirmDialog } from "../lib/dialog";
 import { scopeToFilter, useActiveProject } from "../lib/activeProject";
 import { useT } from "../lib/i18n";
+import { MH_FILE_MIME, useRtxEnhance } from "../lib/rtxEnhance";
 import type { Asset, AssetKind, Folder, FolderFilter, LibraryFilters, SiblingSummary, TagCount } from "../lib/types";
 
 // "now" is the "I just downloaded this" bucket — last 5 min. Surfaces
@@ -91,7 +92,11 @@ const COL_ORDER: ColKey[] = ["title", "tags", "res", "dur", "size", "date"];
  * (added-date, duration).
  */
 export default function LibraryPage() {
+  const t = useT();
   const { scope, setScope, projects } = useActiveProject();
+  // RTX enhance context — when its review window is open, library drags go to
+  // it (via an HTML5 MIME) instead of the OS drag; see onCardDragStart.
+  const rtxCtx = useRtxEnhance();
   const [assets, setAssets] = useState<Asset[]>([]);
   const [count, setCount] = useState<number>(0);
   const [err, setErr] = useState<string | null>(null);
@@ -122,6 +127,9 @@ export default function LibraryPage() {
     y: number;
     folder: Folder;
   } | null>(null);
+  // 1.12.x — right-click menu on the sidebar Trash entry (Restore all /
+  // Empty trash without having to enter the view first).
+  const [trashCtxMenu, setTrashCtxMenu] = useState<{ x: number; y: number } | null>(null);
   // 1.3.x — nesting. `expandedFolders` tracks which folders are open in
   // the sidebar tree; persisted so the tree shape survives reloads.
   // `createParentId` lets "New subfolder" seed folder_create with a
@@ -388,10 +396,10 @@ export default function LibraryPage() {
     const missing = assets.filter((a) => a.missing);
     if (missing.length === 0) return;
     const ok = await confirmDialog(
-      `Remove ${missing.length} missing ${missing.length === 1 ? "clip" : "clips"} from the library?\n\n` +
-        `Their files no longer exist on disk. Only the library cards are removed — there's nothing left on disk to delete.\n\n` +
-        `Tip: if a clip lives on an external/network drive that's just unplugged, reconnect it and refresh instead.`,
-      { title: "Remove missing clips?", kind: "warning" },
+      t("lib.dlgRemoveMissingMsg")
+        .replace("{n}", String(missing.length))
+        .replace("{w}", missing.length === 1 ? t("lib.clip") : t("lib.clips")),
+      { title: t("lib.dlgRemoveMissingTitle"), kind: "warning" },
     );
     if (!ok) return;
     try {
@@ -458,15 +466,18 @@ export default function LibraryPage() {
       setRenamingFolderId(null);
       setRenameFolderDraft("");
     } catch (e) {
-      await alertDialog(String(e), { title: "Couldn't rename folder", kind: "error" });
+      await alertDialog(String(e), { title: t("lib.dlgRenameFolderErr"), kind: "error" });
     }
   }
   async function deleteFolder(folder: Folder) {
     const msg =
       folder.asset_count > 0
-        ? `Delete folder "${folder.name}" and any subfolders inside it?\n\n${folder.asset_count} ${folder.asset_count === 1 ? "clip" : "clips"} (plus any in subfolders) fall back to Uncategorized — files stay where they are.`
-        : `Delete folder "${folder.name}" and any subfolders inside it?`;
-    if (!(await confirmDialog(msg, { title: "Delete folder?", kind: "warning" }))) return;
+        ? t("lib.dlgDeleteFolderMsgN")
+            .replace("{name}", folder.name)
+            .replace("{n}", String(folder.asset_count))
+            .replace("{w}", folder.asset_count === 1 ? t("lib.clip") : t("lib.clips"))
+        : t("lib.dlgDeleteFolderMsg").replace("{name}", folder.name);
+    if (!(await confirmDialog(msg, { title: t("lib.dlgDeleteFolderTitle"), kind: "warning" }))) return;
     try {
       await invoke("folder_delete", { id: folder.id });
       // If the deleted folder was the active filter, fall back to all clips.
@@ -474,7 +485,7 @@ export default function LibraryPage() {
         setFolderFilter({ kind: "any" });
       }
     } catch (e) {
-      await alertDialog(String(e), { title: "Couldn't delete folder", kind: "error" });
+      await alertDialog(String(e), { title: t("lib.dlgDeleteFolderErr"), kind: "error" });
     }
   }
   // 1.3.x — bulk delete folders (one confirm covering all). Children of
@@ -483,8 +494,8 @@ export default function LibraryPage() {
   async function bulkDeleteFolders() {
     const ids = Array.from(selectedFolderIds);
     if (ids.length === 0) return;
-    const msg = `Delete ${ids.length} folders?\n\nAny subfolders inside are deleted too. Clips fall back to Uncategorized (files stay on disk).`;
-    if (!(await confirmDialog(msg, { title: `Delete ${ids.length} folders?`, kind: "warning" })))
+    const msg = t("lib.dlgDeleteFoldersMsg").replace("{n}", String(ids.length));
+    if (!(await confirmDialog(msg, { title: t("lib.dlgDeleteFoldersTitle").replace("{n}", String(ids.length)), kind: "warning" })))
       return;
     try {
       await invoke<number>("folder_delete_many", { ids });
@@ -494,7 +505,7 @@ export default function LibraryPage() {
       }
       setSelectedFolderIds(new Set());
     } catch (e) {
-      await alertDialog(String(e), { title: "Couldn't delete folders", kind: "error" });
+      await alertDialog(String(e), { title: t("lib.dlgDeleteFoldersErr"), kind: "error" });
     }
   }
 
@@ -700,7 +711,7 @@ export default function LibraryPage() {
             setRenamingFolderId(f.id);
             setRenameFolderDraft(f.name);
           }}
-          title="Click to filter · Double-click to rename · Right-click for more · Drag onto another folder to nest · Drop clips here to move"
+          title={t("lib.folderTip")}
           onContextMenu={(e) => {
             e.preventDefault();
             setFolderCtxMenu({ x: e.clientX, y: e.clientY, folder: f });
@@ -905,9 +916,10 @@ export default function LibraryPage() {
   async function emptyTrash(ids: string[]) {
     if (ids.length === 0) return;
     const ok = await confirmDialog(
-      `Permanently delete ${ids.length} ${ids.length === 1 ? "clip" : "clips"}?\n\n` +
-        `This cannot be undone — the files are removed from disk for good.`,
-      { title: "Empty trash?", kind: "error" },
+      t("lib.dlgEmptyTrashMsg")
+        .replace("{n}", String(ids.length))
+        .replace("{w}", ids.length === 1 ? t("lib.clip") : t("lib.clips")),
+      { title: t("lib.dlgEmptyTrashTitle"), kind: "error" },
     );
     if (!ok) return;
     try {
@@ -917,6 +929,22 @@ export default function LibraryPage() {
     } catch (e) {
       setErr(String(e));
     }
+  }
+
+  // 1.12.x — fetch the trashed clip ids for the current scope. The Trash
+  // right-click menu acts on the Trash from ANY view — `assets` only holds
+  // trashed rows while inTrash, so the menu fetches its own listing.
+  async function listTrashIds(): Promise<string[]> {
+    const filters: LibraryFilters = {
+      query: null,
+      tags: null,
+      scope: scopeToFilter(scope),
+      folder: null,
+      limit: 500,
+      trashed: true,
+    };
+    const list = await invoke<Asset[]>("library_list", { filters });
+    return list.map((a) => a.id);
   }
 
   // Event-driven refresh — Rust emits library:changed after every
@@ -1098,6 +1126,20 @@ export default function LibraryPage() {
   }
 
   async function onCardDragStart(asset: Asset, ev: React.DragEvent<HTMLButtonElement>) {
+    // If the RTX enhance window is open, route this drag to IT via a plain
+    // in-app HTML5 drag carrying the file paths. This sidesteps the Windows
+    // OLE self-drag quirks (a startDrag OS drag doesn't reliably deliver a
+    // drop back onto our own window) and lets "drag from library → enhance"
+    // work. We must NOT preventDefault here so the native drag proceeds.
+    if (rtxCtx.windowJobId !== null) {
+      const dragIds = selection.has(asset.id) ? Array.from(selection) : [asset.id];
+      const paths = dragIds
+        .map((id) => assets.find((a) => a.id === id)?.file_path)
+        .filter((p): p is string => !!p);
+      ev.dataTransfer.setData(MH_FILE_MIME, JSON.stringify(paths));
+      ev.dataTransfer.effectAllowed = "copy";
+      return;
+    }
     // Take over from HTML5 drag — Tauri's startDrag drives the OS
     // cursor from here.
     ev.preventDefault();
@@ -1321,10 +1363,14 @@ export default function LibraryPage() {
       setAnchor(null);
       if (result.file_errors.length > 0) {
         await alertDialog(
-          `Moved ${result.rows_deleted} to Trash, but ${result.file_errors.length} couldn't be moved (likely in use by another app):\n\n` +
+          t("lib.dlgPartialMsg")
+            .replace("{a}", String(result.rows_deleted))
+            .replace("{b}", String(result.file_errors.length)) +
             result.file_errors.slice(0, 5).join("\n") +
-            (result.file_errors.length > 5 ? `\n…and ${result.file_errors.length - 5} more` : ""),
-          { title: "Partial success", kind: "warning" },
+            (result.file_errors.length > 5
+              ? t("lib.dlgPartialMore").replace("{n}", String(result.file_errors.length - 5))
+              : ""),
+          { title: t("lib.dlgPartialTitle"), kind: "warning" },
         );
       }
     } catch (e) {
@@ -1370,17 +1416,17 @@ export default function LibraryPage() {
     try {
       const sent = await sendToEagle(ids);
       setEagleRunning(true);
-      flashToast(sent === 1 ? "Sent 1 clip to Eagle" : `Sent ${sent} clips to Eagle`);
+      flashToast(sent === 1 ? t("lib.sentEagleOne") : t("lib.sentEagleN").replace("{n}", String(sent)));
     } catch (e) {
       const msg = String(e);
       if (msg.includes(EAGLE_NOT_RUNNING)) {
         setEagleRunning(false);
         await alertDialog(
-          "Eagle isn't running. Open Eagle and try again.",
-          { title: "Eagle not found", kind: "warning" },
+          t("lib.eagleNotRunningMsg"),
+          { title: t("lib.eagleNotRunningTitle"), kind: "warning" },
         );
       } else {
-        await alertDialog(msg, { title: "Couldn't send to Eagle", kind: "error" });
+        await alertDialog(msg, { title: t("lib.eagleSendErr"), kind: "error" });
       }
     }
   }
@@ -1731,34 +1777,34 @@ export default function LibraryPage() {
     <div className="content">
       <div className="content-header">
         <div className="ch-title">
-          {inTrash ? "Trash" : scope.kind === "library" ? "Library" : scope.name}
+          {inTrash ? t("lib.trash") : scope.kind === "library" ? t("nav.library") : scope.name}
         </div>
         <span className="ch-meta">
           {!inTrash && scope.kind === "project" && (
             <>
-              <span className="mono faint">project</span>
+              <span className="mono faint">{t("lib.projectChip")}</span>
               <span className="ch-sep"> · </span>
             </>
           )}
           {(inTrash ? assets.length : count).toLocaleString()}{" "}
-          {(inTrash ? assets.length : count) === 1 ? "clip" : "clips"} ·{" "}
+          {(inTrash ? assets.length : count) === 1 ? t("lib.clip") : t("lib.clips")} ·{" "}
           {fmtBytes(totalSize(assets))}
         </span>
         <div className="ch-spacer" />
         <div className="ch-tabs">
           <button
             className={"ch-tab" + (viewMode === "grid" ? " active" : "")}
-            title="Grid view"
+            title={t("lib.gridView")}
             onClick={() => setViewMode("grid")}
           >
-            <Icon.grid width={11} height={11} /> Grid
+            <Icon.grid width={11} height={11} /> {t("lib.grid")}
           </button>
           <button
             className={"ch-tab" + (viewMode === "list" ? " active" : "")}
-            title="List view"
+            title={t("lib.listView")}
             onClick={() => setViewMode("list")}
           >
-            <Icon.list width={12} height={12} /> List
+            <Icon.list width={12} height={12} /> {t("lib.list")}
           </button>
         </div>
       </div>
@@ -1766,12 +1812,13 @@ export default function LibraryPage() {
       {!inTrash && assets.some((a) => a.missing) && (
         <div className="lib-missing-banner">
           <span className="lib-missing-banner-text">
-            ⚠ {assets.filter((a) => a.missing).length}{" "}
-            {assets.filter((a) => a.missing).length === 1 ? "clip is" : "clips are"} missing — their
-            files were moved or deleted on disk.
+            ⚠{" "}
+            {assets.filter((a) => a.missing).length === 1
+              ? t("lib.missingOne")
+              : t("lib.missingMany").replace("{n}", String(assets.filter((a) => a.missing).length))}
           </span>
           <button className="btn btn-secondary" onClick={() => void removeMissing()}>
-            <Icon.trash width={11} height={11} /> Remove missing
+            <Icon.trash width={11} height={11} /> {t("lib.removeMissing")}
           </button>
         </div>
       )}
@@ -1783,7 +1830,7 @@ export default function LibraryPage() {
               and FOLDERS (user folders with "+" to create).
               Section headers use small uppercase mono labels. */}
           <div className="lib-side-head lib-section-head">
-            <span>Views</span>
+            <span>{t("lib.views")}</span>
           </div>
           <ul className="lib-folders lib-views">
             <li
@@ -1796,7 +1843,7 @@ export default function LibraryPage() {
             >
               <span className="lib-folder-chev-spacer" />
               <Icon.library width={11} height={11} />
-              <span className="lib-folder-name">All clips</span>
+              <span className="lib-folder-name">{t("lib.allClips")}</span>
               <span className="lib-folder-count mono">{count}</span>
             </li>
             <li
@@ -1810,11 +1857,11 @@ export default function LibraryPage() {
                 setFolderFilter({ kind: "uncategorized" });
               }}
               data-folder-key="__uncategorized__"
-              title="Clips not assigned to any folder · drop here to clear folder"
+              title={t("lib.uncatTitle")}
             >
               <span className="lib-folder-chev-spacer" />
               <Icon.folder width={11} height={11} />
-              <span className="lib-folder-name">Uncategorized</span>
+              <span className="lib-folder-name">{t("lib.uncategorized")}</span>
               {/* 1.1 Phase 2 — derive uncategorized count from
                   (scope total) − (sum of folder.asset_count). Folders
                   are orthogonal to scope, so every clip in the
@@ -1828,23 +1875,27 @@ export default function LibraryPage() {
             <li
               className={"lib-folder" + (inTrash ? " active" : "")}
               onClick={() => setInTrash(true)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setTrashCtxMenu({ x: e.clientX, y: e.clientY });
+              }}
               data-folder-key="__trash__"
-              title="Deleted clips — restore or permanently remove"
+              title={t("lib.trashTitle")}
             >
               <span className="lib-folder-chev-spacer" />
               <Icon.trash width={11} height={11} />
-              <span className="lib-folder-name">Trash</span>
+              <span className="lib-folder-name">{t("lib.trash")}</span>
               <span className="lib-folder-count mono">{trashCount}</span>
             </li>
           </ul>
           <div className="lib-side-head lib-section-head lib-folders-head">
-            <span>Folders <span className="mono faint" style={{ fontSize: 10, marginLeft: 4 }}>{folders.length}</span></span>
+            <span>{t("lib.folders")} <span className="mono faint" style={{ fontSize: 10, marginLeft: 4 }}>{folders.length}</span></span>
             <button
               type="button"
               className="lib-folder-add-btn"
               onClick={() => void createFolderInline()}
               disabled={creatingFolder}
-              title="Create folder"
+              title={t("lib.createFolder")}
             >
               <Icon.plus width={11} height={11} />
             </button>
@@ -1883,7 +1934,7 @@ export default function LibraryPage() {
           >
             {(childrenByParent.get(null) ?? []).map((f) => renderFolderNode(f))}
             {folders.length === 0 && (
-              <li className="lib-folders-empty mono faint">No folders yet</li>
+              <li className="lib-folders-empty mono faint">{t("lib.noFolders")}</li>
             )}
           </ul>
 
@@ -1912,7 +1963,7 @@ export default function LibraryPage() {
             document.addEventListener("mousemove", onMove);
             document.addEventListener("mouseup", onUp);
           }}
-          title="Drag to resize the sidebar"
+          title={t("lib.resizeSidebar")}
         />
 
         <div className="lib-main">
@@ -1921,7 +1972,7 @@ export default function LibraryPage() {
               <Icon.search width={13} height={13} style={{ color: "var(--text-2)" }} />
               <input
                 type="text"
-                placeholder="search title or channel…"
+                placeholder={t("lib.searchPh")}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 spellCheck={false}
@@ -1942,10 +1993,10 @@ export default function LibraryPage() {
                 setTagFilterPopupOpen(false);
                 setSortPopupOpen(false);
               }}
-              title="Source + added date filters"
+              title={t("lib.filterTitle")}
             >
               <Icon.filter width={12} height={12} />
-              Filter
+              <span className="lib-btn-label">{t("lib.filter")}</span>
               {(activePlatforms.size + activeBuckets.size + activeKinds.size) > 0 && (
                 <span className="lib-filter-badge mono">
                   {activePlatforms.size + activeBuckets.size + activeKinds.size}
@@ -1964,10 +2015,10 @@ export default function LibraryPage() {
                 setFilterPopupOpen(false);
                 setSortPopupOpen(false);
               }}
-              title="Filter by tags"
+              title={t("lib.tagsTitle")}
             >
               <Icon.tag width={12} height={12} />
-              Tags
+              <span className="lib-btn-label">{t("lib.tags")}</span>
               {activeTags.size > 0 && (
                 <span className="lib-filter-badge mono">{activeTags.size}</span>
               )}
@@ -1983,10 +2034,10 @@ export default function LibraryPage() {
                 setFilterPopupOpen(false);
                 setTagFilterPopupOpen(false);
               }}
-              title={`Sort: ${sortLabel(sortMode)}`}
+              title={t("lib.sortTitle").replace("{s}", t(sortKey(sortMode)))}
             >
               <Icon.list width={12} height={12} />
-              {sortLabel(sortMode)}
+              <span className="lib-btn-label">{t(sortKey(sortMode))}</span>
             </button>
             <div className="ch-spacer" />
             {/* 1.3.0 — in Trash, Restore/Empty live inline in the toolbar
@@ -2002,10 +2053,14 @@ export default function LibraryPage() {
                       selection.size > 0 ? [...selection] : assets.map((a) => a.id),
                     )
                   }
-                  title="Restore to original location"
+                  title={t("lib.restoreTitle")}
                 >
                   <Icon.retry width={12} height={12} />
-                  {selection.size > 0 ? `Restore (${selection.size})` : "Restore all"}
+                  <span className="lib-btn-label">
+                    {selection.size > 0
+                      ? t("lib.restoreN").replace("{n}", String(selection.size))
+                      : t("lib.trashRestoreAll")}
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -2013,29 +2068,35 @@ export default function LibraryPage() {
                   onClick={() =>
                     void emptyTrash(selection.size > 0 ? [...selection] : assets.map((a) => a.id))
                   }
-                  title="Permanently delete (cannot be undone)"
+                  title={t("lib.deleteForeverTitle")}
                 >
                   <Icon.trash width={12} height={12} />
-                  {selection.size > 0 ? `Delete ${selection.size}` : "Empty trash"}
+                  <span className="lib-btn-label">
+                    {selection.size > 0
+                      ? t("lib.deleteN").replace("{n}", String(selection.size))
+                      : t("lib.trashEmpty")}
+                  </span>
                 </button>
               </>
             )}
-            <span className="mono faint" style={{ fontSize: 11 }}>
+            <span className="lib-count mono faint" style={{ fontSize: 11 }}>
               {inTrash
-                ? `${filtered.length.toLocaleString()} in trash`
-                : `${filtered.length.toLocaleString()} of ${count.toLocaleString()}`}
+                ? t("lib.inTrashCount").replace("{n}", filtered.length.toLocaleString())
+                : t("lib.ofCount")
+                    .replace("{a}", filtered.length.toLocaleString())
+                    .replace("{b}", count.toLocaleString())}
             </span>
           </div>
 
           {hasFilters && (
             <div className="lib-active-filters">
               <span className="mono faint" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                Filters
+                {t("lib.filtersLabel")}
               </span>
               {debouncedQuery && (
                 <span className="tag">
                   "{debouncedQuery}"
-                  <button className="x" onClick={() => setQuery("")} aria-label="Clear search">
+                  <button className="x" onClick={() => setQuery("")} aria-label={t("lib.clearSearch")}>
                     <Icon.x width={9} height={9} />
                   </button>
                 </span>
@@ -2058,7 +2119,7 @@ export default function LibraryPage() {
               ))}
               {Array.from(activeBuckets).map((b) => (
                 <span key={b} className="tag">
-                  {bucketLabel(b)}
+                  {t(bucketKey(b))}
                   <button className="x" onClick={() => toggleBucket(b)} aria-label={`Remove date filter ${b}`}>
                     <Icon.x width={9} height={9} />
                   </button>
@@ -2119,13 +2180,13 @@ export default function LibraryPage() {
                   </span>
                 ))}
                 {subfolderCards.length > 0 && (
-                  <label className="lib-rollup-toggle" title="Include clips from subfolders">
+                  <label className="lib-rollup-toggle" title={t("lib.rollupTitle")}>
                     <input
                       type="checkbox"
                       checked={rollupSubfolders}
                       onChange={(e) => setRollupSubfolders(e.target.checked)}
                     />
-                    Show subfolder contents
+                    {t("lib.rollup")}
                   </label>
                 )}
               </div>
@@ -2248,16 +2309,18 @@ export default function LibraryPage() {
           <div className="lib-status">
             <span>
               {selection.size > 0
-                ? `${selection.size} of ${filtered.length} selected`
-                : `${filtered.length} shown`}
+                ? t("lib.statusSelected")
+                    .replace("{a}", String(selection.size))
+                    .replace("{b}", String(filtered.length))
+                : t("lib.statusShown").replace("{n}", String(filtered.length))}
             </span>
             <span className="sep">·</span>
             <span>{fmtBytes(totalSize(filtered))}</span>
             <div className="right">
-              <span><span className="kbd">/</span> search</span>
-              <span><span className="kbd">esc</span> clear</span>
-              <span><span className="kbd">t</span> tag selected</span>
-              <span><span className="kbd">⏎</span> open (dbl-click)</span>
+              <span><span className="kbd">/</span> {t("lib.kbSearch")}</span>
+              <span><span className="kbd">esc</span> {t("lib.kbClear")}</span>
+              <span><span className="kbd">t</span> {t("lib.kbTag")}</span>
+              <span><span className="kbd">⏎</span> {t("lib.kbOpen")}</span>
             </div>
           </div>
         </div>
@@ -2404,6 +2467,36 @@ export default function LibraryPage() {
         />
       )}
 
+      {/* 1.12.x — Trash right-click menu (Restore all / Empty trash). */}
+      {trashCtxMenu && (
+        <TrashContextMenu
+          x={trashCtxMenu.x}
+          y={trashCtxMenu.y}
+          count={trashCount}
+          onClose={() => setTrashCtxMenu(null)}
+          onRestoreAll={() => {
+            setTrashCtxMenu(null);
+            void (async () => {
+              try {
+                await restoreFromTrash(await listTrashIds());
+              } catch (e) {
+                setErr(String(e));
+              }
+            })();
+          }}
+          onEmpty={() => {
+            setTrashCtxMenu(null);
+            void (async () => {
+              try {
+                await emptyTrash(await listTrashIds());
+              } catch (e) {
+                setErr(String(e));
+              }
+            })();
+          }}
+        />
+      )}
+
       {/* 1.1 Phase 2 — folder right-click menu (Rename / Delete). */}
       {folderCtxMenu && (
         <FolderContextMenu
@@ -2505,6 +2598,7 @@ function CardContextMenu({
   onSendToEagle: (ids: string[]) => void | Promise<void>;
 }) {
   const t = useT();
+  const rtx = useRtxEnhance();
   const menuRef = useRef<HTMLDivElement>(null);
   // Adjust position to fit in viewport. ResizeObserver / layout effect
   // would be over-engineered for a transient menu — pick a sensible
@@ -2579,6 +2673,45 @@ function CardContextMenu({
         <Icon.folder width={11} height={11} />
         {t("ctx.reveal")}
       </button>
+      {!inTrash &&
+        asset.kind === "video" &&
+        rtx.capability?.supported &&
+        rtx.canEnhanceHeight(asset.height ?? null) && (
+          <>
+            <button
+              className="ctx-item"
+              onClick={withClose(() =>
+                rtx.enqueue({
+                  id: asset.id,
+                  filePath: asset.file_path,
+                  title: asset.title,
+                  thumbnail: asset.thumbnail_url ?? null,
+                  width: asset.width ?? null,
+                  height: asset.height ?? null,
+                }),
+              )}
+            >
+              <Icon.video width={11} height={11} />
+              {t("ctx.rtxUpscale")}
+            </button>
+            <button
+              className="ctx-item"
+              onClick={withClose(() =>
+                rtx.stageAsset({
+                  id: asset.id,
+                  filePath: asset.file_path,
+                  title: asset.title,
+                  thumbnail: asset.thumbnail_url ?? null,
+                  width: asset.width ?? null,
+                  height: asset.height ?? null,
+                }),
+              )}
+            >
+              <Icon.video width={11} height={11} />
+              {t("ctx.rtxStage")}
+            </button>
+          </>
+        )}
       <div className="ctx-sep" />
       <button className="ctx-item" onClick={withClose(() => copyToClipboard(asset.source_url))}>
         {t("ctx.copyUrl")}
@@ -2771,6 +2904,81 @@ function FolderContextMenu({
   );
 }
 
+// 1.12.x — Trash right-click menu. Same floating .ctx-menu shape as the
+// folder menu (viewport-clamped, dismissed via outside-click/Esc/scroll);
+// two actions that operate on the whole Trash for the current scope, so
+// the user doesn't have to enter the Trash view first. Empty reuses
+// emptyTrash's confirm dialog — the menu itself never destroys silently.
+function TrashContextMenu({
+  x,
+  y,
+  count,
+  onClose,
+  onRestoreAll,
+  onEmpty,
+}: {
+  x: number;
+  y: number;
+  count: number;
+  onClose: () => void;
+  onRestoreAll: () => void;
+  onEmpty: () => void;
+}) {
+  const t = useT();
+  const menuRef = useRef<HTMLDivElement>(null);
+  const ESTIMATED_HEIGHT = 110;
+  const ESTIMATED_WIDTH = 190;
+  const vh = typeof window !== "undefined" ? window.innerHeight : 1000;
+  const vw = typeof window !== "undefined" ? window.innerWidth : 1600;
+  const adjX = Math.min(x, vw - ESTIMATED_WIDTH - 8);
+  const adjY = y + ESTIMATED_HEIGHT > vh ? Math.max(8, y - ESTIMATED_HEIGHT) : y;
+
+  useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    const onScroll = () => onClose();
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [onClose]);
+
+  const empty = count === 0;
+  return (
+    <div
+      ref={menuRef}
+      className="ctx-menu"
+      style={{ top: adjY, left: adjX }}
+      onContextMenu={(e) => e.preventDefault()}
+      role="menu"
+      aria-label={t("lib.trash")}
+    >
+      <div className="ctx-label">
+        {t("lib.trash")} · {count}
+      </div>
+      <div className="ctx-sep" />
+      <button className="ctx-item" onClick={onRestoreAll} disabled={empty}>
+        <Icon.retry width={11} height={11} />
+        {t("lib.trashRestoreAll")}
+      </button>
+      <button className="ctx-item ctx-danger" onClick={onEmpty} disabled={empty}>
+        <Icon.trash width={11} height={11} />
+        {t("lib.trashEmpty")}
+      </button>
+    </div>
+  );
+}
+
 // =====================================================================
 // 1.1 Phase 3 — Multi-category filter popup (Eagle-style)
 // =====================================================================
@@ -2828,6 +3036,7 @@ function FilterPopup({
 }) {
   const popupRef = useRef<HTMLDivElement>(null);
 
+  const t = useT();
   // Position calculated from the anchor button's bounding rect.
   // Recomputes only on mount; we close the popup on scroll/resize
   // (anchor would drift otherwise — same pattern as CardContextMenu).
@@ -2870,25 +3079,25 @@ function FilterPopup({
       className="filter-popup"
       style={{ top, right, width: POPUP_WIDTH }}
       role="dialog"
-      aria-label="Filters"
+      aria-label={t("lib.filtersLabel")}
     >
       <div className="filter-popup-head">
-        <span className="filter-popup-title">Filters</span>
+        <span className="filter-popup-title">{t("lib.filtersLabel")}</span>
         {activeCount > 0 && (
           <button
             type="button"
             className="filter-popup-clear"
             onClick={onClearAll}
-            title="Clear all active filters"
+            title={t("lib.fpClearAllTitle")}
           >
-            Clear all
+            {t("lib.fpClearAll")}
           </button>
         )}
       </div>
 
-      <FilterSection title="Source">
+      <FilterSection title={t("lib.fpSource")}>
         {platformCounts.size === 0 ? (
-          <FilterEmpty label="no downloads yet" />
+          <FilterEmpty label={t("lib.fpNoDownloads")} />
         ) : (
           Array.from(platformCounts.entries()).map(([plat, ct]) => (
             <FilterRow
@@ -2905,27 +3114,27 @@ function FilterPopup({
       {/* 1.1.1 — Tags now live in their own popup (Tags button beside
           Filter). Source + Added only here. */}
 
-      <FilterSection title="Kind">
+      <FilterSection title={t("lib.fpKind")}>
         <FilterRow
           active={activeKinds.has("video")}
-          label="Video"
+          label={t("lib.kindVideo")}
           count={kindCounts.video}
           onClick={() => onToggleKind("video")}
         />
         <FilterRow
           active={activeKinds.has("audio")}
-          label="Audio"
+          label={t("lib.kindAudio")}
           count={kindCounts.audio}
           onClick={() => onToggleKind("audio")}
         />
       </FilterSection>
 
-      <FilterSection title="Added">
+      <FilterSection title={t("lib.fpAdded")}>
         {(["now", "today", "week", "month", "older"] as Bucket[]).map((b) => (
           <FilterRow
             key={b}
             active={activeBuckets.has(b)}
-            label={bucketLabel(b)}
+            label={t(bucketKey(b))}
             count={bucketCounts[b]}
             onClick={() => onToggleBucket(b)}
           />
@@ -3005,18 +3214,19 @@ function platformLabel(p: string): string {
   }
 }
 
-function bucketLabel(b: Bucket): string {
+// i18n: returns the locale KEY — callers wrap it in t().
+function bucketKey(b: Bucket): string {
   switch (b) {
     case "now":
-      return "Just now";
+      return "lib.bucketNow";
     case "today":
-      return "Today";
+      return "lib.bucketToday";
     case "week":
-      return "This week";
+      return "lib.bucketWeek";
     case "month":
-      return "This month";
+      return "lib.bucketMonth";
     case "older":
-      return "Older";
+      return "lib.bucketOlder";
   }
 }
 
@@ -3040,11 +3250,13 @@ function bucketFor(downloaded_at: number): Bucket {
 /**
  * Same window logic but as a quick boolean check the card renderer
  * uses to decide whether to apply the "just downloaded" visual
- * treatment. Kept in sync with bucketFor's "now" bucket.
+ * treatment. (1.12.x — the green just-now card accent was retired;
+ * kept exported-by-void below in case a future surface wants it.)
  */
 function isJustNow(downloaded_at: number): boolean {
   return Math.floor(Date.now() / 1000) - downloaded_at < NOW_WINDOW_SEC;
 }
+void isJustNow;
 
 // =====================================================================
 // Facet sidebar bits
@@ -3108,8 +3320,8 @@ function LibCard({
    *  the dataTransfer with selected asset IDs. Folder rows accept. */
   onDragStart: (ev: React.DragEvent<HTMLButtonElement>) => void;
 }) {
+  const t = useT();
   const thumb = thumbnailSrc(asset.thumbnail_path, asset.thumbnail_url);
-  const justNow = isJustNow(asset.downloaded_at);
   // 1.2.0 — audio cards get a slightly different visual treatment:
   //  - thumbnail container shows the waveform on a dark backdrop
   //    (the waveform PNG is transparent so the dark surface shows
@@ -3119,7 +3331,6 @@ function LibCard({
   const className = [
     "lib-card",
     selected ? "selected" : "",
-    justNow ? "just-now" : "",
     isAudio ? "audio" : "",
     asset.missing ? "is-missing" : "",
   ]
@@ -3159,13 +3370,21 @@ function LibCard({
           )}
         </span>
         {isAudio && (
-          <span className="lib-card-audio-glyph" title="Audio">
+          <span className="lib-card-audio-glyph" title={t("lib.audio")}>
             <Icon.music width={13} height={13} />
           </span>
         )}
         {asset.missing && (
-          <span className="lib-card-missing" title="File not found on disk — moved or deleted">
+          <span className="lib-card-missing" title={t("lib.missingCardTip")}>
             ⚠ missing
+          </span>
+        )}
+        {asset.transcoded_to === "rtx-vsr" && (
+          <span
+            className="lib-card-rtx"
+            title={t("lib.rtxBadge")}
+          >
+            RTX
           </span>
         )}
         {thumb && <img src={thumb} alt="" loading="lazy" />}
@@ -3242,13 +3461,12 @@ function LibRow({
   onContextMenu: (e: React.MouseEvent) => void;
   onDragStart: (ev: React.DragEvent<HTMLButtonElement>) => void;
 }) {
+  const t = useT();
   const thumb = thumbnailSrc(asset.thumbnail_path, asset.thumbnail_url);
-  const justNow = isJustNow(asset.downloaded_at);
   const isAudio = asset.kind === "audio";
   const className = [
     "lib-row",
     selected ? "selected" : "",
-    justNow ? "just-now" : "",
     isAudio ? "audio" : "",
     asset.missing ? "is-missing" : "",
   ]
@@ -3276,7 +3494,7 @@ function LibRow({
         <div className="lib-row-thumb">
           {thumb && <img src={thumb} alt="" loading="lazy" />}
           {isAudio && (
-            <span className="lib-row-audio-glyph" title="Audio">
+            <span className="lib-row-audio-glyph" title={t("lib.audio")}>
               <Icon.music width={10} height={10} />
             </span>
           )}
@@ -3290,7 +3508,7 @@ function LibRow({
           {asset.title}
         </span>
         {asset.missing && (
-          <span className="lib-row-missing" title="File not found on disk">
+          <span className="lib-row-missing" title={t("lib.missingRowTip")}>
             ⚠ missing
           </span>
         )}
@@ -3364,6 +3582,7 @@ function ListHead({
   ratios: ColRatios;
   onResize: (next: ColRatios) => void;
 }) {
+  const t = useT();
   function dirFor(col: keyof typeof COL_SORTS): "asc" | "desc" | null {
     const cfg = COL_SORTS[col];
     if (sortMode === cfg.desc) return "desc";
@@ -3500,7 +3719,7 @@ function ListHead({
           e.stopPropagation();
           onResize({ ...DEFAULT_RATIOS });
         }}
-        title="Drag to resize · double-click to reset all columns"
+        title={t("lib.resizeCols")}
       />
     );
   }
@@ -3509,7 +3728,7 @@ function ListHead({
       {/* Title label sits in the 64px thumb cell, centered so it
           reads as the column header for the thumbnails. */}
       <span className="lib-list-col col-thumb head-title-cell">
-        <SortBtn col="title" label="Title" />
+        <SortBtn col="title" label={t("lib.colTitle")} />
       </span>
       <span className="lib-list-col col-title">
         <ResizeHandle col="title" />
@@ -3523,17 +3742,17 @@ function ListHead({
         <ResizeHandle col="res" />
       </span>
       <span className="lib-list-col col-dur">
-        <SortBtn col="duration" label="Duration" />
+        <SortBtn col="duration" label={t("lib.colDuration")} />
         <ResizeHandle col="dur" />
       </span>
       <span className="lib-list-col col-size">
-        <SortBtn col="size" label="Size" />
+        <SortBtn col="size" label={t("lib.colSize")} />
         <ResizeHandle col="size" />
       </span>
       {/* Last column — no right-edge handle. To resize date, drag the
           size column's right edge instead. */}
       <span className="lib-list-col col-date">
-        <SortBtn col="date" label="Added" />
+        <SortBtn col="date" label={t("lib.colAdded")} />
       </span>
     </div>
   );
@@ -3550,6 +3769,7 @@ function EmptyState({
   scopeName: string | null;
   inTrash?: boolean;
 }) {
+  const t = useT();
   // 1.3.0 — Trash view has its own empty message. (Without this it fell
   // through to `return null` because the live totalCount is non-zero,
   // leaving the Trash grid blank with no feedback.)
@@ -3557,11 +3777,8 @@ function EmptyState({
     return (
       <div className="empty">
         <Icon.trash width={26} height={26} style={{ color: "var(--text-3)" }} />
-        <h3>Trash is empty</h3>
-        <p>
-          Clips you delete land here and stay recoverable until you empty the Trash.
-          Nothing on disk is removed until then.
-        </p>
+        <h3>{t("lib.trashEmptyTitle")}</h3>
+        <p>{t("lib.trashEmptyHint")}</p>
       </div>
     );
   }
@@ -3570,19 +3787,18 @@ function EmptyState({
       <div className="empty">
         <Icon.library width={28} height={28} style={{ color: "var(--text-3)" }} />
         <h3>
-          {scopeName ? `"${scopeName}" is empty` : "Your library is empty"}
+          {scopeName
+            ? t("lib.emptyScopeTitle").replace("{name}", scopeName)
+            : t("lib.emptyLibTitle")}
         </h3>
         <p>
           {scopeName ? (
-            <>
-              No clips have been downloaded into this project yet. Folder
-              routing arrives next session (Phase B); for now you can move
-              existing assets into projects from the asset drawer.
-            </>
+            <>{t("lib.emptyScopeHint")}</>
           ) : (
             <>
-              Head to the <strong>Download</strong> tab and grab your first clip.
-              Every successful download lands here automatically.
+              {t("lib.emptyHint1")}
+              <strong>{t("nav.download")}</strong>
+              {t("lib.emptyHint2")}
             </>
           )}
         </p>
@@ -3593,8 +3809,8 @@ function EmptyState({
     return (
       <div className="empty">
         <Icon.filter width={24} height={24} style={{ color: "var(--text-3)" }} />
-        <h3>No assets match the current filter</h3>
-        <p>Try clearing one of the filters above, or use the Clear all button.</p>
+        <h3>{t("lib.noMatchTitle")}</h3>
+        <p>{t("lib.noMatchHint")}</p>
       </div>
     );
   }
@@ -3690,15 +3906,16 @@ function InspectorPanel({
 }
 
 function InspectorEmpty() {
+  const t = useT();
   return (
     <div className="insp-empty">
-      <div className="insp-empty-title">No selection</div>
+      <div className="insp-empty-title">{t("lib.noSelection")}</div>
       <div className="insp-empty-hint">
-        Click a card to inspect. <br />
-        <span className="kbd">Ctrl</span>+click to add, <span className="kbd">Shift</span>+click for range,{" "}
+        {t("lib.inspHint1")} <br />
+        <span className="kbd">Ctrl</span>{t("lib.inspHintCtrl")}<span className="kbd">Shift</span>{t("lib.inspHintShift")}{" "}
         <br />
-        drag on empty space for a box select. <br />
-        Double-click a card to open in your default app.
+        {t("lib.inspHintDrag")} <br />
+        {t("lib.inspHintDbl")}
       </div>
     </div>
   );
@@ -3723,10 +3940,11 @@ function InspectorSingle({
   onDelete: () => void;
   onSendToEagle: () => void;
 }) {
+  const t = useT();
   if (!asset) return <InspectorEmpty />;
   const currentFolder = asset.folder_id
     ? folders.find((f) => f.id === asset.folder_id)?.name ?? "(unknown)"
-    : "Uncategorized";
+    : t("lib.uncategorized");
   const thumb = thumbnailSrc(asset.thumbnail_path, asset.thumbnail_url);
   // 1.2.0 — audio assets get a slightly different stat strip:
   //   - "Dimensions" → "Format" (the audio container, e.g. MP3 320k)
@@ -3745,14 +3963,14 @@ function InspectorSingle({
             alt=""
             loading="lazy"
             onClick={() => void openFileInDefaultApp(asset.file_path)}
-            title="Click to open in default app"
+            title={t("lib.clickOpen")}
             style={{ cursor: "pointer" }}
           />
         ) : (
-          <div className="insp-thumb-empty">{isAudio ? "no waveform yet" : "no thumb"}</div>
+          <div className="insp-thumb-empty">{isAudio ? t("lib.noWaveform") : t("lib.noThumb")}</div>
         )}
         {isAudio && (
-          <span className="lib-card-audio-glyph" title="Audio">
+          <span className="lib-card-audio-glyph" title={t("lib.audio")}>
             <Icon.music width={13} height={13} />
           </span>
         )}
@@ -3766,36 +3984,36 @@ function InspectorSingle({
 
       <dl className="insp-stats">
         <div>
-          <dt>Duration</dt>
+          <dt>{t("lib.dtDuration")}</dt>
           <dd>{asset.duration_sec ? fmtDuration(asset.duration_sec) : "—"}</dd>
         </div>
         {isAudio ? (
           <div>
-            <dt>Format</dt>
+            <dt>{t("lib.dtFormat")}</dt>
             <dd className="mono">{(asset.codec_audio ?? asset.container ?? "audio").toUpperCase()}</dd>
           </div>
         ) : (
           <div>
-            <dt>Dimensions</dt>
+            <dt>{t("lib.dtDimensions")}</dt>
             <dd>{dims}</dd>
           </div>
         )}
         <div>
-          <dt>Container</dt>
+          <dt>{t("lib.dtContainer")}</dt>
           <dd className="mono">{asset.container ?? "—"}</dd>
         </div>
         <div>
-          <dt>Size</dt>
+          <dt>{t("lib.dtSize")}</dt>
           <dd>{asset.file_size != null ? fmtBytes(asset.file_size) : "—"}</dd>
         </div>
         <div>
-          <dt>Codec</dt>
+          <dt>{t("lib.dtCodec")}</dt>
           <dd className="mono" title={isAudio ? undefined : `audio: ${asset.codec_audio ?? "—"}`}>
             {isAudio ? (asset.codec_audio ?? "—") : (asset.codec_video ?? "—")}
           </dd>
         </div>
         <div>
-          <dt>Added</dt>
+          <dt>{t("lib.dtAdded")}</dt>
           <dd>{new Date(asset.downloaded_at * 1000).toLocaleString()}</dd>
         </div>
       </dl>
@@ -3804,24 +4022,24 @@ function InspectorSingle({
         <button
           className="btn btn-secondary insp-action-btn"
           onClick={() => void openFileInDefaultApp(asset.file_path)}
-          title="Open in default app"
-          aria-label="Open in default app"
+          title={t("lib.openDefault")}
+          aria-label={t("lib.openDefault")}
         >
           <Icon.play width={18} height={18} />
         </button>
         <button
           className="btn btn-secondary insp-action-btn"
           onClick={() => void revealFile(asset.file_path)}
-          title="Reveal in file manager"
-          aria-label="Reveal in file manager"
+          title={t("lib.reveal")}
+          aria-label={t("lib.reveal")}
         >
           <Icon.folder width={18} height={18} />
         </button>
         <button
           className={"btn btn-secondary insp-action-btn" + (eagleRunning ? "" : " insp-action-dim")}
           onClick={onSendToEagle}
-          title={eagleRunning ? "Send to Eagle" : "Send to Eagle (Eagle isn't running)"}
-          aria-label="Send to Eagle"
+          title={eagleRunning ? t("lib.sendEagle") : t("lib.sendEagleOff")}
+          aria-label={t("lib.sendEagle")}
         >
           <Icon.eagle width={17} height={17} />
         </button>
@@ -3829,22 +4047,22 @@ function InspectorSingle({
           className="btn btn-danger insp-action-btn"
           onClick={onDelete}
           disabled={bulkDeleting}
-          title="Move to Recycle Bin — Delete"
-          aria-label="Move to Recycle Bin"
+          title={t("lib.recycleTitle")}
+          aria-label={t("lib.recycle")}
         >
           <Icon.trash width={18} height={18} />
         </button>
       </div>
 
       <div className="insp-folder">
-        <div className="insp-section-head">Folder</div>
+        <div className="insp-section-head">{t("lib.secFolder")}</div>
         <select
           className="field-select"
           value={asset.folder_id ?? ""}
           onChange={(e) => onMoveToFolder(e.target.value || null)}
           title={`Currently in: ${currentFolder}`}
         >
-          <option value="">Uncategorized</option>
+          <option value="">{t("lib.uncategorized")}</option>
           {folders.map((f) => (
             <option key={f.id} value={f.id}>
               {f.name}
@@ -3858,12 +4076,12 @@ function InspectorSingle({
           editor with autocomplete; press T on the card grid for the
           alternative popup picker. */}
       <div className="insp-tags">
-        <div className="insp-section-head">Tags</div>
+        <div className="insp-section-head">{t("lib.secTags")}</div>
         <TagEditor asset={asset} knownTags={knownTagsForInspector} />
       </div>
 
       <div className="insp-source">
-        <div className="insp-section-head">Source</div>
+        <div className="insp-section-head">{t("lib.secSource")}</div>
         <a
           className="mono insp-url"
           href={asset.source_url}
@@ -3905,6 +4123,7 @@ function InspectorBatch({
   onMoveToFolder: (folderId: string | null) => void;
   onSendToEagle: () => void;
 }) {
+  const t = useT();
   // If every selected asset shares the same folder_id, surface it as
   // the current value of the batch dropdown; otherwise show a "mixed"
   // sentinel so the dropdown doesn't lie.
@@ -3923,19 +4142,21 @@ function InspectorBatch({
   return (
     <div className="insp-batch">
       <div className="insp-batch-head">
-        <div className="insp-batch-count">{selected.length} selected</div>
+        <div className="insp-batch-count">
+          {t("lib.bulkSelected").replace("{n}", String(selected.length))}
+        </div>
         <button className="btn btn-secondary" onClick={onClear} title="Esc">
-          Clear
+          {t("lib.bulkClear")}
         </button>
       </div>
 
       <dl className="insp-stats">
         <div>
-          <dt>Total size</dt>
+          <dt>{t("lib.dtTotalSize")}</dt>
           <dd>{fmtBytes(totalBytes)}</dd>
         </div>
         <div>
-          <dt>Sources</dt>
+          <dt>{t("lib.dtSources")}</dt>
           <dd>
             {Array.from(platforms.entries())
               .map(([p, n]) => `${platformLabel(p)} ${n}`)
@@ -3945,7 +4166,7 @@ function InspectorBatch({
       </dl>
 
       <div className="insp-folder">
-        <div className="insp-section-head">Move to folder</div>
+        <div className="insp-section-head">{t("lib.secMove")}</div>
         <select
           className="field-select"
           value={commonFolderId === "__mixed__" ? "__mixed__" : commonFolderId ?? ""}
@@ -3956,9 +4177,9 @@ function InspectorBatch({
           }}
         >
           {commonFolderId === "__mixed__" && (
-            <option value="__mixed__">— mixed —</option>
+            <option value="__mixed__">{t("lib.mixed")}</option>
           )}
-          <option value="">Uncategorized</option>
+          <option value="">{t("lib.uncategorized")}</option>
           {folders.map((f) => (
             <option key={f.id} value={f.id}>
               {f.name}
@@ -3978,28 +4199,30 @@ function InspectorBatch({
         <button
           className={"btn btn-secondary insp-action-btn" + (eagleRunning ? "" : " insp-action-dim")}
           onClick={onSendToEagle}
-          title={eagleRunning ? "Add the selection to your open Eagle library" : "Send to Eagle (Eagle isn't running)"}
+          title={eagleRunning ? t("lib.eagleAddTitle") : t("lib.sendEagleOff")}
         >
           <Icon.eagle width={16} height={16} />
-          {`Send ${selected.length} to Eagle`}
+          {t("lib.sendNEagle").replace("{n}", String(selected.length))}
         </button>
         <button
           className="btn btn-danger insp-action-btn"
           onClick={onBulkDelete}
           disabled={bulkDeleting}
-          title="Delete from library + move files to Recycle Bin — Delete"
+          title={t("lib.bulkDeleteTitle")}
         >
           <Icon.trash width={16} height={16} />
-          {bulkDeleting ? "Deleting…" : `Delete ${selected.length}`}
+          {bulkDeleting
+            ? t("lib.deleting")
+            : t("lib.deleteN").replace("{n}", String(selected.length))}
         </button>
       </div>
 
       <div className="insp-section-head" style={{ marginTop: 18 }}>
-        Items
+        {t("lib.items")}
       </div>
       <ul className="insp-batch-list">
         {selected.slice(0, 25).map((a) => (
-          <li key={a.id} onClick={() => onSelectOne(a.id)} title="Click to focus this one">
+          <li key={a.id} onClick={() => onSelectOne(a.id)} title={t("lib.focusOne")}>
             <div className="insp-bl-title">{a.title}</div>
             <div className="insp-bl-meta mono">
               {a.duration_sec ? fmtDuration(a.duration_sec) : "—"} ·{" "}
@@ -4009,7 +4232,7 @@ function InspectorBatch({
         ))}
         {selected.length > 25 && (
           <li className="insp-bl-more">
-            …and {selected.length - 25} more
+            {t("lib.andMore").replace("{n}", String(selected.length - 25))}
           </li>
         )}
       </ul>
@@ -4151,8 +4374,12 @@ function _AssetDrawerLegacy({
             </dd>
             {asset.transcoded_to && (
               <>
-                <dt>Transcoded</dt>
-                <dd>{asset.transcoded_to}</dd>
+                <dt>{asset.transcoded_to === "rtx-vsr" ? "Enhanced" : "Transcoded"}</dt>
+                <dd>
+                  {asset.transcoded_to === "rtx-vsr"
+                    ? "NVIDIA RTX Video (2×)"
+                    : asset.transcoded_to}
+                </dd>
               </>
             )}
             <dt>Added</dt>
@@ -4406,18 +4633,20 @@ function bumpRecentTags(names: string[]) {
   }
 }
 
-function sortLabel(m:
+// i18n: returns the locale KEY — callers wrap it in t() so the label
+// follows the active language.
+function sortKey(m:
   | "recent" | "oldest" | "name_az" | "name_za"
   | "size_desc" | "size_asc" | "duration_desc" | "duration_asc"): string {
   switch (m) {
-    case "recent": return "Most recent";
-    case "oldest": return "Oldest";
-    case "name_az": return "Name A→Z";
-    case "name_za": return "Name Z→A";
-    case "size_desc": return "Largest";
-    case "size_asc": return "Smallest";
-    case "duration_desc": return "Longest";
-    case "duration_asc": return "Shortest";
+    case "recent": return "lib.sortRecent";
+    case "oldest": return "lib.sortOldest";
+    case "name_az": return "lib.sortNameAZ";
+    case "name_za": return "lib.sortNameZA";
+    case "size_desc": return "lib.sortLargest";
+    case "size_asc": return "lib.sortSmallest";
+    case "duration_desc": return "lib.sortLongest";
+    case "duration_asc": return "lib.sortShortest";
   }
 }
 
@@ -4436,6 +4665,7 @@ function SortPopup({
     | "size_desc" | "size_asc" | "duration_desc" | "duration_asc") => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const popupRef = useRef<HTMLDivElement>(null);
   const POPUP_WIDTH = 180;
   const anchorRect = anchorRef.current?.getBoundingClientRect();
@@ -4477,10 +4707,10 @@ function SortPopup({
       className="filter-popup"
       style={{ top, right, width: POPUP_WIDTH }}
       role="menu"
-      aria-label="Sort by"
+      aria-label={t("lib.sortBy")}
     >
       <div className="filter-popup-head">
-        <span className="filter-popup-title">Sort by</span>
+        <span className="filter-popup-title">{t("lib.sortBy")}</span>
       </div>
       <div className="filter-section-body" style={{ maxHeight: "none" }}>
         {options.map((m) => (
@@ -4491,7 +4721,7 @@ function SortPopup({
             onClick={() => onPick(m)}
           >
             <span className="filter-row-check">{m === current ? "✓" : ""}</span>
-            <span className="filter-row-label">{sortLabel(m)}</span>
+            <span className="filter-row-label">{t(sortKey(m))}</span>
           </button>
         ))}
       </div>
@@ -4518,6 +4748,7 @@ function TagFilterPopup({
   onClearTags: () => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const popupRef = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState("");
   const [rail, setRail] = useState<"all" | "selected">("all");
@@ -4568,7 +4799,7 @@ function TagFilterPopup({
       className="filter-popup tag-filter-popup"
       style={{ top, right, width: POPUP_WIDTH, height: POPUP_HEIGHT }}
       role="dialog"
-      aria-label="Filter by tags"
+      aria-label={t("lib.tagsTitle")}
     >
       <div className="filter-popup-head">
         <span className="filter-popup-title">
@@ -4579,7 +4810,7 @@ function TagFilterPopup({
             type="button"
             className="filter-popup-clear"
             onClick={onClearTags}
-            title="Clear all selected tags"
+            title={t("lib.tagsClearAll")}
           >
             Clear
           </button>
@@ -4590,7 +4821,7 @@ function TagFilterPopup({
         <Icon.search width={11} height={11} style={{ color: "var(--text-3)" }} />
         <input
           type="text"
-          placeholder="Search tags…"
+          placeholder={t("lib.searchTags")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           spellCheck={false}
@@ -4605,7 +4836,7 @@ function TagFilterPopup({
             className={"tagf-rail-item" + (rail === "selected" ? " active" : "")}
             onClick={() => setRail("selected")}
           >
-            <span>Selected</span>
+            <span>{t("lib.tagsSelected")}</span>
             <span className="mono faint">{activeTags.size}</span>
           </button>
           <button
@@ -4613,16 +4844,16 @@ function TagFilterPopup({
             className={"tagf-rail-item" + (rail === "all" ? " active" : "")}
             onClick={() => setRail("all")}
           >
-            <span>All Tags</span>
+            <span>{t("lib.tagsAll")}</span>
             <span className="mono faint">{knownTags.length}</span>
           </button>
         </div>
 
         <div className="tagf-list">
           {knownTags.length === 0 ? (
-            <div className="filter-empty">no tags yet — add some via the inspector or press T on selected clips</div>
+            <div className="filter-empty">{t("lib.noTagsInspector")}</div>
           ) : visible.length === 0 ? (
-            <div className="filter-empty">no matches</div>
+            <div className="filter-empty">{t("lib.noTagMatches")}</div>
           ) : (
             visible.map((t) => {
               const on = activeTags.has(t.name);
@@ -4664,6 +4895,7 @@ function TagPickerPopup({
   onApply: (toAdd: string[], toRemove: string[]) => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const popupRef = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState("");
 
@@ -4783,7 +5015,7 @@ function TagPickerPopup({
       className="filter-popup tag-picker-popup"
       style={{ top, left, width: POPUP_WIDTH, maxHeight: POPUP_HEIGHT }}
       role="dialog"
-      aria-label="Tag picker"
+      aria-label={t("lib.tagPicker")}
     >
       <div className="filter-popup-head">
         <span className="filter-popup-title">
@@ -4798,7 +5030,7 @@ function TagPickerPopup({
         <Icon.search width={11} height={11} style={{ color: "var(--text-3)" }} />
         <input
           type="text"
-          placeholder="Search or create a tag…"
+          placeholder={t("lib.tagSearchCreate")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           onKeyDown={(e) => {
@@ -4818,7 +5050,7 @@ function TagPickerPopup({
             type="button"
             className="filter-row tag-picker-create"
             onClick={createAndApply}
-            title="Create and apply this tag"
+            title={t("lib.tagCreateApply")}
           >
             <span className="filter-row-check">+</span>
             <span className="filter-row-label">
@@ -4829,7 +5061,7 @@ function TagPickerPopup({
 
         {visibleRecent.length > 0 && (
           <>
-            <div className="filter-section-head">Recently used</div>
+            <div className="filter-section-head">{t("lib.tagsRecent")}</div>
             {visibleRecent.map(renderRow)}
           </>
         )}
@@ -4845,7 +5077,7 @@ function TagPickerPopup({
 
         {!canCreate && visibleRecent.length === 0 && visibleOthers.length === 0 && (
           <div className="filter-empty">
-            {knownTags.length === 0 ? "no tags yet — type to create" : "no matches"}
+            {knownTags.length === 0 ? t("lib.noTagsType") : t("lib.noTagMatches")}
           </div>
         )}
       </div>
@@ -4859,6 +5091,7 @@ function TagPickerPopup({
 // surface partial state (tags on SOME but not all) — that's what the
 // press-T picker is for, where indeterminate state has real UI.
 function BatchTagEditor({ selected, knownTags }: { selected: Asset[]; knownTags: TagCount[] }) {
+  const t = useT();
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
 
@@ -4931,13 +5164,13 @@ function BatchTagEditor({ selected, knownTags }: { selected: Asset[]; knownTags:
   return (
     <div className="insp-folder">
       <div className="insp-section-head">
-        Tags <span className="mono faint" style={{ fontSize: 10 }}>(in all)</span>
+        {t("lib.secTags")} <span className="mono faint" style={{ fontSize: 10 }}>{t("lib.tagsInAll")}</span>
       </div>
       <div className="tag-row">
-        {common.map((t) => (
-          <span key={t} className="tag-chip">
-            <span>{t}</span>
-            <button className="x" onClick={() => void removeFromAll(t)} title="Remove from all">
+        {common.map((tg) => (
+          <span key={tg} className="tag-chip">
+            <span>{tg}</span>
+            <button className="x" onClick={() => void removeFromAll(tg)} title={t("lib.tagRemoveAll")}>
               ×
             </button>
           </span>

@@ -44,6 +44,19 @@ export const Icon = {
       <path d="M13.5 13.5L10.5 10.5" />
     </svg>
   ),
+  // 1.12.x — RTX enhance: before/after split frame. Left half dim +
+  // dashed (degraded input), right half solid with a lens detail
+  // (enhanced output). Same metaphor as the classic upscaler icons,
+  // drawn in the house stroke style.
+  rtx: (p: P = {}) => (
+    <svg viewBox="0 0 16 16" {...base} {...p}>
+      <rect x="2" y="2" width="12" height="12" rx="3.2" />
+      <path d="M8 2v12" />
+      <path d="M4 6h2.2M4 9.5l2-2" opacity="0.4" strokeDasharray="1.5 1.5" />
+      <circle cx="11.2" cy="6.4" r="1.6" />
+      <path d="M9.8 11.2c1.2 0 2.3-.4 3-1.1" />
+    </svg>
+  ),
   help: (p: P = {}) => (
     <svg viewBox="0 0 16 16" {...base} {...p}>
       <circle cx="8" cy="8" r="6" />

@@ -6,6 +6,7 @@ import { Icon } from "../lib/icons";
 import { alertDialog, confirmDialog } from "../lib/dialog";
 import { HelpHint } from "../components/HelpHint";
 import { useSettings } from "../lib/settings";
+import { useRtxEnhance } from "../lib/rtxEnhance";
 import { useT } from "../lib/i18n";
 import { APP_VERSION } from "../lib/version";
 import {
@@ -48,6 +49,7 @@ export default function SettingsPage() {
           <LibrarySection />
           <DownloadsSection />
           <TranscodeSection />
+          <RtxSection />
           <BridgeSection />
           <DiagnosticsSection />
           <AboutSection />
@@ -1104,6 +1106,131 @@ function TranscodeSection() {
           {TRANSCODE_PRESETS.find((p) => p.value === preset)?.hint}
         </span>
       </div>
+    </section>
+  );
+}
+
+// =====================================================================
+// RTX Video enhance (Phase 2) — optional NVIDIA upscale / decompress
+// =====================================================================
+//
+// Reads/writes the same context-backed defaults the enhance window uses
+// (localStorage: mh.rtx.quality / mh.rtx.scale / mh.rtx.hdr), so this page
+// and the window stay in lockstep. These defaults are what a right-click →
+// "Upscale (NVIDIA RTX Video)" uses. The whole section hides on machines
+// without a capable RTX GPU (nothing to configure there).
+
+function RtxSection() {
+  const {
+    capability,
+    workerReady,
+    defaultQuality,
+    setDefaultQuality,
+    defaultScale,
+    setDefaultScale,
+    defaultHdr,
+    setDefaultHdr,
+    openWindow,
+  } = useRtxEnhance();
+
+  // Still probing — render nothing rather than flicker a disabled card.
+  if (capability === null) return null;
+  // No capable GPU → nothing to configure; keep Settings uncluttered.
+  if (!capability.supported) return null;
+
+  return (
+    <section className="card-box">
+      <h2>
+        RTX Video <span className="chip">enhance</span>
+        <HelpHint id="set-rtx" title="RTX Video (NVIDIA upscale)">
+          Uses your NVIDIA RTX GPU to clean up compression and (optionally)
+          double a clip's resolution. Pick a quality and whether to upscale or
+          just decompress; those choices become the default for right-click →
+          Upscale. Only clips under 1440p can be enhanced.
+        </HelpHint>
+      </h2>
+      <p className="hint">
+        Right-click a clip → “Upscale (NVIDIA RTX Video)”, or open the review
+        window to drop clips in and compare before/after. These are the
+        defaults applied to new jobs.
+      </p>
+
+      <div className="settings-row">
+        <span className="settings-label">Quality</span>
+        <select
+          className="field-select"
+          value={defaultQuality}
+          onChange={(e) => setDefaultQuality(Number(e.target.value))}
+        >
+          <option value={4}>Ultra (best)</option>
+          <option value={3}>High</option>
+          <option value={2}>Medium</option>
+          <option value={1}>Low (fastest)</option>
+        </select>
+        <span className="hint-text faint">Higher = cleaner, a little slower.</span>
+      </div>
+
+      <div className="settings-row">
+        <span className="settings-label">Scale</span>
+        <select
+          className="field-select"
+          value={defaultScale}
+          onChange={(e) => setDefaultScale(Number(e.target.value))}
+        >
+          <option value={4}>4× upscale</option>
+          <option value={2}>2× upscale</option>
+          <option value={1}>Decompress only (1×)</option>
+        </select>
+        <span className="hint-text faint">
+          {defaultScale <= 1
+            ? "Cleans compression, keeps the original resolution."
+            : defaultScale >= 4
+              ? "Quadruples resolution (best for small/SD clips) and cleans compression."
+              : "Doubles resolution and cleans compression."}
+        </span>
+      </div>
+
+      <div className="settings-row">
+        <span className="settings-label">SDR → HDR</span>
+        <label className="switch" style={{ flex: "0 0 auto" }}>
+          <input
+            type="checkbox"
+            checked={defaultHdr}
+            onChange={(e) => setDefaultHdr(e.target.checked)}
+          />
+          <span className="switch-slider" />
+        </label>
+        <span className="hint-text faint">
+          Expand SDR footage to HDR (TrueHDR). Leave off for normal clips.
+        </span>
+      </div>
+
+      <div className="settings-row">
+        <span className="settings-label">Review window</span>
+        <button className="btn btn-secondary" onClick={() => openWindow()}>
+          <Icon.video width={12} height={12} /> Open enhance window
+        </button>
+        <span className="hint-text faint">
+          Drop clips in, compare before/after, manage the queue.
+        </span>
+      </div>
+
+      <dl className="settings-kv">
+        <div>
+          <dt>GPU</dt>
+          <dd>{capability.gpu_name || "—"}</dd>
+        </div>
+        <div>
+          <dt>Driver</dt>
+          <dd>{capability.driver_version || "—"}</dd>
+        </div>
+        <div>
+          <dt>Enhancer</dt>
+          <dd className={workerReady ? "" : "err"}>
+            {workerReady ? "installed" : "not installed yet"}
+          </dd>
+        </div>
+      </dl>
     </section>
   );
 }

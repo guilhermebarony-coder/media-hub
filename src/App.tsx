@@ -6,6 +6,9 @@ import { ActiveProjectProvider } from "./lib/activeProject";
 import { SettingsProvider, useSettings } from "./lib/settings";
 import { LanguageProvider } from "./lib/i18n";
 import { DownloadsProvider, useDownloads } from "./lib/downloads";
+import { RtxEnhanceProvider } from "./lib/rtxEnhance";
+import { RtxQueueDock } from "./components/RtxQueueDock";
+import { RtxEnhanceWindow } from "./components/RtxEnhanceWindow";
 import { confirmDialog } from "./lib/dialog";
 import { DialogHost } from "./components/DialogHost";
 import { ToolsGate } from "./components/ToolsGate";
@@ -270,18 +273,24 @@ export default function App() {
       </Suspense>
       <ActiveProjectProvider>
         <DownloadsHost>
-          <HashRouter>
-            {/* 1.1.3 — only the `/` redirect uses Routes now. Everything
-                else renders via the keep-alive Shell, which owns the page
-                visibility entirely via useLocation. This makes Download
-                survive route nav (preserves the fetched metadata, the
-                scrubber, the in-flight progress, etc.) — and Library
-                keeps its scroll position + active filters for free. */}
-            <Routes>
-              <Route path="/" element={<HomeRedirect />} />
-              <Route path="*" element={<Shell />} />
-            </Routes>
-          </HashRouter>
+          <RtxEnhanceProvider>
+            <HashRouter>
+              {/* 1.1.3 — only the `/` redirect uses Routes now. Everything
+                  else renders via the keep-alive Shell, which owns the page
+                  visibility entirely via useLocation. This makes Download
+                  survive route nav (preserves the fetched metadata, the
+                  scrubber, the in-flight progress, etc.) — and Library
+                  keeps its scroll position + active filters for free. */}
+              <Routes>
+                <Route path="/" element={<HomeRedirect />} />
+                <Route path="*" element={<Shell />} />
+              </Routes>
+            </HashRouter>
+            {/* RTX enhance queue status dock (bottom-left) + the before/after
+                review window. Both render nothing until there's work. */}
+            <RtxQueueDock />
+            <RtxEnhanceWindow />
+          </RtxEnhanceProvider>
         </DownloadsHost>
       </ActiveProjectProvider>
       {/* 1.3.x — in-app dialog renderer (replaces native OS dialogs).

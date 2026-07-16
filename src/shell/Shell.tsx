@@ -8,6 +8,8 @@ import { useT } from "../lib/i18n";
 import { APP_VERSION } from "../lib/version";
 import { CommandPalette } from "../components/CommandPalette";
 import { LanguagePicker } from "../components/LanguagePicker";
+import { UpdateNotice } from "./UpdateNotice";
+import { useRtxEnhance } from "../lib/rtxEnhance";
 
 // 1.1.3 — lazy-load pages here (moved from App.tsx) so the Shell owns
 // the keep-alive lifecycle. Vite still produces one chunk per page;
@@ -77,6 +79,7 @@ export function Shell() {
     <div className="mh">
       <TopBar onOpenPalette={() => setPaletteOpen(true)} />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      <UpdateNotice />
       <div className="main">
         <Nav />
         <div className="content-host">
@@ -219,6 +222,23 @@ function useNavShortcuts() {
   }, [navigate]);
 }
 
+/** Opens the RTX before/after window from the top bar. Hidden when the
+ *  machine can't run RTX enhance, so it never teases an unusable feature. */
+function RtxTopBarButton() {
+  const { capability, openWindow } = useRtxEnhance();
+  if (!capability?.supported) return null;
+  return (
+    <button
+      type="button"
+      className="ic-btn"
+      title="NVIDIA RTX Video — enhance"
+      onClick={() => openWindow()}
+    >
+      <Icon.rtx width={15} height={15} />
+    </button>
+  );
+}
+
 function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
   const t = useT();
   return (
@@ -246,13 +266,15 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
         <span>{t("topbar.searchClips")}</span>
         <span className="kbd">Ctrl Space</span>
       </button>
+      {/* 1.12.x — icon cleanup: Settings link dropped (it lives in the
+          left nav); background-mode moved last, past a divider, with a
+          tray icon instead of the unintuitive eye. */}
       <div className="topbar-icons">
         <TrayTooltipSync />
         <LanguagePicker />
+        <RtxTopBarButton />
+        <span className="topbar-sep" aria-hidden />
         <BackgroundModeButton />
-        <NavLink to="/settings" className="ic-btn" title={t("topbar.settings")}>
-          <Icon.settings width={14} height={14} />
-        </NavLink>
       </div>
     </div>
   );

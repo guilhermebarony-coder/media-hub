@@ -49,6 +49,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { extFromPath } from "./format";
 import { detectPlatform, isDirectMediaUrl, prettyDirectTitle } from "./platforms";
 import {
+  attachBestThumbnail,
   attachLocalThumbnail,
   audioCodecFor,
   attachLocalWaveform,
@@ -81,6 +82,27 @@ export type QueueStatus =
   | "failed"
   | "canceled";
 
+/** 1.12.x — fully-specified download carried by a queue job. Present when
+ *  the job came from the Download card's "Download" button: the card
+ *  already fetched metadata and the user already picked format/segments/
+ *  transcode, so the queue worker must NOT re-decide any of it. Slim by
+ *  design (no VideoMetadata — its formats[] array is huge and this gets
+ *  persisted to localStorage). Segments are Rust-shaped [in,out] tuples. */
+export type QueueJobSpec = {
+  formatSpec: string;
+  mergeContainer: string | null;
+  totalBytesHint: number | null;
+  videoId: string;
+  segments: Array<[number, number]> | null;
+  metaTitle: string;
+  metaChannel: string | null;
+  metaDuration: number | null;
+  pfVcodec: string | null;
+  pfWidth: number | null;
+  pfHeight: number | null;
+  pfFps: number | null;
+};
+
 export type QueueJob = {
   id: string;
   url: string;
@@ -105,6 +127,8 @@ export type QueueJob = {
   resultPath?: string;
   resultBytes?: number | null;
   error?: string;
+  /** 1.12.x — see QueueJobSpec. Absent on plain URL-only queue jobs. */
+  spec?: QueueJobSpec;
 };
 
 export type SinglePhase = "idle" | "downloading" | "transcoding";
@@ -273,6 +297,10 @@ type DownloadsContextValue = {
   retryFailedJobs: () => void;
   clearCompletedJobs: () => void;
   updateQueueJob: (id: string, patch: Partial<QueueJob>) => void;
+  /** 1.12.x — enqueue the Download card's fully-specified download as a
+   *  regular queue job (spec attached). Returns immediately: the card
+   *  frees up for the next URL while the queue below runs this one. */
+  enqueueSingleSpec: (args: StartSingleArgs) => void;
   // Single-URL
   singleDownload: SingleDownload | null;
   startSingleDownload: (args: StartSingleArgs) => Promise<void>;
@@ -493,8 +521,140 @@ export function DownloadsProvider({
     [updateQueueJob],
   );
 
+  // 1.12.x — spec-driven queue path. Runs a job whose choices were made
+  // in the Download card (exact format, segments, transcode). Skips the
+  // metadata fetch entirely, honors multi-segment results (one library
+  // row per cut) — mirroring startSingleDownload, but reporting through
+  // the queue row instead of the blocking single-URL slot.
+  const runQueueSpec = useCallback(
+    async (job: QueueJob) => {
+      const spec = job.spec!;
+      const isAudio = !!job.audioFormat;
+      updateQueueJob(job.id, { status: "downloading" });
+
+      let results: DownloadResult[];
+      try {
+        results = await invoke<DownloadResult[]>("yt_download", {
+          url: job.url,
+          formatSpec: spec.formatSpec,
+          mergeContainer: spec.mergeContainer,
+          totalBytesHint: spec.totalBytesHint,
+          videoId: spec.videoId,
+          segments: spec.segments && spec.segments.length > 0 ? spec.segments : null,
+          jobId: job.id,
+          projectId: job.projectId,
+          audioFormat: job.audioFormat ?? null,
+        });
+      } catch (e) {
+        const msg = String(e);
+        if (
+          msg.includes("__canceled__") ||
+          jobsRef.current.find((j) => j.id === job.id)?.status === "canceled"
+        ) {
+          updateQueueJob(job.id, { status: "canceled", error: undefined });
+          return;
+        }
+        updateQueueJob(job.id, { status: "failed", error: msg });
+        return;
+      }
+
+      const preset = isAudio ? "none" : job.transcodePreset;
+      let finalPaths = results.map((r) => r.path);
+      let usedPreset: TranscodePreset = "none";
+      let txError: string | null = null;
+
+      if (preset !== "none") {
+        const sem = isGpuPreset(preset) ? gpuTranscodeSem : cpuTranscodeSem;
+        await sem.acquire();
+        try {
+          updateQueueJob(job.id, { status: "transcoding", resultPath: results[0]?.path });
+          const txResults: TranscodeResult[] = [];
+          for (const r of results) {
+            try {
+              const txRes = await invoke<TranscodeResult>("media_transcode", {
+                srcPath: r.path,
+                preset,
+                totalSecHint: spec.metaDuration ?? null,
+                jobId: job.id,
+              });
+              txResults.push(txRes);
+            } catch (e) {
+              txError = `transcode failed: ${String(e)} (source kept)`;
+              break;
+            }
+          }
+          if (txResults.length > 0) {
+            finalPaths = txResults.map((t) => t.path);
+            usedPreset = preset;
+          }
+        } finally {
+          sem.release();
+        }
+      }
+
+      // Record every final path — multi-segment downloads produce one
+      // library row per cut, each carrying its in/out marks.
+      for (let i = 0; i < finalPaths.length; i++) {
+        const path = finalPaths[i];
+        const original = results[i];
+        const seg = spec.segments?.[i] ?? null;
+        const assetId = await recordInLibrary({
+          source_url: job.url,
+          platform: detectPlatform(job.url),
+          video_id: spec.videoId,
+          channel: spec.metaChannel,
+          title: spec.metaTitle,
+          duration_sec: spec.metaDuration,
+          in_sec: seg?.[0] ?? null,
+          out_sec: seg?.[1] ?? null,
+          file_path: path,
+          file_size: original?.bytes ?? null,
+          container: extFromPath(path),
+          codec_video: isAudio ? null : videoCodecFor(usedPreset, spec.pfVcodec ?? undefined),
+          codec_audio: isAudio ? (job.audioFormat ?? null) : audioCodecFor(usedPreset, null),
+          width: isAudio ? null : spec.pfWidth,
+          height: isAudio ? null : spec.pfHeight,
+          fps: isAudio ? null : spec.pfFps,
+          transcoded_to: usedPreset === "none" ? null : usedPreset,
+          thumbnail_url: job.thumbnail ?? null,
+          project_id: job.projectId ?? null,
+          kind: isAudio ? "audio" : "video",
+        });
+        if (assetId) {
+          if (isAudio) {
+            void attachLocalWaveform(assetId, path);
+          } else {
+            // Full video → platform art; segment cut → its own frame.
+            void attachBestThumbnail(
+              assetId,
+              seg ? null : (job.thumbnail ?? null),
+              path,
+              spec.metaDuration ?? null,
+            );
+          }
+        }
+      }
+
+      updateQueueJob(job.id, {
+        status: txError ? "failed" : "done",
+        error: txError ?? undefined,
+        resultPath: finalPaths[finalPaths.length - 1],
+        resultBytes: results[results.length - 1]?.bytes ?? null,
+      });
+    },
+    [updateQueueJob],
+  );
+
   const processOne = useCallback(
     async (job: QueueJob) => {
+      // 1.12.x — fully-specified card download: the card already fetched
+      // metadata and the user already chose format/segments — don't
+      // re-decide anything here.
+      if (job.spec) {
+        await runQueueSpec(job);
+        return;
+      }
+
       updateQueueJob(job.id, { status: "fetching" });
 
       // 1.3.x — Direct-download shortcut. If the queue row's URL is
@@ -650,11 +810,12 @@ export function DownloadsProvider({
         if (isAudio) {
           void attachLocalWaveform(assetId, finalPath);
         } else {
-          void attachLocalThumbnail(assetId, finalPath, meta.duration_sec ?? null);
+          // 1.12.x — prefer the platform's own art (frame-grab fallback).
+          void attachBestThumbnail(assetId, meta.thumbnail ?? null, finalPath, meta.duration_sec ?? null);
         }
       }
     },
-    [updateQueueJob, runQueueDirect],
+    [updateQueueJob, runQueueDirect, runQueueSpec],
   );
 
   // Spawn workers whenever there's queued work and we're below ceiling.
@@ -686,6 +847,45 @@ export function DownloadsProvider({
         audioFormat: opts.audioFormat ?? null,
       }));
       setQueueJobs((prev) => [...prev, ...newJobs]);
+    },
+    [],
+  );
+
+  // 1.12.x — enqueue the card's fully-specified download. Title/thumb
+  // land on the job immediately (the queue row renders them without a
+  // fetch); the heavy VideoMetadata is slimmed into QueueJobSpec.
+  const enqueueSingleSpec = useCallback<DownloadsContextValue["enqueueSingleSpec"]>(
+    (args) => {
+      const rustSegments = args.segments
+        ? args.segments.map((s) => [s.inSec, s.outSec] as [number, number])
+        : null;
+      const job: QueueJob = {
+        id: newJobId(),
+        url: args.url,
+        status: "queued",
+        transcodePreset: args.transcodePreset,
+        projectId: args.projectId,
+        audioFormat: args.audioFormat ?? null,
+        title: args.meta.title,
+        channel: args.meta.channel ?? undefined,
+        thumbnail: args.meta.thumbnail ?? null,
+        duration_sec: args.meta.duration_sec ?? null,
+        spec: {
+          formatSpec: args.formatSpec,
+          mergeContainer: args.mergeContainer,
+          totalBytesHint: args.totalBytesHint,
+          videoId: args.videoId,
+          segments: rustSegments && rustSegments.length > 0 ? rustSegments : null,
+          metaTitle: args.meta.title,
+          metaChannel: args.meta.channel ?? null,
+          metaDuration: args.meta.duration_sec ?? null,
+          pfVcodec: args.pickedFormat?.vcodec ?? null,
+          pfWidth: args.pickedFormat?.width ?? null,
+          pfHeight: args.pickedFormat?.height ?? null,
+          pfFps: args.pickedFormat?.fps ?? null,
+        },
+      };
+      setQueueJobs((prev) => [...prev, job]);
     },
     [],
   );
@@ -848,8 +1048,10 @@ export function DownloadsProvider({
             if (isAudio) {
               void attachLocalWaveform(assetId, path);
             } else {
-              void attachLocalThumbnail(
+              // Full video → platform art; segment cut → its own frame.
+              void attachBestThumbnail(
                 assetId,
+                seg ? null : (args.meta.thumbnail ?? null),
                 path,
                 args.meta.duration_sec ?? null,
               );
@@ -1032,6 +1234,7 @@ export function DownloadsProvider({
   const value: DownloadsContextValue = {
     queueJobs,
     enqueueUrls,
+    enqueueSingleSpec,
     cancelQueueJob,
     removeQueueJobs,
     retryFailedJobs,
