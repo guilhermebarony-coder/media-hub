@@ -1033,6 +1033,16 @@ waiting for the GitHub repo to exist.
 
 ### Failure modes to remember
 
+- **GitHub renames assets: spaces become DOTS** (1.13.0 bite). The
+  bundle is "Media Hub_X.Y.Z_x64-setup.exe" but the uploaded asset is
+  `Media.Hub_X.Y.Z_x64-setup.exe` — a latest.json URL written with
+  `Media%20Hub` 404s at install time (updater fetches the manifest
+  fine, then dies on the download). Always copy URLs from
+  `gh release view vX.Y.Z --json assets` after uploading. Also note the
+  tag push triggers the CI mac build, which attaches its own
+  aarch64 assets — include them in latest.json (5-platform shape:
+  darwin-aarch64 / darwin-aarch64-app / windows-x86_64 / -msi / -nsis).
+
 - **Endpoint placeholder still in tauri.conf.json** -> updater errors
   out with a DNS / not-found. First-time-only gotcha; fix the URL.
 - **`latest.json` signature is the WRONG key** (different keypair
