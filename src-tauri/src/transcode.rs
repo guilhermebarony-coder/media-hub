@@ -125,7 +125,41 @@ pub async fn media_transcode(
         .file_stem()
         .and_then(|s| s.to_str())
         .ok_or("source path is not valid UTF-8")?;
-    let out_path = parent.join(format!("{}.{}.{}", stem, suffix, out_ext));
+    // 1.12.x — Windows MAX_PATH guard. The source name (yt-dlp's
+    // sanitized <title> [id]) can already sit near the 260-char limit —
+    // Instagram/Twitter "titles" are whole captions — and our added
+    // ".<suffix>.<ext>" pushed the OUTPUT over it. CreateFile then fails
+    // with EINVAL, which ffmpeg surfaces as the cryptic "Error opening
+    // output files: Invalid argument". Cap the whole output path at a
+    // safe budget by truncating the stem (with a short hash so two
+    // truncated captions can't collide).
+    const MAX_OUT_PATH: usize = 240; // margin under Windows' 260
+    let overhead = parent.to_string_lossy().len() + 1 /* sep */
+        + 1 + suffix.len() + 1 + out_ext.len(); // ".suffix.ext"
+    let budget = MAX_OUT_PATH.saturating_sub(overhead);
+    let stem_final: String = if stem.len() > budget {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        stem.hash(&mut h);
+        let tag = format!("~{:04x}", (h.finish() & 0xffff) as u16);
+        let keep = budget.saturating_sub(tag.len());
+        let mut s = String::new();
+        for ch in stem.chars() {
+            if s.len() + ch.len_utf8() > keep {
+                break;
+            }
+            s.push(ch);
+        }
+        let trimmed = s.trim_end().trim_end_matches('.');
+        if trimmed.is_empty() {
+            format!("clip{tag}")
+        } else {
+            format!("{trimmed}{tag}")
+        }
+    } else {
+        stem.to_string()
+    };
+    let out_path = parent.join(format!("{}.{}.{}", stem_final, suffix, out_ext));
     let out_path_str = out_path
         .to_str()
         .ok_or("output path is not valid UTF-8")?

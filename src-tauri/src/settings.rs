@@ -264,11 +264,17 @@ pub fn content_root(state: &SettingsState, home: &std::path::Path) -> PathBuf {
 /// downstream, so no per-token escaping needed here.
 pub fn build_filename_template(user_template: &str) -> String {
     let trimmed = user_template.trim();
+    // 1.12.x — title cap lowered 180B → 120B. A maxed 180B title (every
+    // Pinterest caption) + " [id].ext" + the Library path sat at ~250
+    // chars: the DOWNLOAD fit under Windows' 260 limit, but any consumer
+    // that derives a longer sibling name (transcode's ".dnxhr.mov", the
+    // RTX "_rtx-vsr" suffix) blew past it and died with EINVAL. 120B
+    // leaves real headroom for suffixes and is kinder in NLE bins too.
     if trimmed.is_empty() {
-        return "%(title).180B [%(id)s].%(ext)s".to_string();
+        return "%(title).120B [%(id)s].%(ext)s".to_string();
     }
     let mut out = trimmed
-        .replace("{title}", "%(title).180B")
+        .replace("{title}", "%(title).120B")
         .replace("{channel}", "%(channel)s")
         .replace("{date}", "%(upload_date)s")
         .replace("{id}", "%(id)s");

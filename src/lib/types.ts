@@ -297,7 +297,7 @@ export const RENAME_PRESETS: RenamePreset[] = [
   {
     value: "",
     label: "Default — title + id",
-    hint: "%(title).180B [%(id)s].%(ext)s",
+    hint: "%(title).120B [%(id)s].%(ext)s",
   },
   {
     value: "{channel} - {title}",

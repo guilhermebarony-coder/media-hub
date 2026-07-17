@@ -129,11 +129,23 @@
       } catch (e) {
         btn.classList.remove("mh-sending");
         btn.classList.add("mh-err");
-        btn.querySelector(".mh-overlay-label").textContent = "Bridge offline";
+        // sendMessage throwing usually means THIS tab's content script
+        // is orphaned — the extension was installed/updated/reloaded
+        // after the page loaded ("Extension context invalidated").
+        // That's fixed by a refresh, so say THAT instead of blaming the
+        // bridge (which was never even reached from here).
+        const stale =
+          !(chrome.runtime && chrome.runtime.id) ||
+          /context invalidated|receiving end does not exist/i.test(
+            String(e?.message || e),
+          );
+        btn.querySelector(".mh-overlay-label").textContent = stale
+          ? "Reload page (F5)"
+          : "Bridge offline";
         setTimeout(() => {
           btn.classList.remove("mh-err");
           btn.querySelector(".mh-overlay-label").textContent = "Media Hub";
-        }, 3000);
+        }, 4000);
         console.warn("[mh] send failed:", e);
       }
     };
