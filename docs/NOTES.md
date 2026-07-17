@@ -994,9 +994,12 @@ waiting for the GitHub repo to exist.
 
 1. **Bump the four version markers** (tauri.conf.json, Cargo.toml,
    package.json, Shell.tsx brand-build) — same dance as today.
-2. **Build with the signing key in env**:
+2. **Build with the signing key in env** (1.13.0 correction: the Tauri 2
+   CLI wants `TAURI_SIGNING_PRIVATE_KEY` — the `_PATH` variant is
+   silently ignored and the build ends with "public key found, but no
+   private key" AFTER bundling):
    ```powershell
-   $env:TAURI_SIGNING_PRIVATE_KEY_PATH = "$env:USERPROFILE\.tauri\media-hub.key"
+   $env:TAURI_SIGNING_PRIVATE_KEY = (Get-Content "$env:USERPROFILE\.tauri\media-hub.key" -Raw)
    $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""    # empty unless you password-protected the key
    npx tauri build
    ```
