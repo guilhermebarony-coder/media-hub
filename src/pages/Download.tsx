@@ -551,11 +551,23 @@ function MetadataCard() {
 
   // Compose `-f` spec — video-only picks auto-promote to <id>+bestaudio
   // with container hygiene (MP4 → MP4, WebM → WebM, else MKV).
+  //
+  // 1.13.1 — the fallback chain must NEVER degrade to bare `bestaudio`:
+  // on Pinterest (HLS) the audio tracks are ext=mp4, so
+  // `<id>+bestaudio[ext=m4a]` matched nothing, the whole first
+  // alternative failed, and yt-dlp fell through to `bestaudio` —
+  // silently downloading an AUDIO-ONLY file for a video pick (which
+  // then broke transcode with "Stream map 0:v:0 matches no streams").
+  // Correct degradation: exact audio container → any audio → the video
+  // alone (silent) → best. The user's chosen VIDEO stays in every
+  // alternative except the final catch-all.
   function composeFormatSpec(f: FormatOption): { spec: string; mergeContainer: string | null } {
     if (!f.has_video || f.has_audio) return { spec: f.id, mergeContainer: null };
-    if (f.ext === "mp4") return { spec: `${f.id}+bestaudio[ext=m4a]/bestaudio/best`, mergeContainer: "mp4" };
-    if (f.ext === "webm") return { spec: `${f.id}+bestaudio[ext=webm]/bestaudio/best`, mergeContainer: "webm" };
-    return { spec: `${f.id}+bestaudio/best`, mergeContainer: "mkv" };
+    if (f.ext === "mp4")
+      return { spec: `${f.id}+bestaudio[ext=m4a]/${f.id}+bestaudio/${f.id}/best`, mergeContainer: "mp4" };
+    if (f.ext === "webm")
+      return { spec: `${f.id}+bestaudio[ext=webm]/${f.id}+bestaudio/${f.id}/best`, mergeContainer: "webm" };
+    return { spec: `${f.id}+bestaudio/${f.id}/best`, mergeContainer: "mkv" };
   }
 
   async function download() {
