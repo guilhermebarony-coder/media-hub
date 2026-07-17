@@ -2424,7 +2424,7 @@ dependencies = [
 
 [[package]]
 name = "media-hub"
-version = "1.13.1"
+version = "1.13.2"
 dependencies = [
  "axum",
  "chrono",
