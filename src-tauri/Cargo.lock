@@ -2447,6 +2447,7 @@ dependencies = [
  "tower-http 0.5.2",
  "trash",
  "uuid",
+ "windows 0.52.0",
 ]
 
 [[package]]

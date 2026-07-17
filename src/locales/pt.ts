@@ -24,6 +24,7 @@ export const pt: Record<string, string> = {
   "topbar.searchTitle": "Buscar clipes (Ctrl+Espaço)",
   "topbar.background": "Rodar em segundo plano — some na bandeja e continua baixando",
   "topbar.settings": "Configurações",
+  "topbar.transcoding": "transcodando",
   "topbar.downloadingOne": "baixando",
   "topbar.downloadingMany": "downloads",
   "topbar.activeDownloadsTitle": "{n} {label} em andamento — clique para ver",
@@ -346,6 +347,7 @@ export const pt: Record<string, string> = {
   "ctx.reveal": "Mostrar no Explorer",
   "ctx.rtxUpscale": "Melhorar (NVIDIA RTX Video)",
   "ctx.rtxStage": "Configurar na janela RTX…",
+  "ctx.transcode": "Transcodar para…",
   "ctx.copyUrl": "Copiar URL de origem",
   "ctx.copyPath": "Copiar caminho do arquivo",
   "ctx.sendEagle": "Enviar para o Eagle",
@@ -379,6 +381,10 @@ export const pt: Record<string, string> = {
   "lib.trash": "Lixeira",
   "lib.trashRestoreAll": "Restaurar tudo",
   "lib.trashEmpty": "Esvaziar lixeira",
+  "lib.importDrop": "Solte para importar na biblioteca",
+  "lib.importing": "Importando {n}…",
+  "lib.copiedN": "{n} copiado(s) pra área de transferência",
+  "lib.cutN": "{n} recortado(s) — cole para mover",
 
   // 1.12.x — página Biblioteca (tradução completa)
   "lib.projectChip": "projeto",

@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTauriEvent } from "../lib/useTauriEvent";
 import { Icon } from "../lib/icons";
 import { fmtBytes, fmtDuration } from "../lib/format";
-import { attachLocalThumbnail, eagleDetect, EAGLE_NOT_RUNNING, openExternalUrl, openFileInDefaultApp, revealFile, sendToEagle, thumbnailSrc } from "../lib/library";
+import { attachBestThumbnail, attachLocalThumbnail, eagleDetect, EAGLE_NOT_RUNNING, openExternalUrl, openFileInDefaultApp, recordInLibrary, revealFile, sendToEagle, thumbnailSrc } from "../lib/library";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -12,7 +12,9 @@ import { alertDialog, confirmDialog } from "../lib/dialog";
 import { scopeToFilter, useActiveProject } from "../lib/activeProject";
 import { useT } from "../lib/i18n";
 import { MH_FILE_MIME, useRtxEnhance } from "../lib/rtxEnhance";
+import { useDownloads } from "../lib/downloads";
 import type { Asset, AssetKind, Folder, FolderFilter, LibraryFilters, SiblingSummary, TagCount } from "../lib/types";
+import { TRANSCODE_PRESETS } from "../lib/types";
 
 // "now" is the "I just downloaded this" bucket — last 5 min. Surfaces
 // the answer to "where's the clip I JUST made?" without scrolling.
@@ -130,6 +132,10 @@ export default function LibraryPage() {
   // 1.12.x — right-click menu on the sidebar Trash entry (Restore all /
   // Empty trash without having to enter the view first).
   const [trashCtxMenu, setTrashCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  // 1.13.x — external file import: highlight while OS files hover the
+  // grid; count drives a transient "importing N" status.
+  const [externalDropActive, setExternalDropActive] = useState(false);
+  const [importingCount, setImportingCount] = useState(0);
   // 1.3.x — nesting. `expandedFolders` tracks which folders are open in
   // the sidebar tree; persisted so the tree shape survives reloads.
   // `createParentId` lets "New subfolder" seed folder_create with a
@@ -1058,6 +1064,75 @@ export default function LibraryPage() {
   // also where we clear hover). Late events after that bail out.
   const dragSessionActiveRef = useRef<boolean>(false);
 
+  // 1.13.x — import external OS files copied into the library. Each is
+  // copied into the managed content tree, probed, recorded, and given a
+  // thumbnail — mirroring the download path so imported clips are
+  // first-class (upscale/transcode work on them). Media files only;
+  // anything else is skipped server-side (rejected extension).
+  const MEDIA_EXT = new Set([
+    "mp4","mov","mkv","webm","avi","m4v","flv","wmv","mpg","mpeg","ts","m2ts",
+    "mp3","m4a","aac","flac","wav","ogg","opus","wma",
+  ]);
+  async function importExternalFiles(paths: string[]) {
+    // Defensive: never re-import a file that's already a library asset —
+    // guards the Windows edge where a self-initiated card drag dropped
+    // back onto the grid could surface its own paths as an "external"
+    // drop. Compare normalized (case/sep-insensitive) paths.
+    const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
+    const known = new Set(assets.map((a) => norm(a.file_path)));
+    const media = paths.filter(
+      (p) => MEDIA_EXT.has((p.split(".").pop() ?? "").toLowerCase()) && !known.has(norm(p)),
+    );
+    if (media.length === 0) return;
+    const targetProjectId = scope.kind === "project" ? scope.id : null;
+    setImportingCount((c) => c + media.length);
+    for (const src of media) {
+      try {
+        const imp = await invoke<{
+          file_path: string; file_size: number | null; container: string | null;
+          width: number | null; height: number | null; fps: number | null;
+          codec_video: string | null; codec_audio: string | null;
+          duration_sec: number | null; title: string; kind: string;
+        }>("library_import_file", { srcPath: src, projectId: targetProjectId });
+        const assetId = await recordInLibrary({
+          source_url: `file:///${imp.file_path.replace(/\\/g, "/")}`,
+          platform: "local",
+          video_id: null,
+          channel: null,
+          title: imp.title,
+          duration_sec: imp.duration_sec,
+          in_sec: null,
+          out_sec: null,
+          file_path: imp.file_path,
+          file_size: imp.file_size,
+          container: imp.container,
+          codec_video: imp.codec_video,
+          codec_audio: imp.codec_audio,
+          width: imp.width,
+          height: imp.height,
+          fps: imp.fps,
+          transcoded_to: null,
+          thumbnail_url: null,
+          project_id: targetProjectId,
+          kind: imp.kind === "audio" ? "audio" : "video",
+        });
+        if (assetId) {
+          if (imp.kind === "audio") void attachLocalThumbnail(assetId, imp.file_path, null);
+          else void attachBestThumbnail(assetId, null, imp.file_path, imp.duration_sec ?? null);
+        }
+      } catch (e) {
+        setErr(`Import failed for ${src.split(/[\\/]/).pop()}: ${String(e)}`);
+      } finally {
+        setImportingCount((c) => Math.max(0, c - 1));
+      }
+    }
+    await refresh();
+  }
+  // Keep the latest importExternalFiles reachable from the once-mounted
+  // drag-drop listener without stale `scope`/`refresh` captures.
+  const importExternalRef = useRef(importExternalFiles);
+  importExternalRef.current = importExternalFiles;
+
   // Subscribe once. Tauri's drag-drop events fire for any OS drag
   // hovering over our window — including our own self-initiated
   // drags (the case we care about here). Position payload is in
@@ -1070,6 +1145,23 @@ export default function LibraryPage() {
         const fn = await getCurrentWebview().onDragDropEvent((e) => {
           const p = e.payload;
           const posPayload = (p as { position?: { x: number; y: number } }).position;
+          // 1.13.x — external OS file drop. These arrive OUTSIDE our
+          // self-drag session and carry real filesystem `paths` (an
+          // internal OLE card-drag has none). Handle them before the
+          // session gate below, which is only about self-drags.
+          const extPaths = (p as { paths?: string[] }).paths ?? [];
+          const isExternal = extPaths.length > 0 && !dragSessionActiveRef.current;
+          if (isExternal) {
+            if (p.type === "enter" || p.type === "over") {
+              setExternalDropActive(true);
+            } else if (p.type === "drop") {
+              setExternalDropActive(false);
+              void importExternalRef.current(extPaths);
+            } else if (p.type === "leave") {
+              setExternalDropActive(false);
+            }
+            return;
+          }
           // 1.1.3 — drag-session gate. The plugin callback flips this
           // false on completion. Anything that arrives after that is
           // a stale OLE-queued event (Windows fires a late `over`
@@ -1581,6 +1673,36 @@ export default function LibraryPage() {
         if (isTyping) return;
         e.preventDefault();
         setSelection(new Set(filtered.map((a) => a.id)));
+        return;
+      }
+      // 1.13.x — Ctrl+C / Ctrl+X put the selected clips' real files on the
+      // Windows clipboard (CF_HDROP) so they paste into Explorer exactly
+      // like files — copy, or move (cut). Ctrl+V pastes clipboard files
+      // INTO the library (import). Mirrors folder/file behavior.
+      if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C" || e.key === "x" || e.key === "X")) {
+        if (isTyping || inTrash) return;
+        if (selection.size === 0) return;
+        const cut = e.key === "x" || e.key === "X";
+        const paths = filtered.filter((a) => selection.has(a.id)).map((a) => a.file_path);
+        if (paths.length === 0) return;
+        e.preventDefault();
+        void invoke("clipboard_set_files", { paths, cut })
+          .then(() =>
+            flashToast(
+              (cut ? t("lib.cutN") : t("lib.copiedN")).replace("{n}", String(paths.length)),
+            ),
+          )
+          .catch((err) => setErr(String(err)));
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
+        if (isTyping) return;
+        e.preventDefault();
+        void invoke<string[]>("clipboard_get_files")
+          .then((paths) => {
+            if (paths.length > 0) void importExternalFiles(paths);
+          })
+          .catch(() => {});
         return;
       }
       // Delete / Backspace → bulk delete the current selection.
@@ -2365,6 +2487,21 @@ export default function LibraryPage() {
       {/* 1.4 — transient non-blocking status toast (e.g. Eagle send). */}
       {toast && <div className="lib-toast" role="status">{toast}</div>}
 
+      {/* 1.13.x — external-file import: drop overlay + progress chip. */}
+      {externalDropActive && (
+        <div className="lib-import-overlay">
+          <div className="lib-import-card">
+            <Icon.download width={22} height={22} />
+            <span>{t("lib.importDrop")}</span>
+          </div>
+        </div>
+      )}
+      {importingCount > 0 && (
+        <div className="lib-toast" role="status">
+          {t("lib.importing").replace("{n}", String(importingCount))}
+        </div>
+      )}
+
       {contextMenu && (
         <CardContextMenu
           x={contextMenu.x}
@@ -2599,6 +2736,9 @@ function CardContextMenu({
 }) {
   const t = useT();
   const rtx = useRtxEnhance();
+  const { enqueueTranscode } = useDownloads();
+  // 1.13.x — the Transcode item expands an inline preset submenu.
+  const [transcodeOpen, setTranscodeOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   // Adjust position to fit in viewport. ResizeObserver / layout effect
   // would be over-engineered for a transient menu — pick a sensible
@@ -2678,6 +2818,7 @@ function CardContextMenu({
         rtx.capability?.supported &&
         rtx.canEnhanceHeight(asset.height ?? null) && (
           <>
+            <div className="ctx-sep" />
             <button
               className="ctx-item"
               onClick={withClose(() =>
@@ -2712,6 +2853,58 @@ function CardContextMenu({
             </button>
           </>
         )}
+      {/* 1.13.x — transcode this asset into an edit-friendly format. Runs
+          in the download queue; on completion the original is moved to
+          Trash and the transcoded copy stays. Inline preset submenu. */}
+      {!inTrash && asset.kind === "video" && (
+        <>
+          <div className="ctx-sep" />
+          <button
+            className="ctx-item ctx-submenu-trigger"
+            onClick={() => setTranscodeOpen((v) => !v)}
+          >
+            <Icon.list width={11} height={11} />
+            {t("ctx.transcode")}
+            <Icon.chev
+              width={11}
+              height={11}
+              style={{ marginLeft: "auto", transform: transcodeOpen ? "rotate(90deg)" : "none" }}
+            />
+          </button>
+          {transcodeOpen &&
+            TRANSCODE_PRESETS.filter((p) => p.value !== "none").map((p) => (
+              <button
+                key={p.value}
+                className="ctx-item ctx-subitem"
+                title={p.hint}
+                onClick={withClose(() =>
+                  enqueueTranscode({
+                    assetId: asset.id,
+                    srcPath: asset.file_path,
+                    preset: p.value,
+                    replaceOriginal: true,
+                    title: asset.title,
+                    sourceUrl: asset.source_url,
+                    platform: asset.platform,
+                    videoId: asset.video_id ?? null,
+                    channel: asset.channel ?? null,
+                    durationSec: asset.duration_sec ?? null,
+                    width: asset.width ?? null,
+                    height: asset.height ?? null,
+                    fps: asset.fps ?? null,
+                    thumbnailUrl: asset.thumbnail_url ?? null,
+                    projectId: asset.project_id ?? null,
+                  }),
+                )}
+              >
+                {/* Drop only the ", NVIDIA GPU" tail so the submenu doesn't
+                    jump wider than the parent — keeps "(NVENC)" as the
+                    discriminator vs the "(optimized)" H.264. */}
+                {p.label.replace(", NVIDIA GPU", "")}
+              </button>
+            ))}
+        </>
+      )}
       <div className="ctx-sep" />
       <button className="ctx-item" onClick={withClose(() => copyToClipboard(asset.source_url))}>
         {t("ctx.copyUrl")}

@@ -5,6 +5,7 @@
 
 mod aria2;
 mod bridge;
+mod clipboard;
 mod diag;
 mod direct;
 mod eagle;
@@ -1940,6 +1941,9 @@ pub fn run() {
             library::library_count,
             library::library_delete,
             library::library_delete_many,
+            library::library_import_file,
+            clipboard::clipboard_set_files,
+            clipboard::clipboard_get_files,
             library::library_remove_missing,
             library::library_trash_count,
             library::library_trash_restore,

@@ -322,10 +322,23 @@ function TrayTooltipSync() {
 }
 
 function ActivityBadge() {
-  const { activeCount } = useDownloads();
+  const { activeCount, queueJobs, singleDownload } = useDownloads();
   const t = useT();
   if (activeCount === 0) return null;
-  const label = activeCount === 1 ? t("topbar.downloadingOne") : t("topbar.downloadingMany");
+  // 1.13.x — reflect what the active work actually is. If every active
+  // job is transcoding (nothing is fetching/downloading bytes), the pill
+  // reads "transcoding" instead of the misleading "downloading".
+  const activeStatuses = queueJobs
+    .filter((j) => j.status === "fetching" || j.status === "downloading" || j.status === "transcoding")
+    .map((j) => j.status);
+  if (singleDownload && singleDownload.phase !== "idle") activeStatuses.push(singleDownload.phase);
+  const allTranscoding =
+    activeStatuses.length > 0 && activeStatuses.every((s) => s === "transcoding");
+  const label = allTranscoding
+    ? t("topbar.transcoding")
+    : activeCount === 1
+      ? t("topbar.downloadingOne")
+      : t("topbar.downloadingMany");
   const title = t("topbar.activeDownloadsTitle")
     .replace("{n}", String(activeCount))
     .replace("{label}", label);

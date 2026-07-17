@@ -54,3 +54,18 @@ futures-util = "0.3"
 # the bundled minisign public key; downloads + verifies + applies the
 # signed installer. Pairs with the matching public_key in tauri.conf.json.
 tauri-plugin-updater = "2"
+
+# 1.13.x — Windows file clipboard (CF_HDROP). Lets the library put real
+# files on the clipboard (Ctrl+C/X) so they paste into Explorer as files,
+# and read files pasted from Explorer (Ctrl+V → import). Version matches
+# the transitive `windows` already in the tree (via tauri-plugin-drag) so
+# we don't pull a second copy.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.52", features = [
+  "Win32_Foundation",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_System_Ole",
+  "Win32_System_SystemServices",
+  "Win32_UI_Shell",
+] }

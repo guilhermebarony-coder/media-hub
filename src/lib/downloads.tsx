@@ -103,6 +103,29 @@ export type QueueJobSpec = {
   pfFps: number | null;
 };
 
+/** 1.13.x — a queue job that transcodes an EXISTING library asset (not a
+ *  download). Runs media_transcode on the asset's file, records the
+ *  output as a new library row, and — when replaceOriginal — moves the
+ *  source row to the in-app Trash so the library shows only the
+ *  transcoded version. Carried metadata seeds the new row. */
+export type QueueTranscodeSpec = {
+  assetId: string;
+  srcPath: string;
+  preset: TranscodePreset;
+  replaceOriginal: boolean;
+  title: string;
+  sourceUrl: string;
+  platform: string;
+  videoId: string | null;
+  channel: string | null;
+  durationSec: number | null;
+  width: number | null;
+  height: number | null;
+  fps: number | null;
+  thumbnailUrl: string | null;
+  projectId: string | null;
+};
+
 export type QueueJob = {
   id: string;
   url: string;
@@ -129,6 +152,8 @@ export type QueueJob = {
   error?: string;
   /** 1.12.x — see QueueJobSpec. Absent on plain URL-only queue jobs. */
   spec?: QueueJobSpec;
+  /** 1.13.x — set for library-asset transcode jobs (no download). */
+  transcodeSpec?: QueueTranscodeSpec;
 };
 
 export type SinglePhase = "idle" | "downloading" | "transcoding";
@@ -301,6 +326,8 @@ type DownloadsContextValue = {
    *  regular queue job (spec attached). Returns immediately: the card
    *  frees up for the next URL while the queue below runs this one. */
   enqueueSingleSpec: (args: StartSingleArgs) => void;
+  /** 1.13.x — enqueue a transcode of an existing library asset. */
+  enqueueTranscode: (spec: QueueTranscodeSpec) => void;
   // Single-URL
   singleDownload: SingleDownload | null;
   startSingleDownload: (args: StartSingleArgs) => Promise<void>;
@@ -645,8 +672,96 @@ export function DownloadsProvider({
     [updateQueueJob],
   );
 
+  // 1.13.x — transcode an existing library asset (no download). Runs
+  // media_transcode, records the output as a new library row, and (when
+  // replaceOriginal) moves the source row to the in-app Trash so the
+  // grid shows only the transcoded copy.
+  const runQueueTranscode = useCallback(
+    async (job: QueueJob) => {
+      const spec = job.transcodeSpec!;
+      updateQueueJob(job.id, { status: "transcoding" });
+
+      let txPath: string;
+      let txBytes: number | null;
+      try {
+        const sem = isGpuPreset(spec.preset) ? gpuTranscodeSem : cpuTranscodeSem;
+        await sem.acquire();
+        try {
+          const txRes = await invoke<TranscodeResult>("media_transcode", {
+            srcPath: spec.srcPath,
+            preset: spec.preset,
+            totalSecHint: spec.durationSec ?? null,
+            jobId: job.id,
+          });
+          txPath = txRes.path;
+          txBytes = txRes.bytes;
+        } finally {
+          sem.release();
+        }
+      } catch (e) {
+        const msg = String(e);
+        if (
+          msg.includes("__canceled__") ||
+          jobsRef.current.find((j) => j.id === job.id)?.status === "canceled"
+        ) {
+          updateQueueJob(job.id, { status: "canceled", error: undefined });
+          return;
+        }
+        updateQueueJob(job.id, { status: "failed", error: msg });
+        return;
+      }
+
+      const assetId = await recordInLibrary({
+        source_url: spec.sourceUrl,
+        platform: spec.platform,
+        video_id: spec.videoId,
+        channel: spec.channel,
+        title: spec.title,
+        duration_sec: spec.durationSec,
+        in_sec: null,
+        out_sec: null,
+        file_path: txPath,
+        file_size: txBytes,
+        container: extFromPath(txPath),
+        codec_video: videoCodecFor(spec.preset, null),
+        codec_audio: audioCodecFor(spec.preset, null),
+        width: spec.width,
+        height: spec.height,
+        fps: spec.fps,
+        transcoded_to: spec.preset,
+        thumbnail_url: spec.thumbnailUrl,
+        project_id: spec.projectId,
+        kind: "video",
+      });
+      if (assetId) {
+        void attachBestThumbnail(assetId, spec.thumbnailUrl, txPath, spec.durationSec ?? null);
+      }
+
+      // Replace: move the original library row to the in-app Trash
+      // (recoverable — the source file goes to the OS recycle bin, the
+      // transcoded copy stays). Best-effort; a failure here still leaves
+      // the transcode recorded, so we surface it but keep status=done.
+      if (spec.replaceOriginal) {
+        try {
+          await invoke("library_delete_many", { ids: [spec.assetId] });
+        } catch (e) {
+          console.warn("[transcode] replace-original trash failed:", e);
+        }
+      }
+
+      updateQueueJob(job.id, { status: "done", resultPath: txPath, resultBytes: txBytes });
+    },
+    [updateQueueJob],
+  );
+
   const processOne = useCallback(
     async (job: QueueJob) => {
+      // 1.13.x — library-asset transcode: no download, just convert +
+      // record + optionally replace the original.
+      if (job.transcodeSpec) {
+        await runQueueTranscode(job);
+        return;
+      }
       // 1.12.x — fully-specified card download: the card already fetched
       // metadata and the user already chose format/segments — don't
       // re-decide anything here.
@@ -815,7 +930,7 @@ export function DownloadsProvider({
         }
       }
     },
-    [updateQueueJob, runQueueDirect, runQueueSpec],
+    [updateQueueJob, runQueueDirect, runQueueSpec, runQueueTranscode],
   );
 
   // Spawn workers whenever there's queued work and we're below ceiling.
@@ -884,6 +999,26 @@ export function DownloadsProvider({
           pfHeight: args.pickedFormat?.height ?? null,
           pfFps: args.pickedFormat?.fps ?? null,
         },
+      };
+      setQueueJobs((prev) => [...prev, job]);
+    },
+    [],
+  );
+
+  // 1.13.x — enqueue a library-asset transcode. Title/thumb land on the
+  // row immediately so the queue panel renders it without a fetch.
+  const enqueueTranscode = useCallback<DownloadsContextValue["enqueueTranscode"]>(
+    (spec) => {
+      const job: QueueJob = {
+        id: newJobId(),
+        url: spec.sourceUrl,
+        status: "queued",
+        transcodePreset: spec.preset,
+        projectId: spec.projectId,
+        title: spec.title,
+        thumbnail: spec.thumbnailUrl,
+        duration_sec: spec.durationSec,
+        transcodeSpec: spec,
       };
       setQueueJobs((prev) => [...prev, job]);
     },
@@ -1235,6 +1370,7 @@ export function DownloadsProvider({
     queueJobs,
     enqueueUrls,
     enqueueSingleSpec,
+    enqueueTranscode,
     cancelQueueJob,
     removeQueueJobs,
     retryFailedJobs,

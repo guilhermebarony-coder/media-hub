@@ -2040,6 +2040,41 @@ body.lib-resizing-h * {
 .ctx-item:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 /* 1.12.x — disabled entries (e.g. Trash menu with an empty trash). */
 .ctx-item:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
+/* 1.13.x — external-file import drop overlay. Covers the library while
+   OS files hover; dashed accent frame + centered hint. */
+.lib-import-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--bg-0) 55%, transparent);
+  pointer-events: none;
+}
+.lib-import-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 32px 44px;
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  background: var(--bg-2);
+  color: var(--text-0);
+  font-size: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+.lib-import-card svg { color: var(--accent); }
+
+/* 1.13.x — inline transcode submenu: trigger keeps the chevron pinned
+   right; sub-items indent under it. */
+.ctx-submenu-trigger { gap: 8px; }
+.ctx-subitem {
+  padding-left: 29px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.ctx-subitem:hover { color: var(--text-0); }
 .ctx-sep {
   height: 1px;
   background: var(--line);

@@ -1342,6 +1342,250 @@ pub async fn resolve_download_dir(
     }
 }
 
+/// 1.13.x — probed metadata + destination for an externally-imported
+/// file. The frontend records it in the library (reusing recordInLibrary)
+/// and extracts a thumbnail, mirroring the download path.
+#[derive(Serialize)]
+pub struct ImportedFile {
+    pub file_path: String,
+    pub file_size: Option<i64>,
+    pub container: Option<String>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub fps: Option<f64>,
+    pub codec_video: Option<String>,
+    pub codec_audio: Option<String>,
+    pub duration_sec: Option<f64>,
+    pub title: String,
+    pub kind: String,
+}
+
+/// Find the first `<digits>x<digits>` token in a line (e.g. "1280x720").
+fn parse_resolution(line: &str) -> Option<(i64, i64)> {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'x' && i > 0 && bytes[i - 1].is_ascii_digit() {
+            let mut a = i - 1;
+            while a > 0 && bytes[a - 1].is_ascii_digit() {
+                a -= 1;
+            }
+            let mut b = i + 1;
+            while b < bytes.len() && bytes[b].is_ascii_digit() {
+                b += 1;
+            }
+            if b > i + 1 {
+                let w: i64 = line[a..i].parse().ok()?;
+                let h: i64 = line[i + 1..b].parse().ok()?;
+                // Sanity: real frame sizes, not SAR ratios like "1x1".
+                if w >= 16 && h >= 16 {
+                    return Some((w, h));
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Parse `HH:MM:SS.ss` (from ffmpeg's `Duration:` line) into seconds.
+fn parse_hms(s: &str) -> Option<f64> {
+    let parts: Vec<&str> = s.trim().split(':').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let h: f64 = parts[0].trim().parse().ok()?;
+    let m: f64 = parts[1].trim().parse().ok()?;
+    let sec: f64 = parts[2].trim().parse().ok()?;
+    Some(h * 3600.0 + m * 60.0 + sec)
+}
+
+/// Best-effort media probe by parsing `ffmpeg -i <file>` stderr. Returns
+/// (duration, width, height, fps, vcodec, acodec) — every field
+/// independently optional so a partial parse still yields useful rows.
+async fn probe_media(
+    app: &AppHandle,
+    path: &str,
+) -> (
+    Option<f64>,
+    Option<i64>,
+    Option<i64>,
+    Option<f64>,
+    Option<String>,
+    Option<String>,
+) {
+    use tauri_plugin_shell::process::CommandEvent;
+    let Ok(cmd) = crate::tools::ffmpeg_command(app) else {
+        return (None, None, None, None, None, None);
+    };
+    // `ffmpeg -i FILE` with no output prints stream info to stderr and
+    // exits non-zero ("At least one output file must be specified") —
+    // expected; we only want the banner.
+    let Ok((mut rx, _child)) = cmd
+        .args(["-hide_banner", "-i", path])
+        .spawn()
+    else {
+        return (None, None, None, None, None, None);
+    };
+    let mut lines: Vec<String> = Vec::new();
+    while let Some(event) = rx.recv().await {
+        if let CommandEvent::Stderr(bytes) = event {
+            for l in String::from_utf8_lossy(&bytes).split('\n') {
+                let l = l.trim();
+                if !l.is_empty() {
+                    lines.push(l.to_string());
+                }
+            }
+        }
+    }
+    let (mut dur, mut w, mut h, mut fps, mut vc, mut ac) = (None, None, None, None, None, None);
+    for line in &lines {
+        if dur.is_none() {
+            if let Some(idx) = line.find("Duration:") {
+                let rest = &line[idx + "Duration:".len()..];
+                let token = rest.split(',').next().unwrap_or("").trim();
+                if token != "N/A" {
+                    dur = parse_hms(token);
+                }
+            }
+        }
+        if line.contains(" Video:") {
+            if vc.is_none() {
+                if let Some(idx) = line.find(" Video:") {
+                    let after = &line[idx + " Video:".len()..];
+                    let codec = after
+                        .trim()
+                        .split([' ', ',', '('])
+                        .next()
+                        .unwrap_or("")
+                        .trim();
+                    if !codec.is_empty() {
+                        vc = Some(codec.to_string());
+                    }
+                }
+            }
+            if w.is_none() {
+                if let Some((rw, rh)) = parse_resolution(line) {
+                    w = Some(rw);
+                    h = Some(rh);
+                }
+            }
+            if fps.is_none() {
+                if let Some(fidx) = line.find(" fps") {
+                    let pre = &line[..fidx];
+                    let num: String = pre
+                        .chars()
+                        .rev()
+                        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == ' ')
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect();
+                    fps = num.trim().parse::<f64>().ok();
+                }
+            }
+        }
+        if line.contains(" Audio:") && ac.is_none() {
+            if let Some(idx) = line.find(" Audio:") {
+                let after = &line[idx + " Audio:".len()..];
+                let codec = after
+                    .trim()
+                    .split([' ', ',', '('])
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                if !codec.is_empty() {
+                    ac = Some(codec.to_string());
+                }
+            }
+        }
+    }
+    (dur, w, h, fps, vc, ac)
+}
+
+/// 1.13.x — import an external media file into the library. Copies the
+/// file into the managed content tree (so moving/deleting the original
+/// never breaks the card), probes its metadata, and returns a shape the
+/// frontend records + thumbnails. Video/audio only — other extensions
+/// are rejected so we don't ingest random files.
+#[tauri::command]
+pub async fn library_import_file(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    settings_state: State<'_, crate::settings::SettingsState>,
+    src_path: String,
+    project_id: Option<String>,
+) -> Result<ImportedFile, String> {
+    let src = PathBuf::from(&src_path);
+    if !src.is_file() {
+        return Err(format!("not a file: {src_path}"));
+    }
+    let ext = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    const VIDEO_EXT: &[&str] = &[
+        "mp4", "mov", "mkv", "webm", "avi", "m4v", "flv", "wmv", "mpg", "mpeg", "ts", "m2ts",
+    ];
+    const AUDIO_EXT: &[&str] = &["mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "wma"];
+    let kind = if VIDEO_EXT.contains(&ext.as_str()) {
+        "video"
+    } else if AUDIO_EXT.contains(&ext.as_str()) {
+        "audio"
+    } else {
+        return Err(format!("unsupported file type: .{ext}"));
+    };
+
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|e| format!("resolve home dir: {e}"))?;
+    let content_root = crate::settings::content_root(&settings_state, &home);
+    let dest_dir = resolve_download_dir(&state, &content_root, project_id.as_deref()).await?;
+    std::fs::create_dir_all(&dest_dir).map_err(|e| format!("create import dir: {e}"))?;
+
+    // Collision-safe destination name: "<stem>.<ext>", then "<stem> (1).<ext>"…
+    let stem = src
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("import")
+        .to_string();
+    let mut dest = dest_dir.join(format!("{stem}.{ext}"));
+    let mut n = 1;
+    while dest.exists() {
+        dest = dest_dir.join(format!("{stem} ({n}).{ext}"));
+        n += 1;
+    }
+    std::fs::copy(&src, &dest).map_err(|e| format!("copy import: {e}"))?;
+    let dest_str = dest
+        .to_str()
+        .ok_or("import dest path is not UTF-8")?
+        .to_string();
+    let file_size = std::fs::metadata(&dest).ok().map(|m| m.len() as i64);
+
+    let (duration_sec, width, height, fps, codec_video, codec_audio) = if kind == "video" {
+        probe_media(&app, &dest_str).await
+    } else {
+        let (d, _, _, _, _, ac) = probe_media(&app, &dest_str).await;
+        (d, None, None, None, None, ac)
+    };
+
+    Ok(ImportedFile {
+        file_path: dest_str,
+        file_size,
+        container: Some(ext),
+        width,
+        height,
+        fps,
+        codec_video,
+        codec_audio,
+        duration_sec,
+        title: stem,
+        kind: kind.to_string(),
+    })
+}
+
 /// 1.1 — heal a library whose thumbnail_path rows point at files
 /// that no longer exist. Built specifically to recover from the
 /// `library_migrate_root` bug shipped in 1.0.5: that command rewrote
