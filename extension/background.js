@@ -10,7 +10,7 @@
 // suspends + resumes them. All config reads pull from storage on
 // every event so we never act on stale data.
 
-import { loadConfig, enqueue } from "./bridge.js";
+import { loadConfig, enqueue, buildDeepLink } from "./bridge.js";
 import { installSniffer, getStreamsForTab, removeStream } from "./sniffer.js";
 
 // 1.2.4 — passive stream sniffer. Watches network traffic per tab
@@ -52,8 +52,50 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             ? msg.mode
             : null,
         source: msg.source || "content-script",
+        // 1.13.x — quick-menu overrides (forwarded verbatim when present).
+        quality: msg.quality,
+        transcode: msg.transcode,
+        rename: msg.rename,
       });
       sendResponse(r);
+    })();
+    return true; // async response
+  }
+
+  // 1.13.x — cold-start launch. When the bridge is unreachable (app
+  // closed), the content script asks us to fire the mediahub:// deep
+  // link: the OS launches Media Hub and the app enqueues the URL on
+  // boot. Content scripts can't call chrome.tabs, so it happens here.
+  // Same tab-create-then-close dance the popup's launch button uses —
+  // the mediahub:// "page" never loads (the OS hijacks it), so the
+  // blank tab is cleaned up after a second.
+  if (msg.kind === "launch-app") {
+    (async () => {
+      const cfg = await loadConfig();
+      if (!cfg.token) {
+        sendResponse({ ok: false, error: "bridge token not configured" });
+        return;
+      }
+      const deepLink = buildDeepLink({
+        token: cfg.token,
+        target: msg.url,
+        audioFormat:
+          msg.mode === "mp3" || msg.mode === "m4a" || msg.mode === "flac"
+            ? msg.mode
+            : null,
+      });
+      chrome.tabs.create({ url: deepLink, active: false }, (newTab) => {
+        if (newTab?.id) {
+          setTimeout(() => {
+            try {
+              chrome.tabs.remove(newTab.id);
+            } catch {
+              /* tab already gone */
+            }
+          }, 1000);
+        }
+      });
+      sendResponse({ ok: true, launched: true });
     })();
     return true; // async response
   }

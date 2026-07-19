@@ -141,6 +141,13 @@ export type QueueJob = {
    *  enqueues from MetadataCard while Audio tab is active, every
    *  resulting job inherits the chosen format. */
   audioFormat?: AudioFormat | null;
+  /** 1.13.x — per-job max-quality override (from the extension quick
+   *  menu). When set, wins over the global Settings max-quality for this
+   *  job only. Numeric height string ("1080") or "" for best. */
+  maxQualityOverride?: string;
+  /** 1.13.x — per-job title override (extension "rename" field). Used
+   *  for the library row's title instead of the fetched metadata title. */
+  titleOverride?: string;
   title?: string;
   channel?: string;
   thumbnail?: string | null;
@@ -315,6 +322,9 @@ type DownloadsContextValue = {
       /** 1.2.0 — when set, every enqueued job runs in audio mode
        *  with the chosen container. transcodePreset is ignored. */
       audioFormat?: AudioFormat | null;
+      /** 1.13.x — per-job overrides from the extension quick menu. */
+      maxQuality?: string;
+      titleOverride?: string;
     },
   ) => void;
   cancelQueueJob: (id: string) => Promise<void>;
@@ -571,6 +581,7 @@ export function DownloadsProvider({
           jobId: job.id,
           projectId: job.projectId,
           audioFormat: job.audioFormat ?? null,
+          filenameOverride: null,
         });
       } catch (e) {
         const msg = String(e);
@@ -810,7 +821,7 @@ export function DownloadsProvider({
 
       updateQueueJob(job.id, {
         status: "downloading",
-        title: meta.title,
+        title: job.titleOverride ?? meta.title,
         channel: meta.channel,
         thumbnail: meta.thumbnail,
         duration_sec: meta.duration_sec,
@@ -828,7 +839,7 @@ export function DownloadsProvider({
           // when not (e.g., a 480p-only Twitter clip).
           formatSpec: isAudio
             ? "bestaudio/best"
-            : videoFormatSpecForMaxQuality(maxQualityRef.current),
+            : videoFormatSpecForMaxQuality(job.maxQualityOverride ?? maxQualityRef.current),
           mergeContainer: isAudio ? null : "mp4",
           totalBytesHint: isAudio ? null : (bestVideo?.filesize_bytes ?? null),
           videoId: meta.id,
@@ -836,6 +847,9 @@ export function DownloadsProvider({
           jobId: job.id,
           projectId: job.projectId,
           audioFormat: job.audioFormat ?? null,
+          // 1.13.x — extension "rename": also names the FILE on disk,
+          // not just the library row.
+          filenameOverride: job.titleOverride ?? null,
         });
         dlRes = results[0];
       } catch (e) {
@@ -904,7 +918,7 @@ export function DownloadsProvider({
         platform: detectPlatform(job.url),
         video_id: meta.id,
         channel: meta.channel,
-        title: meta.title,
+        title: job.titleOverride ?? meta.title,
         duration_sec: meta.duration_sec,
         in_sec: null,
         out_sec: null,
@@ -960,6 +974,8 @@ export function DownloadsProvider({
         transcodePreset: opts.transcodePreset,
         projectId: opts.projectId,
         audioFormat: opts.audioFormat ?? null,
+        maxQualityOverride: opts.maxQuality,
+        titleOverride: opts.titleOverride,
       }));
       setQueueJobs((prev) => [...prev, ...newJobs]);
     },
@@ -1107,6 +1123,7 @@ export function DownloadsProvider({
           jobId: SINGLE_URL_JOB_ID,
           projectId: args.projectId,
           audioFormat: args.audioFormat ?? null,
+          filenameOverride: null,
         });
 
         // Audio mode forces preset to "none" — video transcode presets

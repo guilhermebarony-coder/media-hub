@@ -215,3 +215,205 @@
   position: fixed !important;
   right: auto !important;
 }
+
+/* 1.13.x — quick options menu (Ctrl/Cmd+click). Styled as a Media Hub
+   CARD: same Geist font, same surface/line tokens as the app
+   (--bg-1 #131316 / --line #26262a / radius 6px), neutral border (no
+   lime outline). Every property !important to beat host-site resets. */
+@font-face {
+  font-family: "MH Geist";
+  src: url("fonts/geist-400.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "MH Geist";
+  src: url("fonts/geist-600.woff2") format("woff2");
+  font-weight: 600;
+  font-display: swap;
+}
+
+.mh-menu {
+  position: fixed !important;
+  z-index: 2147483647 !important;
+  width: 244px !important;
+  box-sizing: border-box !important;
+  padding: 12px !important;
+  /* App card surface + neutral line, not the lime accent border. */
+  background: #131316 !important;
+  border: 1px solid #26262a !important;
+  border-radius: 6px !important;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55) !important;
+  font-family: "MH Geist", ui-sans-serif, system-ui, "Segoe UI", sans-serif !important;
+  font-size: 13px !important;
+  line-height: 1.4 !important;
+  color: #e7e7ea !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 9px !important;
+}
+.mh-menu-title {
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  /* Section-head treatment from the app's inspector. */
+  color: #6e6e76 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.06em !important;
+  margin: 0 0 2px !important;
+}
+.mh-menu-row {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 10px !important;
+  margin: 0 !important;
+}
+.mh-menu-row > span {
+  font-size: 12px !important;
+  color: #a4a4ab !important;
+  flex: 0 0 auto !important;
+}
+.mh-menu-field {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+  height: 28px !important;
+  padding: 0 8px !important;
+  background: #18181b !important;
+  border: 1px solid #34343a !important;
+  border-radius: 5px !important;
+  color: #e7e7ea !important;
+  font-family: inherit !important;
+  font-size: 12.5px !important;
+  outline: none !important;
+}
+.mh-menu-field:focus {
+  border-color: #c7f154 !important;
+}
+.mh-menu-field::placeholder {
+  color: #4a4a52 !important;
+}
+/* Custom dropdown — the native <select> popup is OS-drawn and ignored
+   our font/colors, so the list is a div we own end to end. */
+.mh-sel {
+  position: relative !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+.mh-sel-btn {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  height: 28px !important;
+  margin: 0 !important;
+  padding: 0 8px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 6px !important;
+  background: #18181b !important;
+  border: 1px solid #34343a !important;
+  border-radius: 5px !important;
+  color: #e7e7ea !important;
+  font-family: inherit !important;
+  font-size: 12.5px !important;
+  font-weight: 400 !important;
+  line-height: 1 !important;
+  text-align: left !important;
+  text-transform: none !important;
+  cursor: pointer !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+.mh-sel.open .mh-sel-btn {
+  border-color: #c7f154 !important;
+}
+.mh-sel-chev {
+  width: 12px !important;
+  height: 12px !important;
+  flex-shrink: 0 !important;
+  color: #6e6e76 !important;
+  display: block !important;
+}
+.mh-sel-list {
+  position: absolute !important;
+  top: calc(100% + 4px) !important;
+  left: 0 !important;
+  right: 0 !important;
+  z-index: 2147483647 !important;
+  box-sizing: border-box !important;
+  padding: 4px !important;
+  margin: 0 !important;
+  background: #18181b !important;
+  border: 1px solid #34343a !important;
+  border-radius: 5px !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+  max-height: 190px !important;
+  overflow-y: auto !important;
+}
+.mh-sel-list[hidden] {
+  display: none !important;
+}
+.mh-sel-opt {
+  padding: 6px 8px !important;
+  border-radius: 4px !important;
+  font-family: inherit !important;
+  font-size: 12.5px !important;
+  color: #a4a4ab !important;
+  cursor: pointer !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+.mh-sel-opt:hover {
+  background: #26262a !important;
+  color: #e7e7ea !important;
+}
+.mh-sel-opt.sel {
+  color: #c7f154 !important;
+}
+
+.mh-menu-actions {
+  display: flex !important;
+  gap: 8px !important;
+  margin-top: 3px !important;
+}
+.mh-menu-btn {
+  flex: 1 1 0 !important;
+  box-sizing: border-box !important;
+  height: 30px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-radius: 5px !important;
+  border: 1px solid #34343a !important;
+  background: #1f1f23 !important;
+  color: #e7e7ea !important;
+  font-family: inherit !important;
+  font-size: 12.5px !important;
+  font-weight: 500 !important;
+  line-height: 1 !important;
+  /* Host sites (YouTube) force text-align:left on <button>; center
+     explicitly or the labels drift to the edge. */
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  text-align: center !important;
+  text-transform: none !important;
+  cursor: pointer !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+.mh-menu-btn:hover {
+  background: #26262a !important;
+}
+.mh-menu-btn--go {
+  background: #c7f154 !important;
+  border-color: #c7f154 !important;
+  color: #0d0d0f !important;
+  font-weight: 600 !important;
+}
+.mh-menu-btn--go:hover {
+  background: #d3f76f !important;
+}

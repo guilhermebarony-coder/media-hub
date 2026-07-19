@@ -107,7 +107,7 @@ export async function pingHealth(url) {
 /** POST a URL into the queue. Returns { ok: true } on 2xx, or
  *  { ok: false, error, status } on anything else. Caller decides
  *  what to do — popup shows toast, background shows a notification. */
-export async function enqueue({ url, token, target, audioFormat, projectId, source, cookies }) {
+export async function enqueue({ url, token, target, audioFormat, projectId, source, cookies, quality, transcode, rename }) {
   if (!url) return { ok: false, error: "bridge URL not configured" };
   if (!token) return { ok: false, error: "bridge token not configured" };
   if (!target) return { ok: false, error: "no URL to send" };
@@ -118,6 +118,10 @@ export async function enqueue({ url, token, target, audioFormat, projectId, sour
   };
   if (audioFormat) body.audio_format = audioFormat;
   if (projectId) body.project_id = projectId;
+  // 1.13.x — extension quick-menu overrides (optional).
+  if (quality) body.quality = quality;
+  if (transcode && transcode !== "none") body.transcode = transcode;
+  if (rename && rename.trim()) body.rename = rename.trim();
   // 1.7.x — cookie-bridge: attach a fresh Netscape cookies.txt for the
   // target site. Caller may pass `cookies` explicitly; otherwise we
   // harvest here so every send path benefits without extra wiring.

@@ -515,21 +515,6 @@ export default function LibraryPage() {
     }
   }
 
-  // Called from inspector dropdowns (single + batch).
-  async function moveSelectionToFolder(folderId: string | null) {
-    const ids = Array.from(selection);
-    if (ids.length === 0) return;
-    try {
-      if (ids.length === 1) {
-        await invoke("asset_set_folder", { assetId: ids[0], folderId });
-      } else {
-        await invoke<number>("asset_set_folder_many", { assetIds: ids, folderId });
-      }
-    } catch (e) {
-      await alertDialog(String(e), { title: "Couldn't move to folder", kind: "error" });
-    }
-  }
-
   // 1.3.x — Reparent a folder (drag folder → folder, or context menu).
   async function reparentFolder(id: string, newParentId: string | null) {
     if (id === newParentId) return;
@@ -1132,6 +1117,23 @@ export default function LibraryPage() {
   // drag-drop listener without stale `scope`/`refresh` captures.
   const importExternalRef = useRef(importExternalFiles);
   importExternalRef.current = importExternalFiles;
+  // 1.13.x — safety net for the import overlay. Windows doesn't reliably
+  // fire a `leave` event when a drag is cancelled or dragged back out,
+  // which left the overlay stuck forever. Each `enter`/`over` re-arms
+  // this timer; once the drag stops sending events (left the window),
+  // the timer fires and clears the overlay. `drop`/`leave` clear it too.
+  const dropClearTimerRef = useRef<number | null>(null);
+  const armDropClear = () => {
+    if (dropClearTimerRef.current != null) window.clearTimeout(dropClearTimerRef.current);
+    dropClearTimerRef.current = window.setTimeout(() => setExternalDropActive(false), 1200);
+  };
+  const cancelDropClear = () => {
+    if (dropClearTimerRef.current != null) {
+      window.clearTimeout(dropClearTimerRef.current);
+      dropClearTimerRef.current = null;
+    }
+  };
+  useEffect(() => cancelDropClear, []);
 
   // Subscribe once. Tauri's drag-drop events fire for any OS drag
   // hovering over our window — including our own self-initiated
@@ -1154,10 +1156,13 @@ export default function LibraryPage() {
           if (isExternal) {
             if (p.type === "enter" || p.type === "over") {
               setExternalDropActive(true);
+              armDropClear(); // safety net for a missing `leave` (Windows)
             } else if (p.type === "drop") {
+              cancelDropClear();
               setExternalDropActive(false);
               void importExternalRef.current(extPaths);
             } else if (p.type === "leave") {
+              cancelDropClear();
               setExternalDropActive(false);
             }
             return;
@@ -2089,7 +2094,7 @@ export default function LibraryPage() {
         />
 
         <div className="lib-main">
-          <div className="lib-toolbar">
+          <div className={"lib-toolbar" + (inTrash ? " lib-toolbar-trash" : "")}>
             <div className="lib-search">
               <Icon.search width={13} height={13} style={{ color: "var(--text-2)" }} />
               <input
@@ -2455,7 +2460,6 @@ export default function LibraryPage() {
           assets={filtered}
           allAssets={assets}
           knownTags={allTags}
-          folders={folders}
           bulkDeleting={bulkDeleting}
           eagleRunning={eagleRunning}
           onClearSelection={() => setSelection(new Set())}
@@ -2464,7 +2468,6 @@ export default function LibraryPage() {
             setAnchor(id);
           }}
           onBulkDelete={() => void bulkDelete()}
-          onMoveToFolder={(folderId) => void moveSelectionToFolder(folderId)}
           onSendToEagle={(ids) => void handleSendToEagle(ids)}
         />
       </div>
@@ -4033,28 +4036,22 @@ function InspectorPanel({
   assets,
   allAssets,
   knownTags,
-  folders,
   bulkDeleting,
   eagleRunning,
   onClearSelection,
   onSelectOne,
   onBulkDelete,
-  onMoveToFolder,
   onSendToEagle,
 }: {
   selection: Set<string>;
   assets: Asset[];
   allAssets: Asset[];
   knownTags: TagCount[];
-  folders: Folder[];
   bulkDeleting: boolean;
   eagleRunning: boolean;
   onClearSelection: () => void;
   onSelectOne: (id: string) => void;
   onBulkDelete: () => void;
-  /** 1.1 Phase 2 — move the entire current selection to a folder.
-   *  null = Uncategorized (clear folder assignment). */
-  onMoveToFolder: (folderId: string | null) => void;
   /** 1.4 — push the selection to the open Eagle library. */
   onSendToEagle: (ids: string[]) => void;
 }) {
@@ -4071,11 +4068,9 @@ function InspectorPanel({
       {selection.size === 1 && (
         <InspectorSingle
           asset={selectedAssets[0]}
-          folders={folders}
           knownTagsForInspector={knownTags}
           bulkDeleting={bulkDeleting}
           eagleRunning={eagleRunning}
-          onMoveToFolder={onMoveToFolder}
           onDelete={onBulkDelete}
           onSendToEagle={() => onSendToEagle(selectedAssets.map((a) => a.id))}
         />
@@ -4083,15 +4078,9 @@ function InspectorPanel({
       {selection.size > 1 && (
         <InspectorBatch
           selected={selectedAssets}
-          folders={folders}
           knownTags={knownTags}
-          bulkDeleting={bulkDeleting}
-          eagleRunning={eagleRunning}
           onClear={onClearSelection}
           onSelectOne={onSelectOne}
-          onBulkDelete={onBulkDelete}
-          onMoveToFolder={onMoveToFolder}
-          onSendToEagle={() => onSendToEagle(selectedAssets.map((a) => a.id))}
         />
       )}
     </aside>
@@ -4116,28 +4105,21 @@ function InspectorEmpty() {
 
 function InspectorSingle({
   asset,
-  folders,
   knownTagsForInspector,
   bulkDeleting,
   eagleRunning,
-  onMoveToFolder,
   onDelete,
   onSendToEagle,
 }: {
   asset: Asset | undefined;
-  folders: Folder[];
   knownTagsForInspector: TagCount[];
   bulkDeleting: boolean;
   eagleRunning: boolean;
-  onMoveToFolder: (folderId: string | null) => void;
   onDelete: () => void;
   onSendToEagle: () => void;
 }) {
   const t = useT();
   if (!asset) return <InspectorEmpty />;
-  const currentFolder = asset.folder_id
-    ? folders.find((f) => f.id === asset.folder_id)?.name ?? "(unknown)"
-    : t("lib.uncategorized");
   const thumb = thumbnailSrc(asset.thumbnail_path, asset.thumbnail_url);
   // 1.2.0 — audio assets get a slightly different stat strip:
   //   - "Dimensions" → "Format" (the audio container, e.g. MP3 320k)
@@ -4247,22 +4229,9 @@ function InspectorSingle({
         </button>
       </div>
 
-      <div className="insp-folder">
-        <div className="insp-section-head">{t("lib.secFolder")}</div>
-        <select
-          className="field-select"
-          value={asset.folder_id ?? ""}
-          onChange={(e) => onMoveToFolder(e.target.value || null)}
-          title={`Currently in: ${currentFolder}`}
-        >
-          <option value="">{t("lib.uncategorized")}</option>
-          {folders.map((f) => (
-            <option key={f.id} value={f.id}>
-              {f.name}
-            </option>
-          ))}
-        </select>
-      </div>
+      {/* 1.13.x — folder-assignment dropdown removed from the inspector
+          (a better folder flow is coming); drag a card onto a sidebar
+          folder to assign in the meantime. */}
 
       {/* 1.1.1 — Tag editor restored to the drawer (regressed when the
           modal AssetDrawer was replaced by the inspector). Chip-style
@@ -4295,34 +4264,16 @@ function InspectorSingle({
 
 function InspectorBatch({
   selected,
-  folders,
   knownTags,
-  bulkDeleting,
-  eagleRunning,
   onClear,
   onSelectOne,
-  onBulkDelete,
-  onMoveToFolder,
-  onSendToEagle,
 }: {
   selected: Asset[];
-  folders: Folder[];
   knownTags: TagCount[];
-  bulkDeleting: boolean;
-  eagleRunning: boolean;
   onClear: () => void;
   onSelectOne: (id: string) => void;
-  onBulkDelete: () => void;
-  onMoveToFolder: (folderId: string | null) => void;
-  onSendToEagle: () => void;
 }) {
   const t = useT();
-  // If every selected asset shares the same folder_id, surface it as
-  // the current value of the batch dropdown; otherwise show a "mixed"
-  // sentinel so the dropdown doesn't lie.
-  const folderIds = new Set(selected.map((a) => a.folder_id ?? null));
-  const commonFolderId =
-    folderIds.size === 1 ? selected[0]?.folder_id ?? null : "__mixed__";
   const totalBytes = selected.reduce((acc, a) => acc + (a.file_size ?? 0), 0);
   // Platform breakdown — most users batch within one platform but
   // mixed batches happen. Show counts so the user isn't surprised
@@ -4358,28 +4309,9 @@ function InspectorBatch({
         </div>
       </dl>
 
-      <div className="insp-folder">
-        <div className="insp-section-head">{t("lib.secMove")}</div>
-        <select
-          className="field-select"
-          value={commonFolderId === "__mixed__" ? "__mixed__" : commonFolderId ?? ""}
-          onChange={(e) => {
-            const v = e.target.value;
-            if (v === "__mixed__") return; // no-op sentinel
-            onMoveToFolder(v || null);
-          }}
-        >
-          {commonFolderId === "__mixed__" && (
-            <option value="__mixed__">{t("lib.mixed")}</option>
-          )}
-          <option value="">{t("lib.uncategorized")}</option>
-          {folders.map((f) => (
-            <option key={f.id} value={f.id}>
-              {f.name}
-            </option>
-          ))}
-        </select>
-      </div>
+      {/* 1.13.x — batch folder-assignment dropdown removed (a better
+          folder flow is coming); drag the selection onto a sidebar folder
+          to assign in the meantime. */}
 
       {/* 1.1.1 — Batch tag editor. Shows tags shared by ALL selected
           assets ("common tags") as removable chips, and lets the user
@@ -4388,27 +4320,9 @@ function InspectorBatch({
           the popup picker which shows indeterminate state. */}
       <BatchTagEditor selected={selected} knownTags={knownTags} />
 
-      <div className="insp-actions insp-actions-icon" style={{ flexDirection: "column", alignItems: "stretch" }}>
-        <button
-          className={"btn btn-secondary insp-action-btn" + (eagleRunning ? "" : " insp-action-dim")}
-          onClick={onSendToEagle}
-          title={eagleRunning ? t("lib.eagleAddTitle") : t("lib.sendEagleOff")}
-        >
-          <Icon.eagle width={16} height={16} />
-          {t("lib.sendNEagle").replace("{n}", String(selected.length))}
-        </button>
-        <button
-          className="btn btn-danger insp-action-btn"
-          onClick={onBulkDelete}
-          disabled={bulkDeleting}
-          title={t("lib.bulkDeleteTitle")}
-        >
-          <Icon.trash width={16} height={16} />
-          {bulkDeleting
-            ? t("lib.deleting")
-            : t("lib.deleteN").replace("{n}", String(selected.length))}
-        </button>
-      </div>
+      {/* 1.13.x — bulk Eagle/Delete buttons removed: those actions live in
+          the right-click menu (which also carries transcode etc.), and the
+          two stacked buttons cluttered the batch inspector. */}
 
       <div className="insp-section-head" style={{ marginTop: 18 }}>
         {t("lib.items")}

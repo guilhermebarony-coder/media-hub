@@ -59,6 +59,196 @@
     return null;
   }
 
+  // 1.13.x — quick options menu (Ctrl/Cmd+click on the overlay button).
+  // App-styled popover: quality, type, rename, transcode → onSubmit(extras).
+  // Only one is ever open; opening a new one closes the previous.
+  let openMenuEl = null;
+  function closeQuickMenu() {
+    if (openMenuEl) {
+      openMenuEl.remove();
+      openMenuEl = null;
+      document.removeEventListener("mousedown", onDocDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    }
+  }
+  function onDocDown(e) {
+    if (openMenuEl && !openMenuEl.contains(e.target)) closeQuickMenu();
+  }
+  function onKeyDown(e) {
+    if (e.key === "Escape") closeQuickMenu();
+  }
+  // 1.13.x — custom dropdown. The native <select> popup list is drawn by
+  // the OS and ignores our font/colors (it rendered white-on-blue inside
+  // the dark card), so we roll a div listbox we fully control.
+  // Value lives in wrap.dataset.value; `onChange` fires on pick.
+  function makeSelect(key, options, onChange) {
+    const wrap = document.createElement("div");
+    wrap.className = "mh-sel";
+    wrap.dataset.k = key;
+    wrap.dataset.value = options[0].v;
+    wrap.innerHTML = `
+      <button class="mh-sel-btn" type="button">
+        <span class="mh-sel-val"></span>
+        <svg class="mh-sel-chev" viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.4"
+                fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <div class="mh-sel-list" hidden></div>
+    `;
+    const btn = wrap.querySelector(".mh-sel-btn");
+    const list = wrap.querySelector(".mh-sel-list");
+    const valEl = wrap.querySelector(".mh-sel-val");
+    valEl.textContent = options[0].l;
+    for (const o of options) {
+      const el = document.createElement("div");
+      el.className = "mh-sel-opt" + (o.v === options[0].v ? " sel" : "");
+      el.dataset.v = o.v;
+      el.textContent = o.l;
+      list.appendChild(el);
+    }
+    const closeList = () => {
+      list.hidden = true;
+      wrap.classList.remove("open");
+    };
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const wasOpen = !list.hidden;
+      // Only one list open at a time inside the menu.
+      const menu = wrap.closest(".mh-menu");
+      menu.querySelectorAll(".mh-sel-list").forEach((l) => (l.hidden = true));
+      menu.querySelectorAll(".mh-sel").forEach((s) => s.classList.remove("open"));
+      if (!wasOpen) {
+        list.hidden = false;
+        wrap.classList.add("open");
+      }
+    });
+    list.addEventListener("click", (e) => {
+      const opt = e.target.closest(".mh-sel-opt");
+      if (!opt) return;
+      e.preventDefault();
+      e.stopPropagation();
+      wrap.dataset.value = opt.dataset.v;
+      valEl.textContent = opt.textContent;
+      list.querySelectorAll(".mh-sel-opt").forEach((o) => o.classList.toggle("sel", o === opt));
+      closeList();
+      if (onChange) onChange(opt.dataset.v);
+    });
+    return wrap;
+  }
+  // Build a labeled row: <span>label</span> + control.
+  function makeRow(label, control) {
+    const row = document.createElement("label");
+    row.className = "mh-menu-row";
+    const span = document.createElement("span");
+    span.textContent = label;
+    row.appendChild(span);
+    row.appendChild(control);
+    return row;
+  }
+  function openQuickMenu(btn, onSubmit) {
+    closeQuickMenu();
+    const menu = document.createElement("div");
+    menu.className = "mh-menu";
+
+    const title = document.createElement("div");
+    title.className = "mh-menu-title";
+    title.textContent = "Opções de download";
+    menu.appendChild(title);
+
+    const qualitySel = makeSelect("quality", [
+      { v: "", l: "Melhor" },
+      { v: "1080", l: "1080p" },
+      { v: "720", l: "720p" },
+      { v: "480", l: "480p" },
+    ]);
+    const transcodeSel = makeSelect("transcode", [
+      { v: "none", l: "Nenhum" },
+      { v: "prores_422_lt", l: "ProRes 422 LT" },
+      { v: "dnxhr_sq", l: "DNxHR SQ" },
+      { v: "h264_mp4", l: "H.264 MP4" },
+      { v: "h264_nvenc_mp4", l: "H.264 NVENC" },
+    ]);
+    // Audio types have no quality/transcode meaning — hide those rows.
+    const syncType = (v) => {
+      const audio = v !== "video";
+      qualityRow.style.display = audio ? "none" : "";
+      transcodeRow.style.display = audio ? "none" : "";
+    };
+    const typeSel = makeSelect(
+      "type",
+      [
+        { v: "video", l: "Vídeo" },
+        { v: "mp3", l: "Áudio MP3" },
+        { v: "m4a", l: "Áudio M4A" },
+        { v: "flac", l: "Áudio FLAC" },
+      ],
+      syncType,
+    );
+    const renameInput = document.createElement("input");
+    renameInput.className = "mh-menu-field";
+    renameInput.type = "text";
+    renameInput.placeholder = "(opcional)";
+
+    const qualityRow = makeRow("Qualidade", qualitySel);
+    const transcodeRow = makeRow("Transcode", transcodeSel);
+    menu.appendChild(qualityRow);
+    menu.appendChild(makeRow("Tipo", typeSel));
+    menu.appendChild(makeRow("Renomear", renameInput));
+    menu.appendChild(transcodeRow);
+
+    const actions = document.createElement("div");
+    actions.className = "mh-menu-actions";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "mh-menu-btn";
+    cancelBtn.textContent = "Cancelar";
+    const goBtn = document.createElement("button");
+    goBtn.type = "button";
+    goBtn.className = "mh-menu-btn mh-menu-btn--go";
+    goBtn.textContent = "Baixar";
+    actions.appendChild(cancelBtn);
+    actions.appendChild(goBtn);
+    menu.appendChild(actions);
+
+    document.body.appendChild(menu);
+    openMenuEl = menu;
+    syncType("video");
+
+    // Position: below-left of the button, clamped to the viewport.
+    const r = btn.getBoundingClientRect();
+    const mw = 240;
+    let left = Math.min(r.left, window.innerWidth - mw - 8);
+    left = Math.max(8, left);
+    let top = r.bottom + 8;
+    if (top + 240 > window.innerHeight) top = Math.max(8, r.top - 248);
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+
+    cancelBtn.addEventListener("click", closeQuickMenu);
+    goBtn.addEventListener("click", () => {
+      const type = typeSel.dataset.value;
+      const rename = renameInput.value;
+      const extras =
+        type === "video"
+          ? {
+              mode: "video",
+              quality: qualitySel.dataset.value || undefined,
+              transcode: transcodeSel.dataset.value,
+              rename,
+            }
+          : { mode: type, rename };
+      closeQuickMenu();
+      onSubmit(extras);
+    });
+    // Defer the outside-click listener so THIS opening click doesn't close it.
+    setTimeout(() => {
+      document.addEventListener("mousedown", onDocDown, true);
+      document.addEventListener("keydown", onKeyDown, true);
+    }, 0);
+  }
+
   function makeButton({ targetUrl, mode = "video", source }) {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -76,37 +266,21 @@
       <span class="mh-overlay-label">Media Hub</span>
     `;
 
-    const fire = async (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      if (typeof ev.stopImmediatePropagation === "function") {
-        ev.stopImmediatePropagation();
-      }
-      if (btn.classList.contains("mh-sending") || btn.classList.contains("mh-sent")) {
-        return; // dedupe — mousedown + click can both fire
-      }
-      // Resolve the URL right now — for sites passing a function this
-      // reads the live <video>.src so we capture the actual CDN URL
-      // the player is on, even if the user nav'd between pins after
-      // the button attached.
-      const resolved = resolveTargetUrl(targetUrl);
-      if (!resolved) {
-        btn.classList.add("mh-err");
-        btn.querySelector(".mh-overlay-label").textContent = "No URL";
-        setTimeout(() => {
-          btn.classList.remove("mh-err");
-          btn.querySelector(".mh-overlay-label").textContent = "Media Hub";
-        }, 2500);
-        return;
-      }
+    // Send to the app with the button's status feedback. `extras` carries
+    // the quick-menu overrides ({ mode, quality, transcode, rename }) — for
+    // a plain click it's just the default { mode }.
+    const sendWith = async (resolved, extras) => {
       btn.classList.add("mh-sending");
       btn.querySelector(".mh-overlay-label").textContent = "Sending…";
       try {
         const reply = await chrome.runtime.sendMessage({
           kind: "send-to-hub",
           url: resolved,
-          mode,
           source,
+          mode: extras.mode ?? mode,
+          quality: extras.quality,
+          transcode: extras.transcode,
+          rename: extras.rename,
         });
         if (reply?.ok) {
           btn.classList.remove("mh-sending");
@@ -116,6 +290,35 @@
             btn.classList.remove("mh-sent");
             btn.querySelector(".mh-overlay-label").textContent = "Media Hub";
           }, 2000);
+        } else if (reply?.offline) {
+          // 1.13.x — app is closed. Fire the mediahub:// deep link so the
+          // OS launches Media Hub, which enqueues the URL as it boots.
+          // NOTE: the cold-start path carries url + audio type only — the
+          // quick-menu quality/transcode/rename don't survive the deep
+          // link, so those fall back to the app's defaults.
+          btn.querySelector(".mh-overlay-label").textContent = "Abrindo app…";
+          try {
+            await chrome.runtime.sendMessage({
+              kind: "launch-app",
+              url: resolved,
+              mode: extras.mode ?? mode,
+            });
+            btn.classList.remove("mh-sending");
+            btn.classList.add("mh-sent");
+            btn.querySelector(".mh-overlay-label").textContent = "App aberto ✓";
+            setTimeout(() => {
+              btn.classList.remove("mh-sent");
+              btn.querySelector(".mh-overlay-label").textContent = "Media Hub";
+            }, 2500);
+          } catch {
+            btn.classList.remove("mh-sending");
+            btn.classList.add("mh-err");
+            btn.querySelector(".mh-overlay-label").textContent = "App fechado";
+            setTimeout(() => {
+              btn.classList.remove("mh-err");
+              btn.querySelector(".mh-overlay-label").textContent = "Media Hub";
+            }, 3000);
+          }
         } else {
           btn.classList.remove("mh-sending");
           btn.classList.add("mh-err");
@@ -132,8 +335,6 @@
         // sendMessage throwing usually means THIS tab's content script
         // is orphaned — the extension was installed/updated/reloaded
         // after the page loaded ("Extension context invalidated").
-        // That's fixed by a refresh, so say THAT instead of blaming the
-        // bridge (which was never even reached from here).
         const stale =
           !(chrome.runtime && chrome.runtime.id) ||
           /context invalidated|receiving end does not exist/i.test(
@@ -148,6 +349,38 @@
         }, 4000);
         console.warn("[mh] send failed:", e);
       }
+    };
+
+    const fire = async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (typeof ev.stopImmediatePropagation === "function") {
+        ev.stopImmediatePropagation();
+      }
+      if (btn.classList.contains("mh-sending") || btn.classList.contains("mh-sent")) {
+        return; // dedupe — mousedown + click can both fire
+      }
+      // Resolve the URL right now — for sites passing a function this
+      // reads the live <video>.src so we capture the actual CDN URL
+      // the player is on, even if the user nav'd between pins.
+      const resolved = resolveTargetUrl(targetUrl);
+      if (!resolved) {
+        btn.classList.add("mh-err");
+        btn.querySelector(".mh-overlay-label").textContent = "No URL";
+        setTimeout(() => {
+          btn.classList.remove("mh-err");
+          btn.querySelector(".mh-overlay-label").textContent = "Media Hub";
+        }, 2500);
+        return;
+      }
+      // 1.13.x — Ctrl/Cmd+click opens the quick options menu (quality,
+      // type, rename, transcode) before sending. Plain click sends now.
+      // The openMenuEl guard dedupes the mousedown+click pair.
+      if (ev.ctrlKey || ev.metaKey) {
+        if (!openMenuEl) openQuickMenu(btn, (extras) => sendWith(resolved, extras));
+        return;
+      }
+      await sendWith(resolved, { mode });
     };
 
     // Capture-phase mousedown — primary path. Bubble-phase click is

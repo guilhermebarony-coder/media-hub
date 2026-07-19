@@ -126,6 +126,16 @@ struct EnqueueBody {
     /// the same site use a fresh logged-in session. Never logged.
     #[serde(default)]
     cookies: Option<String>,
+    /// 1.13.x — quick-menu overrides from the extension. `quality` is a
+    /// numeric height string ("1080"/"720"/"480") or "" for best;
+    /// `transcode` a preset id ("prores_422_lt" etc.) or "none";
+    /// `rename` a title override. All optional.
+    #[serde(default)]
+    quality: Option<String>,
+    #[serde(default)]
+    transcode: Option<String>,
+    #[serde(default)]
+    rename: Option<String>,
 }
 
 /// Body for POST /cookies — the extension's "Sync cookies" button. Warms
@@ -148,6 +158,10 @@ struct EnqueueEvent {
     audio_format: Option<String>,
     project_id: Option<String>,
     source: String,
+    // 1.13.x — extension quick-menu overrides (see EnqueueBody).
+    quality: Option<String>,
+    transcode: Option<String>,
+    rename: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -261,6 +275,9 @@ async fn enqueue_handler(
         audio_format,
         project_id: body.project_id,
         source: body.source.unwrap_or_else(|| "extension".to_string()),
+        quality: body.quality,
+        transcode: body.transcode,
+        rename: body.rename,
     };
 
     // Fire to the renderer. If the emit fails the queue isn't going

@@ -1206,6 +1206,9 @@ textarea.field-input {
   align-items: center;
   padding: 0 14px;
   gap: 10px;
+  /* Hard boundary — the right-side group (Restore/Empty/count) must never
+     spill under the inspector; it clips inside the pane instead. */
+  overflow: hidden;
 }
 .lib-search {
   flex: 1;
@@ -2192,6 +2195,14 @@ body.lib-resizing-h * {
   .lib-filter-btn .lib-btn-label { display: none; }
   .lib-search .kbd { display: none; }
   .lib-toolbar .lib-count { display: none; }
+}
+/* Trash mode carries two extra right-side buttons (Restore all / Empty),
+   so it needs to collapse to icon-only labels at a wider pane than the
+   normal toolbar — otherwise that group slides under the inspector. */
+@container libmain (max-width: 820px) {
+  .lib-toolbar-trash .lib-filter-btn .lib-btn-label { display: none; }
+  .lib-toolbar-trash .lib-search .kbd { display: none; }
+  .lib-toolbar-trash .lib-count { display: none; }
 }
 .lib-filter-btn.open {
   background: color-mix(in srgb, var(--accent) 20%, var(--bg-2));

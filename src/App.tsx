@@ -127,11 +127,22 @@ function BridgeListener() {
           audio_format: string | null;
           project_id: string | null;
           source: string;
+          quality: string | null;
+          transcode: string | null;
+          rename: string | null;
         }>("bridge:enqueue", (e) => {
           const p = e.payload;
           if (!p || !p.url) return;
+          // 1.13.x — honor the extension quick-menu overrides when present;
+          // otherwise fall back to the user's Settings default.
+          const validPresets = ["none", "prores_422_lt", "dnxhr_sq", "h264_mp4", "h264_nvenc_mp4"];
+          const transcodePreset = (
+            p.transcode && validPresets.includes(p.transcode)
+              ? p.transcode
+              : (settings.default_transcode_preset ?? "none")
+          ) as never;
           enqueueUrls([p.url], {
-            transcodePreset: (settings.default_transcode_preset as never) ?? "none",
+            transcodePreset,
             projectId: p.project_id ?? null,
             audioFormat:
               p.audio_format === "mp3" ||
@@ -139,6 +150,8 @@ function BridgeListener() {
               p.audio_format === "flac"
                 ? p.audio_format
                 : null,
+            maxQuality: p.quality && /^\d+$/.test(p.quality) ? p.quality : undefined,
+            titleOverride: p.rename && p.rename.trim() ? p.rename.trim() : undefined,
           });
           console.log(`[bridge] enqueued from ${p.source}: ${p.url}`);
         });

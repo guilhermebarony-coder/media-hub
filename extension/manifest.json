@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Media Hub — Send to App",
   "short_name": "Media Hub",
-  "version": "1.12.0",
+  "version": "1.13.0",
   "description": "Send the current tab (or any link/video) straight into Media Hub's download queue. Pairs with the desktop app via localhost.",
 
   "permissions": [
@@ -125,6 +125,14 @@
     "service_worker": "background.js",
     "type": "module"
   },
+
+  "_comment_war": "1.13.x — the quick-menu popover uses the app's Geist font so it matches Media Hub exactly. Fonts referenced from content-overlay.css must be page-accessible.",
+  "web_accessible_resources": [
+    {
+      "resources": ["fonts/geist-400.woff2", "fonts/geist-600.woff2"],
+      "matches": ["<all_urls>"]
+    }
+  ],
 
   "commands": {
     "send-video": {

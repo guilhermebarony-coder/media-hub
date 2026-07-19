@@ -371,6 +371,46 @@ fn sum_live_dir_bytes(dir: &std::path::Path, video_id: &str) -> u64 {
         .unwrap_or(0)
 }
 
+/// 1.13.x — make an arbitrary user string safe as a Windows filename.
+/// The extension's "rename" field is untrusted input that goes straight
+/// into a path, so this strips everything that could escape the target
+/// directory or produce an unopenable file:
+///   - path separators and the Windows-reserved set `\ / : * ? " < > |`
+///   - control characters
+///   - leading/trailing dots and spaces (Explorer can't open those)
+///   - reserved device names (CON, PRN, NUL, COM1…) get a `_` suffix
+///   - length capped so the derived path stays under MAX_PATH
+fn sanitize_filename(raw: &str) -> String {
+    const RESERVED: &[&str] = &[
+        "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7",
+        "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+    ];
+    let mut out = String::new();
+    for ch in raw.chars() {
+        let bad = matches!(ch, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+            || (ch as u32) < 0x20;
+        // Collapse the illegal char rather than dropping it, so
+        // "a/b" reads as "a b" instead of "ab".
+        out.push(if bad { ' ' } else { ch });
+        if out.chars().count() >= 120 {
+            break;
+        }
+    }
+    let trimmed = out.trim().trim_matches('.').trim().to_string();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let stem_lower = trimmed
+        .split('.')
+        .next()
+        .unwrap_or(&trimmed)
+        .to_lowercase();
+    if RESERVED.contains(&stem_lower.as_str()) {
+        return format!("{trimmed}_");
+    }
+    trimmed
+}
+
 /// True when `name` (lowercased) carries a yt-dlp per-format intermediate
 /// marker like ".f303." / ".f251." — the pre-merge single-stream files.
 fn has_fmt_intermediate_marker(name: &str) -> bool {
@@ -521,6 +561,12 @@ async fn yt_download(
     // skip --merge-output-format (single-stream output) and the
     // container allowlist clause.
     audio_format: Option<String>,
+    // 1.13.x — explicit output filename (extension "rename" field). When
+    // set, it REPLACES the settings rename-template for this download so
+    // the file lands on disk with exactly the user's name. Sanitized
+    // server-side (see sanitize_filename) — the extension is untrusted
+    // input and this goes straight into a path.
+    filename_override: Option<String>,
 ) -> Result<Vec<DownloadResult>, String> {
     // `format_spec` is an opaque yt-dlp -f argument — could be a single
     // format id ("18", "313") or a composed spec ("313+bestaudio/best").
@@ -591,8 +637,21 @@ async fn yt_download(
     // ({channel}, {title}, {date}, {id}) into yt-dlp's %(...)s syntax
     // and guarantees a trailing .%(ext)s so we never produce
     // extension-less files.
-    let user_template = settings::rename_template(&settings);
-    let template_path = dest.join(settings::build_filename_template(&user_template));
+    // 1.13.x — an explicit filename (extension quick menu) wins over the
+    // settings template. We still append `.%(ext)s` so yt-dlp picks the
+    // real container, and sanitize because this is untrusted input
+    // landing in a filesystem path.
+    let template_path = match filename_override
+        .as_deref()
+        .map(sanitize_filename)
+        .filter(|s| !s.is_empty())
+    {
+        Some(name) => dest.join(format!("{name}.%(ext)s")),
+        None => {
+            let user_template = settings::rename_template(&settings);
+            dest.join(settings::build_filename_template(&user_template))
+        }
+    };
     let template_str = template_path.to_string_lossy().to_string();
 
     // When yt-dlp needs to mux (e.g. `313+bestaudio/best`), it shells out
@@ -2018,6 +2077,36 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 1.13.x — the extension's "rename" field is untrusted input that
+    // becomes a filesystem path. These lock the escape hatches shut.
+    #[test]
+    fn sanitize_filename_blocks_traversal_and_reserved() {
+        // Normal names survive untouched.
+        assert_eq!(sanitize_filename("meu video final"), "meu video final");
+        // Path separators can never survive — no directory escape.
+        for bad in ["../../etc/passwd", "..\\..\\windows\\system32", "a/b\\c"] {
+            let s = sanitize_filename(bad);
+            assert!(!s.contains('/'), "slash survived in {s:?}");
+            assert!(!s.contains('\\'), "backslash survived in {s:?}");
+        }
+        // Windows-reserved characters are stripped.
+        let s = sanitize_filename(r#"vid:eo*na?me"<>|"#);
+        for ch in [':', '*', '?', '"', '<', '>', '|'] {
+            assert!(!s.contains(ch), "{ch:?} survived in {s:?}");
+        }
+        // Reserved device names get disambiguated, not passed through.
+        assert_eq!(sanitize_filename("CON"), "CON_");
+        assert_eq!(sanitize_filename("nul.mp4"), "nul.mp4_");
+        // Leading/trailing dots + spaces produce unopenable files.
+        assert_eq!(sanitize_filename("  ..hello..  "), "hello");
+        // Empty / all-illegal input yields "" so the caller falls back
+        // to the settings template instead of writing a nameless file.
+        assert_eq!(sanitize_filename("   "), "");
+        assert_eq!(sanitize_filename("..."), "");
+        // Length is capped so the derived path stays under MAX_PATH.
+        assert!(sanitize_filename(&"a".repeat(400)).chars().count() <= 120);
+    }
 
     #[test]
     fn human_size_parses_units_and_edges() {
