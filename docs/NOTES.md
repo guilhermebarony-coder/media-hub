@@ -1024,6 +1024,16 @@ waiting for the GitHub repo to exist.
    - The NSIS installer (`Media Hub_X.Y.Z_x64-setup.exe`)
    - The `latest.json`
    - (Optional) the MSI for manual installs
+   - **The browser extension, EVERY release** (standing request, 1.13.3+).
+     Bump `extension/manifest.json` to the same version, then:
+     ```powershell
+     & "C:\Program Files\WinRAR\rar.exe" a -r -ep1 -x"*.git*" -x"*node_modules*" `
+       "$env:TEMP\media-hub-extension-X.Y.Z.rar" extension/
+     gh release upload vX.Y.Z "$env:TEMP\media-hub-extension-X.Y.Z.rar"
+     ```
+     Testers load it unpacked, so they need the archive alongside the app —
+     until the auto-update distribution plan lands (see
+     `docs/EXTENSION_DISTRIBUTION.md` when written).
 5. **Mark it the latest release.** The endpoint in tauri.conf.json uses
    `/releases/latest/download/latest.json` — only the release tagged
    "Latest" is reachable through that URL.
