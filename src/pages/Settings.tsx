@@ -1098,13 +1098,11 @@ function TranscodeSection() {
         >
           {TRANSCODE_PRESETS.map((p) => (
             <option key={p.value} value={p.value}>
-              {p.label}
+              {t(`preset.${p.value}`)}
             </option>
           ))}
         </select>
-        <span className="hint-text faint">
-          {TRANSCODE_PRESETS.find((p) => p.value === preset)?.hint}
-        </span>
+        <span className="hint-text faint">{t(`preset.${preset}.hint`)}</span>
       </div>
     </section>
   );

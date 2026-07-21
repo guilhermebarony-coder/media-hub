@@ -77,6 +77,28 @@
   function onKeyDown(e) {
     if (e.key === "Escape") closeQuickMenu();
   }
+  // 1.13.x — ask the OS to launch Media Hub via its registered protocol,
+  // WITHOUT opening a tab. A hidden same-page iframe pointed at
+  // `mediahub://open` does it: the navigation inherits the click's user
+  // activation (required — Chrome ignores protocol launches from
+  // background tabs), the OS catches the scheme, and the page itself
+  // never navigates. The iframe is torn down right after.
+  //
+  // Deliberately payload-free: the app's deep-link handler no-ops on an
+  // unknown action, so it just starts. The actual enqueue is sent over
+  // the bridge once the app is up, which keeps all the menu options.
+  function launchAppViaProtocol() {
+    try {
+      const frame = document.createElement("iframe");
+      frame.style.display = "none";
+      frame.src = "mediahub://open";
+      document.documentElement.appendChild(frame);
+      setTimeout(() => frame.remove(), 2000);
+    } catch (e) {
+      console.warn("[mh] protocol launch failed:", e);
+    }
+  }
+
   // 1.13.x — custom dropdown. The native <select> popup list is drawn by
   // the OS and ignores our font/colors (it rendered white-on-blue inside
   // the dark card), so we roll a div listbox we fully control.
@@ -291,25 +313,43 @@
             btn.querySelector(".mh-overlay-label").textContent = "Media Hub";
           }, 2000);
         } else if (reply?.offline) {
-          // 1.13.x — app is closed. Fire the mediahub:// deep link so the
-          // OS launches Media Hub, which enqueues the URL as it boots.
-          // NOTE: the cold-start path carries url + audio type only — the
-          // quick-menu quality/transcode/rename don't survive the deep
-          // link, so those fall back to the app's defaults.
+          // 1.13.x — app is closed: launch it, wait for it, then enqueue.
+          // The launch must happen IN THE PAGE (hidden iframe) because a
+          // protocol handler needs the click's user activation — Chrome
+          // silently ignores mediahub:// opened in a background tab, which
+          // is why the old tab-based version never launched anything.
+          // We fire `mediahub://open` (no payload) so the app doesn't
+          // also self-enqueue; the background then sends the real enqueue
+          // once /health answers, preserving every quick-menu option.
           btn.querySelector(".mh-overlay-label").textContent = "Abrindo app…";
+          launchAppViaProtocol();
           try {
-            await chrome.runtime.sendMessage({
-              kind: "launch-app",
+            const r = await chrome.runtime.sendMessage({
+              kind: "await-app-and-enqueue",
               url: resolved,
+              source,
               mode: extras.mode ?? mode,
+              quality: extras.quality,
+              transcode: extras.transcode,
+              rename: extras.rename,
             });
             btn.classList.remove("mh-sending");
-            btn.classList.add("mh-sent");
-            btn.querySelector(".mh-overlay-label").textContent = "App aberto ✓";
-            setTimeout(() => {
-              btn.classList.remove("mh-sent");
-              btn.querySelector(".mh-overlay-label").textContent = "Media Hub";
-            }, 2500);
+            if (r?.ok) {
+              btn.classList.add("mh-sent");
+              btn.querySelector(".mh-overlay-label").textContent = "Queued ✓";
+              setTimeout(() => {
+                btn.classList.remove("mh-sent");
+                btn.querySelector(".mh-overlay-label").textContent = "Media Hub";
+              }, 2000);
+            } else {
+              btn.classList.add("mh-err");
+              btn.querySelector(".mh-overlay-label").textContent =
+                r?.error === "app didn't start" ? "App não abriu" : "Falhou";
+              setTimeout(() => {
+                btn.classList.remove("mh-err");
+                btn.querySelector(".mh-overlay-label").textContent = "Media Hub";
+              }, 3500);
+            }
           } catch {
             btn.classList.remove("mh-sending");
             btn.classList.add("mh-err");

@@ -5,6 +5,11 @@
 // (?) icons will deep-link to #<id> (e.g. /help#dl-download). Never rename
 // an existing id once a (?) icon points at it — add new ones, keep old ones.
 // Keep this roughly in sync with docs/MANUAL.md when the UI changes.
+//
+// Translations live in helpContent.<lang>.ts and share these ids — see
+// getHelpContent() below.
+
+import { HELP_CONTENT_PT } from "./helpContent.pt";
 
 export type HelpEntry = {
   /** Stable anchor id — matches docs/MANUAL.md. Used for (?) deep-links. */
@@ -46,7 +51,8 @@ export type HelpContent = {
  */
 export function getHelpContent(locale: string = "en"): HelpContent {
   switch (locale) {
-    // case "pt": return HELP_CONTENT_PT;  // add when translated
+    case "pt":
+      return HELP_CONTENT_PT;
     case "en":
     default:
       return { categories: HELP_CATEGORIES, entries: HELP_ENTRIES };
@@ -281,17 +287,19 @@ export const HELP_ENTRIES: HelpEntry[] = [
     keywords: ["download button", "start download", "save", "go"],
     tip: "Hold Ctrl while clicking Download to send this one clip to the Library even if a project is active. The button highlights to confirm.",
     body: [
-      "The main action. Downloads the selected format into your current Active scope (Library or a project).",
-      "Progress shows live; the clip appears in your Library when it's done.",
+      "The main action. Sends the clip — with exactly the format, trim segments and transcode you picked — into your current Active scope (Library or a project).",
+      "The download goes into the batch queue below, and the fetch card frees up immediately. You don't have to wait: paste the next URL and keep going while the queue works through them (several run in parallel).",
+      "Watch progress on the queue row; the clip lands in your Library when it finishes.",
     ],
   },
   {
     id: "dl-cancel",
     category: "download",
     title: "Cancel / Stop download",
-    keywords: ["cancel", "stop", "abort", "halt download"],
+    keywords: ["cancel", "stop", "abort", "halt download", "partial file"],
     body: [
-      "Stops the current download. Any partial file stays on disk (it isn't auto-deleted), so you can retry cleanly.",
+      "Stops the download. The partial files that download left behind (.part, .ytdl and the pre-merge streams) are cleaned up automatically, so nothing half-finished piles up in your folder.",
+      "Only that download's leftovers are removed — other downloads running in parallel, and any complete copy of the same video you already had, are left alone.",
     ],
   },
   {
@@ -482,10 +490,12 @@ export const HELP_ENTRIES: HelpEntry[] = [
     id: "lib-trash",
     category: "library",
     title: "Trash folder",
-    keywords: ["trash", "deleted", "recover", "restore", "permanently delete", "recycle"],
+    keywords: ["trash", "deleted", "recover", "restore", "permanently delete", "recycle", "empty trash"],
+    tip: "Right-click Trash in the sidebar for Restore all / Empty trash without opening the view.",
     body: [
       "Holds deleted clips. Restore puts a clip back where it was.",
       "Permanently delete removes it for good — the files go to the OS Recycle Bin, and this can't be undone.",
+      "Inside the Trash view, Restore and Empty act on your selection, or on everything when nothing is selected.",
     ],
   },
   {
@@ -521,13 +531,76 @@ export const HELP_ENTRIES: HelpEntry[] = [
     body: ["Sends the clip to the Trash (recoverable), then eventually to the OS Recycle Bin."],
   },
   {
+    id: "lib-rtx",
+    category: "library",
+    title: "Enhance with NVIDIA RTX Video",
+    keywords: [
+      "rtx", "upscale", "enhance", "super resolution", "vsr", "nvidia",
+      "quality", "restore", "4k", "improve video",
+    ],
+    tip: "Best on compressed web footage (a 720p YouTube rip). It rebuilds detail compression destroyed — it can't invent detail that was never filmed.",
+    body: [
+      "Right-click a clip → Enhance (NVIDIA RTX Video). It runs NVIDIA's Video Super Resolution on your GPU: cleans compression artifacts and rebuilds edges while upscaling, without the plastic look of most AI upscalers.",
+      "The enhanced clip is saved next to the original as a sibling — your source file is never modified.",
+      "Set up in RTX window… opens a review window instead, where you can preview a slice, compare before/after, and tune the clean-up before committing to the full render.",
+      "Needs a supported NVIDIA GPU; the menu entry is hidden on machines that can't run it.",
+    ],
+  },
+  {
+    id: "lib-transcode",
+    category: "library",
+    title: "Transcode a clip you already have",
+    keywords: [
+      "transcode", "convert", "prores", "dnxhr", "h264", "nvenc",
+      "editing format", "premiere", "resolve", "after effects",
+    ],
+    body: [
+      "Right-click a clip → Transcode to… and pick a preset (ProRes 422 LT, DNxHR SQ, H.264, or H.264 NVENC).",
+      "Useful when you downloaded something as-is and only later found your editor won't scrub it smoothly — no need to download it again.",
+      "It runs as a job in the Download page queue. When it finishes, the transcoded file stays in your Library and the original moves to the Trash, so you're left with one clip, not two. The original is recoverable from the Trash if you want it back.",
+    ],
+  },
+  {
+    id: "lib-import",
+    category: "library",
+    title: "Add your own files (drag and drop)",
+    keywords: [
+      "import", "drag", "drop", "add file", "own footage", "local file",
+      "external", "existing video", "bring in",
+    ],
+    tip: "Imported clips are first-class — you can upscale, transcode, tag and organize them exactly like downloaded ones.",
+    body: [
+      "Drag video or audio files from Explorer onto the Library grid. A dashed overlay confirms the drop target.",
+      "Files are COPIED into the Media Hub library folder, then read for duration, resolution and codec, and given a thumbnail. Because it's a copy, moving or deleting the original afterwards won't break the card.",
+      "Several files at once is fine. Anything that isn't video or audio is ignored.",
+      "You can also paste files with Ctrl+V — copy them in Explorer, then paste into the Library.",
+    ],
+  },
+  {
+    id: "lib-clipboard",
+    category: "library",
+    title: "Copy, cut and paste clips like files",
+    keywords: [
+      "copy", "cut", "paste", "ctrl+c", "ctrl+x", "ctrl+v", "clipboard",
+      "explorer", "move file", "export",
+    ],
+    shortcut: "Ctrl+C / Ctrl+X / Ctrl+V",
+    body: [
+      "Select clips and press Ctrl+C — the real files go on the Windows clipboard, so you can paste them straight into any Explorer folder, an editor's media bin, or a chat window.",
+      "Ctrl+X marks them to be MOVED instead. After you paste somewhere else the file physically leaves the library folder, so the card is flagged as missing — that's expected, and you can clear it with Remove missing.",
+      "Ctrl+V does the reverse: files copied in Explorer are imported into the Library.",
+    ],
+  },
+  {
     id: "lib-inspector",
     category: "library",
     title: "Inspector drawer",
     keywords: ["details", "info", "inspector", "drawer", "metadata", "edit clip"],
     body: [
-      "The panel that slides in for the selected clip — shows metadata, thumbnail, tags, siblings (segments cut from the same source), and per-clip actions.",
-      "Close it with the ✕ or Esc.",
+      "The panel on the right for the selected clip — thumbnail, metadata (duration, dimensions, container, size, codec, added date), tags, source URL and the quick actions (open, reveal, send to Eagle, move to Trash).",
+      "Select several clips and it switches to a batch view: total size, source breakdown, a shared tag editor and the list of what's selected.",
+      "Actions that work on many clips at once — delete, transcode, send to Eagle — live in the right-click menu, so they act on your whole selection.",
+      "Press Esc to clear the selection.",
     ],
   },
   {
@@ -755,9 +828,26 @@ export const HELP_ENTRIES: HelpEntry[] = [
     keywords: ["send video", "download from browser", "shortcut", "right click", "toolbar button", "mp3"],
     body: [
       "Toolbar button (works everywhere): click the extension icon, pick Video / MP3 / M4A / FLAC, hit Send.",
-      "In-page button (Twitter/X, Reddit): hover a video and click the little lime \"Media Hub\" button.",
+      "In-page button (YouTube, Twitter/X, Reddit, Pinterest, TikTok, Instagram): hover a video and click the little lime \"Media Hub\" button.",
       "Right-click a video/link → Send to Media Hub (some sites block this — use another way there).",
       "Keyboard: Ctrl+Shift+Y sends the current tab as video, Ctrl+Shift+M as MP3. These work even on YouTube.",
+      "If Media Hub isn't running when you send, the extension launches it for you and queues the video once it's up.",
+    ],
+  },
+  {
+    id: "ext-quickmenu",
+    category: "extension",
+    title: "Choosing options before sending (quick menu)",
+    keywords: [
+      "options", "quality", "rename", "transcode", "ctrl click",
+      "before download", "1080p", "720p", "audio", "name file",
+    ],
+    shortcut: "Ctrl+click",
+    tip: "Rename names the FILE on disk, not just the card — handy for dropping straight into an edit with the name your project expects.",
+    body: [
+      "Ctrl+click (Cmd+click on Mac) the in-page \"Media Hub\" button to open a small options menu instead of sending right away.",
+      "You can set the quality cap (Best / 1080p / 720p / 480p), switch to audio-only (MP3 / M4A / FLAC), type a filename, and pick a transcode preset — all before the download starts.",
+      "A plain click still sends immediately with your saved defaults, so the fast path isn't slowed down.",
     ],
   },
   {
@@ -820,11 +910,13 @@ export const HELP_ENTRIES: HelpEntry[] = [
   {
     id: "trouble-update",
     category: "troubleshooting",
-    title: "Update didn't install / wrong version showing",
-    keywords: ["update", "auto update", "version", "not updating", "old version"],
+    title: "Updating Media Hub",
+    keywords: ["update", "auto update", "version", "not updating", "old version", "new version"],
     body: [
-      "Check the running version in Settings → About. If an update was downloaded, fully quit (including from the tray) and reopen so it can swap in.",
-      "You can always reinstall the latest from the releases page over your current install — settings and library are preserved.",
+      "When a new version is out, a small notice appears in the corner shortly after launch — click Update now and it downloads, verifies and installs itself, then reopens. The notice only shows once per version, so it never nags.",
+      "You can also check whenever you like: Settings → Diagnostics → Check for app updates.",
+      "If an update seems stuck, confirm the running version in Settings → About, then fully quit (including from the tray) and reopen so the installer can swap files in.",
+      "Reinstalling the latest release over your current install is always safe — settings and library are preserved.",
     ],
   },
   {

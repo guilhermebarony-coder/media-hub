@@ -1005,12 +1005,12 @@ function MetadataCard() {
               >
                 {TRANSCODE_PRESETS.map((p) => (
                   <option key={p.value} value={p.value}>
-                    {p.label}
+                    {t(`preset.${p.value}`)}
                   </option>
                 ))}
               </select>
               <span className="hint-text">
-                {TRANSCODE_PRESETS.find((p) => p.value === transcodePreset)?.hint}
+                {t(`preset.${transcodePreset}.hint`)}
               </span>
             </div>
           )}
@@ -1595,11 +1595,12 @@ function QueueCard() {
     for (const j of jobs) counts[j.status]++;
     const active = counts.downloading + counts.transcoding + counts.fetching;
     const parts: string[] = [];
-    if (active) parts.push(`${active} active`);
-    if (counts.queued) parts.push(`${counts.queued} queued`);
-    if (counts.done) parts.push(`${counts.done} done`);
-    if (counts.failed) parts.push(`${counts.failed} failed`);
-    if (counts.canceled) parts.push(`${counts.canceled} canceled`);
+    const n = (k: string, v: number) => t(k).replace("{n}", String(v));
+    if (active) parts.push(n("dl.qActive", active));
+    if (counts.queued) parts.push(n("dl.qQueued", counts.queued));
+    if (counts.done) parts.push(n("dl.qDone", counts.done));
+    if (counts.failed) parts.push(n("dl.qFailed", counts.failed));
+    if (counts.canceled) parts.push(n("dl.qCanceled", counts.canceled));
     return parts.join(" · ");
   })();
 
@@ -1608,13 +1609,7 @@ function QueueCard() {
       <h2>
         {t("dl.queue.title")} <span className="chip">parallel × {downloadWorkers}</span>
       </h2>
-      <p className="hint">
-        Paste one URL per line, hit Queue all. Each downloads at the best
-        available video + audio (mp4). {downloadWorkers} downloads run in
-        parallel; transcodes serialize (CPU + GPU pools run independently,
-        so a libx264 job and an NVENC job can overlap). Queue persists
-        across app restarts.
-      </p>
+      <p className="hint">{t("dl.queue.hint").replace("{n}", String(downloadWorkers))}</p>
 
       <textarea
         className="field-input"
@@ -1626,27 +1621,27 @@ function QueueCard() {
       />
 
       <div className="bar" style={{ borderTop: 0, padding: "8px 0 4px" }}>
-        <span className="label">audio mode</span>
+        <span className="label">{t("dl.audioMode")}</span>
         <select
           className="field-select"
           value={batchAudio}
           onChange={(e) => setBatchAudio(e.target.value as "off" | AudioFormat)}
         >
-          <option value="off">Off (video)</option>
+          <option value="off">{t("dl.audioOff")}</option>
           <option value="mp3">MP3 · 320k</option>
           <option value="m4a">M4A · AAC 256k</option>
           <option value="flac">FLAC · lossless</option>
         </select>
         <span className="hint-text">
           {batchAudio === "off"
-            ? "video downloads — transcode below applies"
-            : `extract audio to .${batchAudio} (transcode ignored)`}
+            ? t("dl.audioHintVideo")
+            : t("dl.audioHintExtract").replace("{ext}", batchAudio)}
         </span>
       </div>
 
       {batchAudio === "off" && (
         <div className="bar" style={{ borderTop: 0, padding: "0 0 4px" }}>
-          <span className="label">transcode all</span>
+          <span className="label">{t("dl.transcodeAll")}</span>
           <select
             className="field-select"
             value={batchTranscode}
@@ -1654,13 +1649,11 @@ function QueueCard() {
           >
             {TRANSCODE_PRESETS.map((p) => (
               <option key={p.value} value={p.value}>
-                {p.label}
+                {t(`preset.${p.value}`)}
               </option>
             ))}
           </select>
-          <span className="hint-text">
-            {TRANSCODE_PRESETS.find((p) => p.value === batchTranscode)?.hint}
-          </span>
+          <span className="hint-text">{t(`preset.${batchTranscode}.hint`)}</span>
         </div>
       )}
 
@@ -1669,7 +1662,7 @@ function QueueCard() {
           className={"btn" + (overrideLibrary ? " btn-override" : "")}
           onClick={queueAll}
           disabled={!urlsInput.trim()}
-          title={overrideLibrary ? "Queue into Library (Ctrl held)" : undefined}
+          title={overrideLibrary ? t("dl.queueIntoLibrary") : undefined}
         >
           {overrideLibrary ? `${t("dl.queueAll")} → ${t("topbar.library")}` : t("dl.queueAll")}
         </button>

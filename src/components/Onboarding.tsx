@@ -237,7 +237,6 @@ function ScreenConfigure(props: {
 }) {
   const { libraryRoot, setLibraryRoot, preset, setPreset } = props;
   const t = useT();
-  const presetMeta = TRANSCODE_PRESETS.find((p) => p.value === preset);
   return (
     <div className="onb-screen">
       <h2 className="onb-title">{t("onb.cfg.title")}</h2>
@@ -290,12 +289,12 @@ function ScreenConfigure(props: {
         >
           {TRANSCODE_PRESETS.map((p) => (
             <option key={p.value} value={p.value}>
-              {p.label}
+              {t(`preset.${p.value}`)}
             </option>
           ))}
         </select>
         <p className="onb-hint">
-          {presetMeta?.hint}
+          {t(`preset.${preset}.hint`)}
           <br />
           {t("onb.cfg.presetHint2")}
         </p>

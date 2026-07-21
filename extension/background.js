@@ -10,7 +10,7 @@
 // suspends + resumes them. All config reads pull from storage on
 // every event so we never act on stale data.
 
-import { loadConfig, enqueue, buildDeepLink } from "./bridge.js";
+import { loadConfig, enqueue, pingHealth } from "./bridge.js";
 import { installSniffer, getStreamsForTab, removeStream } from "./sniffer.js";
 
 // 1.2.4 — passive stream sniffer. Watches network traffic per tab
@@ -62,40 +62,50 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true; // async response
   }
 
-  // 1.13.x — cold-start launch. When the bridge is unreachable (app
-  // closed), the content script asks us to fire the mediahub:// deep
-  // link: the OS launches Media Hub and the app enqueues the URL on
-  // boot. Content scripts can't call chrome.tabs, so it happens here.
-  // Same tab-create-then-close dance the popup's launch button uses —
-  // the mediahub:// "page" never loads (the OS hijacks it), so the
-  // blank tab is cleaned up after a second.
-  if (msg.kind === "launch-app") {
+  // 1.13.x — cold-start. The content script has already fired the
+  // mediahub:// launch (in-page, so it carries the click's user
+  // activation — a background tab can't trigger a protocol handler).
+  // Here we WAIT for the app's bridge to actually come up, then send the
+  // real enqueue with the full quick-menu options. Waiting is the point:
+  // the previous version reported success the moment it asked the OS to
+  // launch, which lied whenever the launch silently failed.
+  if (msg.kind === "await-app-and-enqueue") {
     (async () => {
       const cfg = await loadConfig();
       if (!cfg.token) {
         sendResponse({ ok: false, error: "bridge token not configured" });
         return;
       }
-      const deepLink = buildDeepLink({
+      // Poll /health until the app answers. ~20s budget covers a cold
+      // start on a slow machine; the app is usually up in 2-5s.
+      const deadline = Date.now() + 20000;
+      let up = false;
+      while (Date.now() < deadline) {
+        const h = await pingHealth(cfg.url);
+        if (h.ok) {
+          up = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 700));
+      }
+      if (!up) {
+        sendResponse({ ok: false, error: "app didn't start" });
+        return;
+      }
+      const r = await enqueue({
+        url: cfg.url,
         token: cfg.token,
         target: msg.url,
         audioFormat:
           msg.mode === "mp3" || msg.mode === "m4a" || msg.mode === "flac"
             ? msg.mode
             : null,
+        source: msg.source || "content-script",
+        quality: msg.quality,
+        transcode: msg.transcode,
+        rename: msg.rename,
       });
-      chrome.tabs.create({ url: deepLink, active: false }, (newTab) => {
-        if (newTab?.id) {
-          setTimeout(() => {
-            try {
-              chrome.tabs.remove(newTab.id);
-            } catch {
-              /* tab already gone */
-            }
-          }, 1000);
-        }
-      });
-      sendResponse({ ok: true, launched: true });
+      sendResponse(r);
     })();
     return true; // async response
   }

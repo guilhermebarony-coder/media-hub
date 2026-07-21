@@ -2903,7 +2903,7 @@ function CardContextMenu({
                 {/* Drop only the ", NVIDIA GPU" tail so the submenu doesn't
                     jump wider than the parent — keeps "(NVENC)" as the
                     discriminator vs the "(optimized)" H.264. */}
-                {p.label.replace(", NVIDIA GPU", "")}
+                {t(`preset.${p.value}`).replace(/,\s*(NVIDIA GPU|GPU NVIDIA)/, "")}
               </button>
             ))}
         </>
