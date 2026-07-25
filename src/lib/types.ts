@@ -52,6 +52,23 @@ export type VideoMetadata = {
   formats: FormatOption[];
   chapters: Chapter[];
   storyboard: Storyboard | null;
+  /** 1.13.4 — media items of a multi-item post (Instagram carousel, a
+   *  tweet with several videos). Empty for ordinary single-video URLs;
+   *  when populated, the fields above mirror items[0]. */
+  items: PostItem[];
+};
+
+/** One slide of a multi-item post. `index` is yt-dlp's playlist_index,
+ *  which counts photo slides too — so it can have gaps (a carousel with
+ *  a still at position 6 yields 1-5, 7-10). It's what the backend feeds
+ *  to `--playlist-items`, so pass it through untouched. */
+export type PostItem = {
+  index: number;
+  id: string;
+  title: string;
+  duration_sec: number | null;
+  thumbnail: string | null;
+  formats: FormatOption[];
 };
 
 export type DownloadResult = {

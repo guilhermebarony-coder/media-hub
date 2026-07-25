@@ -101,6 +101,23 @@ pub(crate) fn resolve_preset(preset: &str) -> Result<(Vec<&'static str>, &'stati
     }
 }
 
+/// Does `ffmpeg -i` output describe at least one video stream?
+///
+/// We parse the probe text rather than shelling out to ffprobe because
+/// ffprobe isn't one of our bundled sidecars. Cover art counts as a
+/// video stream to ffmpeg, so an MP3 with embedded artwork reports
+/// `Video: mjpeg` — those are always flagged `attached pic`, and
+/// transcoding one is exactly the failure we're guarding against.
+fn probe_has_video(probe: &str) -> bool {
+    probe.lines().any(|l| {
+        let l = l.trim();
+        l.starts_with("Stream #")
+            && l.contains("Video:")
+            && !l.contains("attached pic")
+            && !l.contains("(attached pic)")
+    })
+}
+
 #[tauri::command]
 pub async fn media_transcode(
     app: AppHandle,
@@ -118,6 +135,26 @@ pub async fn media_transcode(
     }
 
     let (preset_args, out_ext, suffix) = resolve_preset(preset.trim())?;
+
+    // 1.13.4 — refuse a VIDEO preset on a source with no video track.
+    // Every preset we ship encodes video, and the command below maps
+    // `0:v:0` non-optionally, so an audio asset made ffmpeg bail with
+    // "Stream map '' matches no streams … Invalid argument" — which we
+    // then handed to the user verbatim. A tester hit exactly this by
+    // downloading a post as M4A (audio mode did the right thing) and
+    // then picking H.264 on it in the library. Probing first turns a
+    // cryptic ffmpeg abort into a sentence that says what to do.
+    let probe = diag::probe_media(&app, &src_path).await;
+    if !probe_has_video(&probe) {
+        return Err(format!(
+            "\"{}\" has no video track — it's an audio file. Transcode presets encode video; \
+             audio assets are already in an editable format.",
+            src_pb
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(src_path.as_str())
+        ));
+    }
 
     // Build output path: <stem>.<suffix>.<ext> next to the source.
     let parent = src_pb.parent().ok_or("source has no parent dir")?.to_path_buf();
@@ -336,6 +373,31 @@ pub async fn media_transcode(
 
 #[cfg(test)]
 mod tests {
+    // 1.13.4 — the guard that turns ffmpeg's "Stream map '' matches no
+    // streams" into a sentence. Fixtures are real `ffmpeg -i` output:
+    // the audio one is the exact probe from the tester's failed job.
+    #[test]
+    fn probe_detects_missing_video_track() {
+        let audio_only = "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'Video_by_pixrate_ [DIy4XV2o1CR].m4a':
+               Duration: 00:00:10.06, start: 0.000000, bitrate: 5 kb/s
+               Stream #0:0[0x1](und): Audio: aac (HE-AAC) (mp4a / 0x6134706D), 44100 Hz, stereo, fltp, 3 kb/s (default)";
+        assert!(!probe_has_video(audio_only), "audio-only must be rejected");
+
+        let with_video = "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
+               Duration: 00:00:13.25, start: 0.000000, bitrate: 1536 kb/s
+               Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p, 720x960, 1470 kb/s
+               Stream #0:1[0x2](und): Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz, stereo, fltp, 64 kb/s";
+        assert!(probe_has_video(with_video), "a real video must pass");
+
+        // Cover art is a "Video:" stream but not a picture we can encode.
+        let art = "Input #0, mp3, from 'song.mp3':
+               Stream #0:0: Audio: mp3, 44100 Hz, stereo, fltp, 320 kb/s
+               Stream #0:1: Video: mjpeg (Baseline), yuvj420p(pc), 600x600 [SAR 1:1 DAR 1:1], 90k tbr (attached pic)";
+        assert!(!probe_has_video(art), "cover art is not a video track");
+
+        assert!(!probe_has_video("(probe: ffmpeg not installed)"));
+    }
+
     use super::*;
 
     #[test]

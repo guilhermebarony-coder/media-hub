@@ -148,6 +148,13 @@ export type QueueJob = {
   /** 1.13.x — per-job title override (extension "rename" field). Used
    *  for the library row's title instead of the fetched metadata title. */
   titleOverride?: string;
+  /** 1.13.x — which media items of a multi-item post to fetch (an X
+   *  tweet with its own video + a quoted one, an Instagram carousel).
+   *  yt-dlp's 1-based comma list, passed as --playlist-items, so the
+   *  button you clicked downloads the video you were looking at.
+   *  1.13.4 widened this from a single index; jobs persisted before then
+   *  hold a bare number, hence the union. */
+  mediaIndex?: number | string;
   title?: string;
   channel?: string;
   thumbnail?: string | null;
@@ -203,6 +210,10 @@ export type StartSingleArgs = {
    *  step entirely (audio assets don't need NLE intermediates) and
    *  generates a waveform PNG instead of a frame thumbnail. */
   audioFormat?: AudioFormat | null;
+  /** 1.13.4 — which items of a multi-item post to download, as yt-dlp's
+   *  1-based comma list ("3", "1,3,5"). Set by the card's picker; leave
+   *  undefined to download every item of the post. */
+  mediaItems?: string | null;
 };
 
 /** Audio container we ship to yt-dlp's `--audio-format`. Each maps to
@@ -325,6 +336,8 @@ type DownloadsContextValue = {
       /** 1.13.x — per-job overrides from the extension quick menu. */
       maxQuality?: string;
       titleOverride?: string;
+      /** 1.13.x — 1-based media item for multi-video posts. */
+      mediaIndex?: number;
     },
   ) => void;
   cancelQueueJob: (id: string) => Promise<void>;
@@ -582,6 +595,7 @@ export function DownloadsProvider({
           projectId: job.projectId,
           audioFormat: job.audioFormat ?? null,
           filenameOverride: null,
+          mediaItems: job.mediaIndex == null ? null : String(job.mediaIndex),
         });
       } catch (e) {
         const msg = String(e);
@@ -850,6 +864,7 @@ export function DownloadsProvider({
           // 1.13.x — extension "rename": also names the FILE on disk,
           // not just the library row.
           filenameOverride: job.titleOverride ?? null,
+          mediaItems: job.mediaIndex == null ? null : String(job.mediaIndex),
         });
         dlRes = results[0];
       } catch (e) {
@@ -976,6 +991,7 @@ export function DownloadsProvider({
         audioFormat: opts.audioFormat ?? null,
         maxQualityOverride: opts.maxQuality,
         titleOverride: opts.titleOverride,
+        mediaIndex: opts.mediaIndex,
       }));
       setQueueJobs((prev) => [...prev, ...newJobs]);
     },
@@ -997,6 +1013,7 @@ export function DownloadsProvider({
         transcodePreset: args.transcodePreset,
         projectId: args.projectId,
         audioFormat: args.audioFormat ?? null,
+        mediaIndex: args.mediaItems ?? undefined,
         title: args.meta.title,
         channel: args.meta.channel ?? undefined,
         thumbnail: args.meta.thumbnail ?? null,
@@ -1124,6 +1141,7 @@ export function DownloadsProvider({
           projectId: args.projectId,
           audioFormat: args.audioFormat ?? null,
           filenameOverride: null,
+          mediaItems: null,
         });
 
         // Audio mode forces preset to "none" — video transcode presets

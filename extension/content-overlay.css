@@ -216,6 +216,21 @@
   right: auto !important;
 }
 
+/* 1.13.4 — THE hide switch. Every declaration in this file is
+   !important to beat host-site resets, including `display:
+   inline-flex` on .mh-overlay-btn above — and an !important rule from a
+   stylesheet beats an element's inline style. So the JS line that hid
+   buttons (`btn.style.display = "none"`) was silently inert from the
+   day the overlay shipped: every button stayed rendered, kept alive
+   only by `opacity: 0`. Any button that then picked up .mh-visible —
+   which sticks whenever a slide slides out from under the cursor
+   without firing pointerleave — appeared on screen, frozen at whatever
+   coordinates it last had. That was the ghost button.
+   Two class selectors, so this outranks the rules above. */
+.mh-overlay-btn.mh-hidden {
+  display: none !important;
+}
+
 /* 1.13.x — quick options menu (Ctrl/Cmd+click). Styled as a Media Hub
    CARD: same Geist font, same surface/line tokens as the app
    (--bg-1 #131316 / --line #26262a / radius 6px), neutral border (no
@@ -267,6 +282,11 @@
   justify-content: space-between !important;
   gap: 10px !important;
   margin: 0 !important;
+}
+/* 1.13.4 — see .mh-hidden: the rule above is !important, so the audio
+   mode's inline `display: none` never took. Two classes to outrank it. */
+.mh-menu-row.mh-row-off {
+  display: none !important;
 }
 .mh-menu-row > span {
   font-size: 12px !important;

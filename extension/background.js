@@ -56,6 +56,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         quality: msg.quality,
         transcode: msg.transcode,
         rename: msg.rename,
+        mediaIndex: msg.mediaIndex,
       });
       sendResponse(r);
     })();
@@ -104,6 +105,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         quality: msg.quality,
         transcode: msg.transcode,
         rename: msg.rename,
+        mediaIndex: msg.mediaIndex,
       });
       sendResponse(r);
     })();

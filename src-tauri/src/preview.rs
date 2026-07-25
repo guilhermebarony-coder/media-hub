@@ -70,6 +70,13 @@ pub async fn preview_proxy(
     url: String,
     video_id: String,
     max_height: u32,
+    // 1.13.4 — which item of a multi-item post to proxy (yt-dlp's
+    // 1-based playlist index). A carousel exposes every slide under one
+    // URL, so without this the proxy always downloaded slide 1 — and
+    // cached it under the SELECTED slide's video_id, i.e. the right key
+    // holding the wrong video. The scrubber then previewed item 1 no
+    // matter which item you picked.
+    media_items: Option<String>,
 ) -> Result<PreviewProxy, String> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
@@ -142,6 +149,10 @@ pub async fn preview_proxy(
         "-o".into(),
         tmpl_str,
     ];
+    if let Some(spec) = media_items.as_deref().and_then(crate::sanitize_playlist_items) {
+        opts.push("--playlist-items".into());
+        opts.push(spec);
+    }
     if let Some(ff) = ffmpeg_path.as_ref() {
         opts.push("--ffmpeg-location".into());
         opts.push(ff.to_string_lossy().to_string());

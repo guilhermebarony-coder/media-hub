@@ -130,6 +130,7 @@ function BridgeListener() {
           quality: string | null;
           transcode: string | null;
           rename: string | null;
+          media_index: number | null;
         }>("bridge:enqueue", (e) => {
           const p = e.payload;
           if (!p || !p.url) return;
@@ -152,6 +153,10 @@ function BridgeListener() {
                 : null,
             maxQuality: p.quality && /^\d+$/.test(p.quality) ? p.quality : undefined,
             titleOverride: p.rename && p.rename.trim() ? p.rename.trim() : undefined,
+            mediaIndex:
+              typeof p.media_index === "number" && p.media_index >= 1
+                ? p.media_index
+                : undefined,
           });
           console.log(`[bridge] enqueued from ${p.source}: ${p.url}`);
         });

@@ -833,6 +833,97 @@ textarea.field-input {
 }
 .meta-toggle:hover { color: var(--text-0); }
 
+/* 1.13.4 — multi-item post picker (Instagram carousel, tweet with
+   several videos). A horizontal thumbnail strip; the trailing tile is
+   "all". Scrolls sideways rather than wrapping so a 10-slide carousel
+   never pushes the format table off-screen. */
+.dl-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dl-items-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.dl-items-toggle {
+  margin-left: auto;
+  padding: 3px 9px;
+  font-size: 11px;
+}
+.dl-items-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.dl-item {
+  position: relative;
+  flex: 0 0 auto;
+  width: 78px;
+  height: 78px;
+  padding: 0;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.1s ease, opacity 0.1s ease;
+  opacity: 0.72;
+}
+.dl-item:hover { opacity: 1; }
+.dl-item.active {
+  border-color: var(--accent);
+  opacity: 1;
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.dl-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.dl-item-noimg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-1);
+}
+.dl-item-badge,
+.dl-item-dur {
+  position: absolute;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.68);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.dl-item-badge { top: 3px; left: 3px; font-weight: 600; }
+.dl-item-dur { bottom: 3px; right: 3px; }
+/* Checkbox affordance — the tiles are a multi-select, so an unchecked
+   box has to be visible before you hover anything. */
+.dl-item-check {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 15px;
+  height: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--bg-0);
+}
+.dl-item.active .dl-item-check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
 /* 1.2.0 — Download page: Video | Audio mode tabs. Sits above the
    format picker. Eagle-tabs look — pill row with lime underline on
    active. */

@@ -270,6 +270,20 @@ export const en: Record<string, string> = {
   "dl.playlistNote": "This URL is also part of a playlist. By default we'll just download this one video.",
   "dl.video": "Video",
   "dl.audio": "Audio",
+  // 1.13.4 — carousel / multi-video post picker.
+  "dl.postItems": "Items in this post",
+  "dl.postItemsCount": "selected",
+  "dl.postItemsAll": "Select all",
+  "dl.postItemsNone": "Clear",
+  "dl.postItemsEmpty": "Pick at least one item to download.",
+  // 1.13.4 — pre-download warnings.
+  "dl.warnLabel": "heads up",
+  "dl.warnAudioOnly":
+    "This format has no video track — you'd get an audio file. Pick a row with a vcodec, or switch to the Audio tab.",
+  "dl.warnNleCodec":
+    "After Effects doesn't import this codec. Pick a transcode preset below and it lands edit-ready.",
+  "dl.postItemsTrimNote":
+    "Several items selected — each is downloaded whole. Pick a single item to trim it.",
   "dl.show": "Show",
   "dl.hide": "Hide",
   "dl.formatList": "format list",

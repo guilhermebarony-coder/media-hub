@@ -52,6 +52,12 @@ type ScrubberProps = {
   storyboard?: Storyboard | null;
   /** YouTube chapters/markers — shown as bar ticks + a jump list. */
   chapters?: Chapter[];
+  /** 1.13.4 — which item of a multi-item post (Instagram carousel) is
+   *  being previewed, as yt-dlp's 1-based index. The post URL alone
+   *  resolves to slide 1, so without this the scrubber previewed the
+   *  first slide no matter which one the card was showing. Null for
+   *  ordinary single-video URLs. */
+  mediaItems?: string | null;
   /** Committed segments. Empty array = full-video download.
    *  N entries = N segment trims from the same source. */
   segments: Segment[];
@@ -69,6 +75,7 @@ export function Scrubber(props: ScrubberProps) {
     fpsHint,
     storyboard,
     chapters,
+    mediaItems = null,
     segments,
     onSegmentsChange,
   } = props;
@@ -177,11 +184,11 @@ export function Scrubber(props: ScrubberProps) {
     setDraftIn(null);
     if (!sourceUrl.trim()) return;
     setResolving(true);
-    invoke<StreamUrl>("yt_resolve_stream_url", { url: sourceUrl })
+    invoke<StreamUrl>("yt_resolve_stream_url", { url: sourceUrl, mediaItems })
       .then((res) => setStreamUrl(res.url))
       .catch((e) => setStreamErr(String(e)))
       .finally(() => setResolving(false));
-  }, [sourceUrl, durationHint]);
+  }, [sourceUrl, durationHint, mediaItems]);
 
   // EXPERIMENT — fetch a local proxy in the background and swap to it.
   // Runs in parallel with the stream resolve above; on success we swap
@@ -255,6 +262,7 @@ export function Scrubber(props: ScrubberProps) {
       url: sourceUrl,
       videoId,
       maxHeight: previewHeight,
+      mediaItems,
     })
       .then((res) => {
         if (cancelled) return;
@@ -270,7 +278,7 @@ export function Scrubber(props: ScrubberProps) {
     return () => {
       cancelled = true;
     };
-  }, [sourceUrl, videoId, previewHeight]);
+  }, [sourceUrl, videoId, previewHeight, mediaItems]);
 
   // The source the <video> actually uses right now: the local proxy when
   // ready, else the remote stream (Tier 0 fallback).
@@ -548,7 +556,7 @@ export function Scrubber(props: ScrubberProps) {
       retryAttemptRef.current = 0;
       setStreamUrl(null);
       setResolving(true);
-      invoke<StreamUrl>("yt_resolve_stream_url", { url: sourceUrl })
+      invoke<StreamUrl>("yt_resolve_stream_url", { url: sourceUrl, mediaItems })
         .then((res) => setStreamUrl(res.url))
         .catch((e) => setStreamErr(String(e)))
         .finally(() => setResolving(false));

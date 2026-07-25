@@ -136,6 +136,11 @@ struct EnqueueBody {
     transcode: Option<String>,
     #[serde(default)]
     rename: Option<String>,
+    /// 1.13.x — 1-based media item for multi-video posts (a tweet with
+    /// its own video plus a quoted one). Without it the status URL is
+    /// ambiguous and every button grabs the first video.
+    #[serde(default)]
+    media_index: Option<u32>,
 }
 
 /// Body for POST /cookies — the extension's "Sync cookies" button. Warms
@@ -162,6 +167,7 @@ struct EnqueueEvent {
     quality: Option<String>,
     transcode: Option<String>,
     rename: Option<String>,
+    media_index: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -278,6 +284,7 @@ async fn enqueue_handler(
         quality: body.quality,
         transcode: body.transcode,
         rename: body.rename,
+        media_index: body.media_index,
     };
 
     // Fire to the renderer. If the emit fails the queue isn't going

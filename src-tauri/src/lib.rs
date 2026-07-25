@@ -371,6 +371,37 @@ fn sum_live_dir_bytes(dir: &std::path::Path, video_id: &str) -> u64 {
         .unwrap_or(0)
 }
 
+/// 1.13.4 — validate a `--playlist-items` spec before it becomes a
+/// yt-dlp argument. Accepts only a comma list of 1-based indices
+/// ("3", "1,3,5"); anything else — ranges, negatives, yt-dlp's slice
+/// syntax, or an injection attempt from the bridge — yields None, which
+/// means "no --playlist-items" (download the whole post) rather than
+/// something we didn't intend. Deliberately narrower than yt-dlp's own
+/// grammar: the UI only ever produces plain lists.
+pub fn sanitize_playlist_items(raw: &str) -> Option<String> {
+    let mut out: Vec<String> = Vec::new();
+    for part in raw.split(',') {
+        let p = part.trim();
+        if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        // Reject 0 (yt-dlp indices are 1-based) and absurd values.
+        let n: u32 = p.parse().ok()?;
+        if n < 1 {
+            return None;
+        }
+        let s = n.to_string();
+        if !out.contains(&s) {
+            out.push(s);
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out.join(","))
+    }
+}
+
 /// 1.13.x — make an arbitrary user string safe as a Windows filename.
 /// The extension's "rename" field is untrusted input that goes straight
 /// into a path, so this strips everything that could escape the target
@@ -567,6 +598,18 @@ async fn yt_download(
     // server-side (see sanitize_filename) — the extension is untrusted
     // input and this goes straight into a path.
     filename_override: Option<String>,
+    // 1.13.x — which media items of a multi-item post to grab, as a
+    // 1-based comma list ("3" or "1,3,5"). A tweet carrying two videos
+    // (its own + a quoted one), or an Instagram carousel, exposes them
+    // ALL under a single URL — yt-dlp enumerates them as playlist
+    // entries. Without this the URL is ambiguous: every button
+    // downloaded entry 1, and pasting a carousel link dumped all ten
+    // slides. Maps to `--playlist-items`.
+    //
+    // 1.13.4 — widened from a single index to a list so the card's
+    // picker can send a subset. Validated below: this reaches us from
+    // the extension bridge, and it becomes a yt-dlp argument.
+    media_items: Option<String>,
 ) -> Result<Vec<DownloadResult>, String> {
     // `format_spec` is an opaque yt-dlp -f argument — could be a single
     // format id ("18", "313") or a composed spec ("313+bestaudio/best").
@@ -646,7 +689,16 @@ async fn yt_download(
         .map(sanitize_filename)
         .filter(|s| !s.is_empty())
     {
-        Some(name) => dest.join(format!("{name}.%(ext)s")),
+        // `%` is yt-dlp's template sigil, so a literal one in the user's
+        // name has to be doubled or it eats the following characters as
+        // a field. The `playlist_index&` clause expands to `_2`, `_3`, …
+        // ONLY for multi-item posts (empty for a plain single video):
+        // without it, downloading a whole carousel under one custom name
+        // wrote all ten slides over the same file.
+        Some(name) => dest.join(format!(
+            "{}%(playlist_index&_{{}}|)s.%(ext)s",
+            name.replace('%', "%%")
+        )),
         None => {
             let user_template = settings::rename_template(&settings);
             dest.join(settings::build_filename_template(&user_template))
@@ -745,6 +797,15 @@ async fn yt_download(
     if let Some(ref ff) = ffmpeg_path_str {
         args.push("--ffmpeg-location");
         args.push(ff.as_str());
+    }
+    // 1.13.x — pick one media item out of a multi-video post. Verified to
+    // coexist with --no-playlist above it (that flag is about "URL is a
+    // video AND a playlist"; this selects within the post's own media).
+    let media_items_str;
+    if let Some(spec) = media_items.as_deref().and_then(sanitize_playlist_items) {
+        media_items_str = spec;
+        args.push("--playlist-items");
+        args.push(media_items_str.as_str());
     }
     // Cookies extras (0.8.B / 1.4.x per-site) for age-restricted /
     // following-only content. Per-platform override resolved from the
@@ -1404,6 +1465,10 @@ async fn yt_resolve_stream_url(
     app: AppHandle,
     settings: tauri::State<'_, settings::SettingsState>,
     url: String,
+    // 1.13.4 — item of a multi-item post to preview. `-g` prints one URL
+    // per entry and we take the first, so a carousel always resolved to
+    // slide 1 regardless of which slide the card was showing.
+    media_items: Option<String>,
 ) -> Result<StreamUrl, String> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
@@ -1427,6 +1492,10 @@ async fn yt_resolve_stream_url(
         "-f".into(),
         format_spec.into(),
     ];
+    if let Some(spec) = media_items.as_deref().and_then(sanitize_playlist_items) {
+        opts.push("--playlist-items".into());
+        opts.push(spec);
+    }
     opts.extend(yt_args.iter().cloned());
     opts.extend(js_runtime_args(&app)); // Deno JS runtime for sig/nsig solving
 
@@ -2077,6 +2146,34 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 1.13.4 — the item spec becomes a yt-dlp argument and can arrive
+    // from the extension bridge, so anything that isn't a plain list of
+    // 1-based indices must degrade to "no selection", never pass through.
+    #[test]
+    fn playlist_items_accepts_only_plain_index_lists() {
+        assert_eq!(sanitize_playlist_items("3"), Some("3".into()));
+        assert_eq!(sanitize_playlist_items("1,3,5"), Some("1,3,5".into()));
+        assert_eq!(sanitize_playlist_items(" 1 , 2 "), Some("1,2".into()));
+        // Duplicates would make yt-dlp download the same item twice.
+        assert_eq!(sanitize_playlist_items("2,2,4"), Some("2,4".into()));
+        // Everything below is rejected outright.
+        for bad in [
+            "",
+            "0",          // yt-dlp indices start at 1
+            "1-5",        // ranges: UI never emits them
+            "-1",
+            "1,",
+            ",1",
+            "1;rm -rf /", // injection shapes
+            "--flat-playlist",
+            "1 2",
+            "abc",
+            "1.5",
+        ] {
+            assert_eq!(sanitize_playlist_items(bad), None, "must reject {bad:?}");
+        }
+    }
 
     // 1.13.x — the extension's "rename" field is untrusted input that
     // becomes a filesystem path. These lock the escape hatches shut.

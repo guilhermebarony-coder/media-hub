@@ -25,9 +25,30 @@ pub struct VideoMetadata {
     #[serde(default)]
     pub chapters: Vec<Chapter>,
     pub storyboard: Option<Storyboard>,
+    /// 1.13.4 — every media item of a multi-item post (Instagram
+    /// carousel, tweet carrying several videos). Empty for ordinary
+    /// single-video URLs; the UI only shows a picker when len() > 1.
+    /// The fields above describe items[0] so the card renders the same
+    /// way it always has before the user picks something else.
+    #[serde(default)]
+    pub items: Vec<PostItem>,
 }
 
+/// One selectable media item of a multi-item post. `index` is yt-dlp's
+/// 1-based `playlist_index`, which is what `--playlist-items` takes —
+/// and it counts PHOTOS too, so a carousel of 10 slides whose #6 is a
+/// still yields indices 1-5,7-10. Never renumber it.
 #[derive(Serialize)]
+pub struct PostItem {
+    pub index: u32,
+    pub id: String,
+    pub title: String,
+    pub duration_sec: Option<f64>,
+    pub thumbnail: Option<String>,
+    pub formats: Vec<FormatOption>,
+}
+
+#[derive(Serialize, Clone)]
 pub struct FormatOption {
     pub id: String,
     pub ext: String,
@@ -92,6 +113,10 @@ struct RawYtDlp {
     formats: Vec<RawFormat>,
     #[serde(default, deserialize_with = "null_default")]
     chapters: Vec<RawChapter>,
+    /// Present only when the URL resolved to several entries (carousel /
+    /// multi-video post). Gaps are normal — see PostItem::index.
+    #[serde(default)]
+    playlist_index: Option<u32>,
 }
 
 /// Deserialize a Vec field that yt-dlp may emit as JSON `null` rather than
@@ -285,15 +310,32 @@ pub async fn yt_fetch_metadata(
     // serde_json::from_str only consumes the first and errors out
     // with "trailing characters at line N column 1" on the rest.
     //
-    // Streaming parser to the rescue — take the first complete
-    // RawYtDlp and ignore the trailing values. The download command
-    // (`yt_download`) handles multi-media tweets on its own; here
-    // we just need representative metadata for the card.
-    let raw: RawYtDlp = serde_json::Deserializer::from_str(&stdout)
-        .into_iter::<RawYtDlp>()
-        .next()
-        .ok_or_else(|| "yt-dlp returned no JSON".to_string())?
-        .map_err(|e| format!("JSON parse failed: {e}"))?;
+    // Streaming parser to the rescue — serde only consumes the first
+    // value, so we iterate to collect every entry.
+    //
+    // 1.13.4 — we used to keep entry 1 and drop the rest, which made the
+    // card lie about Instagram carousels: it showed one video while the
+    // download (yt-dlp enumerates the whole post — `--no-playlist` does
+    // NOT collapse a carousel) pulled all 10 slides. Now every entry
+    // becomes a selectable item and the UI sends `--playlist-items`.
+    // Costs nothing extra: this same call already extracted them all.
+    let mut raws: Vec<RawYtDlp> = Vec::new();
+    for parsed in serde_json::Deserializer::from_str(&stdout).into_iter::<RawYtDlp>() {
+        match parsed {
+            Ok(r) => raws.push(r),
+            // A malformed FIRST value is fatal; later ones we keep what
+            // we have (a photo slide or a geo-blocked entry shouldn't
+            // sink the whole fetch).
+            Err(e) if raws.is_empty() => return Err(format!("JSON parse failed: {e}")),
+            Err(_) => break,
+        }
+    }
+    if raws.is_empty() {
+        return Err("yt-dlp returned no JSON".to_string());
+    }
+    let rest = raws.split_off(1);
+    let raw = raws.pop().expect("checked non-empty above");
+    let first_index = raw.playlist_index.unwrap_or(1);
 
     // Extract storyboards + chapters before raw.formats is consumed.
     let storyboard = pick_storyboard(&raw.formats);
@@ -311,6 +353,34 @@ pub async fn yt_fetch_metadata(
         .collect();
     let formats: Vec<FormatOption> = raw.formats.into_iter().filter_map(project_format).collect();
 
+    // Single-video URLs keep an empty `items` so the UI stays untouched.
+    let items: Vec<PostItem> = if rest.is_empty() {
+        Vec::new()
+    } else {
+        let mut v = Vec::with_capacity(rest.len() + 1);
+        v.push(PostItem {
+            index: first_index,
+            id: raw.id.clone(),
+            title: raw.title.clone(),
+            duration_sec: raw.duration,
+            thumbnail: raw.thumbnail.clone(),
+            formats: formats.clone(),
+        });
+        for (i, r) in rest.into_iter().enumerate() {
+            v.push(PostItem {
+                // Fall back to positional numbering only if yt-dlp gave
+                // us no index at all (shouldn't happen for real posts).
+                index: r.playlist_index.unwrap_or((i + 2) as u32),
+                id: r.id,
+                title: r.title,
+                duration_sec: r.duration,
+                thumbnail: r.thumbnail,
+                formats: r.formats.into_iter().filter_map(project_format).collect(),
+            });
+        }
+        v
+    };
+
     Ok(VideoMetadata {
         id: raw.id,
         title: raw.title,
@@ -323,6 +393,7 @@ pub async fn yt_fetch_metadata(
         formats,
         chapters,
         storyboard,
+        items,
     })
 }
 
@@ -330,6 +401,40 @@ pub async fn yt_fetch_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 1.13.4 — an Instagram carousel comes back as one JSON object per
+    /// slide, each carrying its own `playlist_index`. We used to keep
+    /// the first and drop the rest, so the card showed one video while
+    /// the download pulled the whole post. Locks both the streaming
+    /// parse and the field name `--playlist-items` is fed from.
+    #[test]
+    fn metadata_collects_every_entry_of_a_multi_item_post() {
+        let stdout = concat!(
+            r#"{"id":"a","title":"t","playlist_index":1,"duration":2.3}"#,
+            "\n",
+            r#"{"id":"b","title":"t","playlist_index":2,"duration":1.4}"#,
+            "\n",
+            // Index 3 is a photo slide: yt-dlp errors on stderr and emits
+            // no object, so indices legitimately skip.
+            r#"{"id":"c","title":"t","playlist_index":4,"duration":13.25}"#,
+            "\n",
+        );
+        let raws: Vec<RawYtDlp> = serde_json::Deserializer::from_str(stdout)
+            .into_iter::<RawYtDlp>()
+            .map(|r| r.expect("each entry must parse"))
+            .collect();
+        assert_eq!(raws.len(), 3, "all entries must survive, not just the first");
+        let idx: Vec<Option<u32>> = raws.iter().map(|r| r.playlist_index).collect();
+        assert_eq!(idx, vec![Some(1), Some(2), Some(4)], "gaps must be preserved");
+    }
+
+    /// A plain single-video URL has no playlist_index — that's what makes
+    /// `items` stay empty and the UI skip the picker entirely.
+    #[test]
+    fn metadata_single_video_has_no_playlist_index() {
+        let raw: RawYtDlp = serde_json::from_str(r#"{"id":"a","title":"t"}"#).unwrap();
+        assert_eq!(raw.playlist_index, None);
+    }
 
     #[test]
     fn metadata_tolerates_null_chapters() {

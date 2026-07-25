@@ -193,10 +193,13 @@
       { v: "h264_nvenc_mp4", l: "H.264 NVENC" },
     ]);
     // Audio types have no quality/transcode meaning — hide those rows.
+    // Class, not inline display: .mh-menu-row is `display: flex
+    // !important`, which an inline style can't override (same trap that
+    // made the overlay button impossible to hide — see positionBtn).
     const syncType = (v) => {
       const audio = v !== "video";
-      qualityRow.style.display = audio ? "none" : "";
-      transcodeRow.style.display = audio ? "none" : "";
+      qualityRow.classList.toggle("mh-row-off", audio);
+      transcodeRow.classList.toggle("mh-row-off", audio);
     };
     const typeSel = makeSelect(
       "type",
@@ -271,7 +274,7 @@
     }, 0);
   }
 
-  function makeButton({ targetUrl, mode = "video", source }) {
+  function makeButton({ targetUrl, mode = "video", source, mediaIndex }) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "mh-overlay-btn mh-overlay-btn--portal";
@@ -303,6 +306,7 @@
           quality: extras.quality,
           transcode: extras.transcode,
           rename: extras.rename,
+          mediaIndex,
         });
         if (reply?.ok) {
           btn.classList.remove("mh-sending");
@@ -332,6 +336,7 @@
               quality: extras.quality,
               transcode: extras.transcode,
               rename: extras.rename,
+              mediaIndex,
             });
             btn.classList.remove("mh-sending");
             if (r?.ok) {
@@ -446,7 +451,131 @@
    * Returns a cleanup function — call it when the video is removed
    * to detach observers and the button.
    */
-  function trackVideo(video, btn) {
+  // 1.13.x — how much of the video is ACTUALLY on screen after every
+  // clipping ancestor has had its say, as a 0–1 fraction of its area.
+  //
+  // A viewport-only test isn't enough: an Instagram carousel keeps the
+  // neighbouring slides in the DOM, sitting at viewport coordinates but
+  // visually cut off by the carousel's `overflow: hidden`. Those slides
+  // looked "visible", so every one of them got its own button — hence a
+  // pile of buttons on a multi-video post, some landing over unrelated
+  // page furniture. Intersecting with the clipping ancestors leaves only
+  // the slide the user is actually looking at.
+  // Walking ancestors with getComputedStyle forces a style recalc, and
+  // this runs per video per animation frame while scrolling — so cache
+  // WHICH ancestors clip (that rarely changes) and re-read only their
+  // rects each call. Refreshed on a TTL, or if the chain went stale.
+  const clipperCache = new WeakMap();
+  const CLIPPER_TTL_MS = 1000;
+  function clippersFor(el) {
+    const hit = clipperCache.get(el);
+    const now = Date.now();
+    if (hit && now - hit.at < CLIPPER_TTL_MS && hit.list.every((n) => n.isConnected)) {
+      return hit.list;
+    }
+    const list = [];
+    let node = el.parentElement;
+    while (node && node !== document.body && node !== document.documentElement) {
+      const cs = getComputedStyle(node);
+      if (/hidden|clip|auto|scroll/.test(`${cs.overflow}${cs.overflowX}${cs.overflowY}`)) {
+        list.push(node);
+      }
+      node = node.parentElement;
+    }
+    clipperCache.set(el, { at: now, list });
+    return list;
+  }
+
+  function visibleFraction(el, r, scope) {
+    if (r.width <= 0 || r.height <= 0) return 0;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    // Denominator is the area that COULD be on screen, not the element's
+    // full area — otherwise a video taller than the viewport (a portrait
+    // reel on a laptop) could never clear the 50% bar and would never get
+    // a button at all.
+    const area = Math.min(r.width, vw) * Math.min(r.height, vh);
+    if (area <= 0) return 0;
+    let { left, top, right, bottom } = r;
+    // The viewport is the outermost clipper, and the one that matters
+    // most here: a carousel's previous slide sits at negative x, fully
+    // off screen. Intersecting only with `overflow: hidden` ancestors
+    // scored it 1.0 whenever that ancestor chain wasn't what we expected
+    // — tying with the slide actually on screen, so neither out-ranked
+    // the other and BOTH kept a button. That tie was the ghost.
+    left = Math.max(left, 0);
+    top = Math.max(top, 0);
+    right = Math.min(right, vw);
+    bottom = Math.min(bottom, vh);
+    // The post box is a clipper we can actually trust. Instagram's
+    // article is exactly one slide wide, so a carousel neighbour — which
+    // lives outside it, on screen but in the next post's column of empty
+    // space — scores 0 here even when the real `overflow: hidden`
+    // ancestor eludes us. Mid-swipe it also separates the incoming slide
+    // (>50% inside the post) from the outgoing one (<50%), which the
+    // viewport alone can't do: both are on screen at that moment.
+    //
+    // Guarded: only clip to a scope that's actually big enough to hold
+    // the video, so a site whose hover container is some small header
+    // can't zero out every button.
+    if (scope) {
+      const sr = scope.getBoundingClientRect();
+      if (sr.width >= r.width * 0.9 && sr.height >= r.height * 0.9) {
+        left = Math.max(left, sr.left);
+        top = Math.max(top, sr.top);
+        right = Math.min(right, sr.right);
+        bottom = Math.min(bottom, sr.bottom);
+      }
+    }
+    for (const clip of clippersFor(el)) {
+      const cr = clip.getBoundingClientRect();
+      // A zero-size clipper (collapsed/detached) would falsely zero the
+      // result — skip those rather than hide a legitimate button.
+      if (cr.width <= 0 || cr.height <= 0) continue;
+      left = Math.max(left, cr.left);
+      top = Math.max(top, cr.top);
+      right = Math.min(right, cr.right);
+      bottom = Math.min(bottom, cr.bottom);
+    }
+    const w = Math.max(0, right - left);
+    const h = Math.max(0, bottom - top);
+    // Cap at 1 — with the clamped denominator an oversized element that's
+    // filling the screen can otherwise score slightly above it.
+    return Math.min(1, (w * h) / area);
+  }
+
+  // 1.13.4 — carousel arbitration: among the videos of the SAME POST,
+  // a slide loses its button to any sibling that's more visible.
+  //
+  // Scope is the post container (the <article>, i.e. the hoverContainer
+  // the site script already computes) — NOT the clipping ancestor, which
+  // is what the first attempt used and why the ghost survived: when a
+  // carousel gives each slide its own overflow-hidden wrapper, that
+  // wrapper holds exactly one <video>, so there were never any "peers"
+  // to arbitrate against and every slide kept its button.
+  //
+  // Comparing fractions (rather than picking one winner outright) is what
+  // keeps X working: a tweet showing two videos side by side has BOTH at
+  // fraction ~1.0, neither out-ranks the other, so both keep their button
+  // and media_index still decides which one you get. In a carousel the
+  // off-screen neighbour is always strictly less visible than the slide
+  // you're looking at, so it always loses.
+  function isDominantVideo(el, myFraction, scope) {
+    if (!scope) return true;
+    const peers = scope.querySelectorAll("video");
+    if (peers.length < 2) return true;
+    for (const p of peers) {
+      if (p === el) continue;
+      const pr = p.getBoundingClientRect();
+      if (pr.width < 80 || pr.height < 80) continue;
+      // Strictly greater (with a small epsilon) so an exact tie can't
+      // hide both and leave the post with no button at all.
+      if (visibleFraction(p, pr, scope) > myFraction + 0.01) return false;
+    }
+    return true;
+  }
+
+  function trackVideo(video, btn, scope) {
     let pendingFrame = null;
 
     const positionBtn = () => {
@@ -467,22 +596,40 @@
       // pill glues itself to the corner over whatever's on screen. Real
       // players are always far larger than this.
       const bigEnough = r.width >= 80 && r.height >= 80;
+      // Carousels: only the slide actually on screen gets a button. The
+      // 0.5 floor keeps the current slide during a swipe animation while
+      // dropping the neighbours the container clips away.
+      const myFraction = visibleFraction(video, r, scope);
+      const mostlyUnclipped = myFraction >= 0.5;
       const visible =
         !coveredByModal &&
         bigEnough &&
+        mostlyUnclipped &&
+        isDominantVideo(video, myFraction, scope) &&
         r.bottom > 0 &&
         r.top < window.innerHeight &&
         r.right > 0 &&
         r.left < window.innerWidth;
-      // Always apply display from the CURRENT visibility — never
-      // gate it behind a "changed" check. The button starts hidden
-      // (set at attach time); a "not visible" video must explicitly
-      // KEEP it hidden, otherwise it falls back to its CSS default
-      // position (top-left corner) and lingers there at opacity:0,
-      // revealing on any hover over that corner. This was the root
-      // cause of the always-present corner ghost.
-      btn.style.display = visible ? "" : "none";
-      if (!visible) return;
+      // Always apply visibility from the CURRENT geometry — never gate
+      // it behind a "changed" check. The button starts hidden (set at
+      // attach time); a "not visible" video must explicitly KEEP it
+      // hidden, otherwise it falls back to its CSS default position
+      // (top-left corner) and lingers there.
+      //
+      // 1.13.4 — toggles a CLASS, not the inline display. The overlay
+      // stylesheet sets `display: inline-flex !important`, which beats
+      // an inline style, so `btn.style.display = "none"` never hid
+      // anything: hidden buttons stayed rendered at their last
+      // coordinates, invisible only through `opacity: 0`. When
+      // .mh-visible got stuck on one (a slide leaving from under the
+      // cursor fires no pointerleave) it showed up as the ghost.
+      btn.classList.toggle("mh-hidden", !visible);
+      if (!visible) {
+        // Drop the hover-reveal too, so a stuck class can't light up a
+        // button we've decided isn't showing.
+        btn.classList.remove("mh-visible");
+        return;
+      }
       // top-right of video — the universal CSS adds translateY(-50%)
       // so the center of the pill lands on the video's top edge.
       btn.style.top = `${r.top}px`;
@@ -498,6 +645,14 @@
     const onResize = schedule;
     window.addEventListener("scroll", onScroll, { capture: true, passive: true });
     window.addEventListener("resize", onResize, { passive: true });
+    // Carousels move by CSS transform, which fires none of the events
+    // above — so without this the button only catches up on the ~300ms
+    // poll and can sit at a stale position meanwhile. Re-check the moment
+    // any transition/animation on the page settles (capture: these don't
+    // bubble reliably from arbitrary descendants).
+    const onAnimEnd = schedule;
+    document.addEventListener("transitionend", onAnimEnd, { capture: true, passive: true });
+    document.addEventListener("animationend", onAnimEnd, { capture: true, passive: true });
 
     const ro = new ResizeObserver(schedule);
     ro.observe(video);
@@ -534,6 +689,8 @@
     function cleanup() {
       window.removeEventListener("scroll", onScroll, { capture: true });
       window.removeEventListener("resize", onResize);
+      document.removeEventListener("transitionend", onAnimEnd, { capture: true });
+      document.removeEventListener("animationend", onAnimEnd, { capture: true });
       ro.disconnect();
       io.disconnect();
       cleanupObs.disconnect();
@@ -559,16 +716,20 @@
    *
    * Returns the cleanup function from trackVideo.
    */
-  function attachPortalButton({ video, targetUrl, source, hoverContainer, mode }) {
-    const btn = makeButton({ targetUrl, mode, source });
+  function attachPortalButton({ video, targetUrl, source, hoverContainer, mode, mediaIndex }) {
+    const btn = makeButton({ targetUrl, mode, source, mediaIndex });
     // Start hidden — trackVideo's first positionBtn() reveals it only
     // if the video is actually a visible, real-sized player. Prevents
     // the button flashing at its CSS-default corner before the first
-    // geometry check runs.
-    btn.style.display = "none";
+    // geometry check runs. (Class, not inline display — see positionBtn.)
+    btn.classList.add("mh-hidden");
     ensureLayer().appendChild(btn);
 
-    const show = () => btn.classList.add("mh-visible");
+    // Never reveal a button geometry has ruled out — otherwise hovering
+    // anywhere on a carousel lights up the off-screen slides' buttons too.
+    const show = () => {
+      if (!btn.classList.contains("mh-hidden")) btn.classList.add("mh-visible");
+    };
     const hide = () => btn.classList.remove("mh-visible");
     const targets = [hoverContainer, video].filter(Boolean);
     for (const t of targets) {
@@ -582,7 +743,9 @@
     btn.addEventListener("pointerleave", hide);
     btn.addEventListener("mouseleave", hide);
 
-    return trackVideo(video, btn);
+    // Arbitration scope = the post container, so a carousel's
+    // off-screen slides can't keep a button of their own.
+    return trackVideo(video, btn, hoverContainer || null);
   }
 
   window.mhPortal = { attachPortalButton, ensureLayer };

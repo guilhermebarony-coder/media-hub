@@ -306,6 +306,13 @@ function MetadataCard() {
   const [duplicate, setDuplicate] = useState<DuplicateMatch | null>(null);
 
   const [selectedFormat, setSelectedFormat] = useState<FormatOption | null>(null);
+  // 1.13.4 — which items of a multi-item post (Instagram carousel,
+  // tweet with several videos) to download, as yt-dlp playlist indices.
+  // Empty means "no --playlist-items" — the resting value for ordinary
+  // single-video URLs, and what the whole-post case degrades to.
+  // The FIRST selected item is the "primary": the one the card
+  // describes (thumb, duration, format table, scrubber).
+  const [pickedItems, setPickedItems] = useState<number[]>([]);
   // 1.2.0 — Video | Audio mode tabs. Audio mode swaps the format
   // picker for three big buttons (MP3 / M4A / FLAC), forces
   // transcode preset to "none" (irrelevant for audio), and skips
@@ -468,6 +475,7 @@ function MetadataCard() {
     setMeta(null);
     setShowFormats(true);
     setSelectedFormat(null);
+    setPickedItems([]);
     // 1.1.3 — clear any prior single-URL download result so the success
     // panel from the previous download doesn't linger when fetching
     // metadata for a new URL.
@@ -497,6 +505,11 @@ function MetadataCard() {
       // most common path (paste URL → click Download) skips the
       // "but wait, which format?" step entirely. User can still click
       // the format table to override.
+      // 1.13.4 — a multi-item post opens on its first item rather than
+      // on "the whole post": the card has always described item 1, and
+      // downloading ten carousel slides because you pasted one link is
+      // the surprise we're fixing. "All" stays one click away.
+      setPickedItems(out.items.length > 1 ? [out.items[0].index] : []);
       const platform = detectPlatform(url);
       const stickyId = settings.last_formats?.[platform];
       const sticky = stickyId
@@ -549,6 +562,58 @@ function MetadataCard() {
     );
   }
 
+  // 1.13.4 — multi-item posts. The card describes ONE item at a time;
+  // `activeMeta` is that item wearing the post's shared fields (channel,
+  // upload date, views), so every consumer below — hero, format table,
+  // scrubber, queue spec, library row — keeps reading a plain
+  // VideoMetadata and doesn't need to know carousels exist. On "all"
+  // (and on ordinary single-video URLs) it's just `meta`.
+  const isMultiItem = (meta?.items.length ?? 0) > 1;
+  const primaryIndex = pickedItems[0] ?? null;
+  const activeItem =
+    primaryIndex == null ? null : meta?.items.find((i) => i.index === primaryIndex) ?? null;
+  const activeMeta: VideoMetadata | null = !meta
+    ? null
+    : activeItem
+      ? {
+          ...meta,
+          id: activeItem.id,
+          title: activeItem.title,
+          duration_sec: activeItem.duration_sec,
+          thumbnail: activeItem.thumbnail,
+          formats: activeItem.formats,
+        }
+      : meta;
+
+  function applySelection(next: number[]) {
+    const sorted = [...next].sort((a, b) => a - b);
+    setPickedItems(sorted);
+    // Trims were marked on the clip the user was looking at. Carrying
+    // them onto a different (possibly shorter) slide would silently
+    // produce a bogus cut, and they're meaningless once several items
+    // are selected — the same in/out would be applied to every one.
+    if (sorted.length > 1 || sorted[0] !== primaryIndex) {
+      setSegments([]);
+      setInStr("");
+      setOutStr("");
+    }
+    // Format ids are per-item, so a pick made on another slide is
+    // meaningless here — re-run the same auto-selection the fetch does.
+    if ((sorted[0] ?? null) !== primaryIndex) {
+      const item =
+        sorted.length === 0 ? null : meta?.items.find((i) => i.index === sorted[0]) ?? null;
+      setSelectedFormat(pickBestFormat(item?.formats ?? meta?.formats ?? []));
+    }
+  }
+
+  function toggleItem(index: number) {
+    applySelection(
+      pickedItems.includes(index)
+        ? pickedItems.filter((i) => i !== index)
+        : [...pickedItems, index],
+    );
+  }
+
   // Compose `-f` spec — video-only picks auto-promote to <id>+bestaudio
   // with container hygiene (MP4 → MP4, WebM → WebM, else MKV).
   //
@@ -571,15 +636,25 @@ function MetadataCard() {
   }
 
   async function download() {
-    if (!url.trim() || !meta) return;
+    if (!url.trim() || !meta || !activeMeta) return;
     // 1.2.0 — video mode requires a picked format; audio mode picks
     // "bestaudio/best" server-side and ignores the table.
     if (downloadMode === "video" && !selectedFormat) return;
     setValidationErr(null);
-    const { spec, mergeContainer } =
+    let { spec, mergeContainer } =
       downloadMode === "audio"
         ? { spec: "bestaudio/best", mergeContainer: null as string | null }
         : composeFormatSpec(selectedFormat!);
+
+    // 1.13.4 — "all items" of a multi-item post. Format ids are
+    // per-item on Instagram (`dash-18362007742212616v` exists on slide 1
+    // and nowhere else), so pinning the picked id makes every OTHER
+    // slide die with "Requested format is not available" — verified.
+    // A trailing /best keeps the exact pick for the item it came from
+    // and lets the rest resolve on their own.
+    if (pickedItems.length > 1 && !spec.endsWith("/best")) {
+      spec = `${spec}/best`;
+    }
 
     // Resolve effective segment list. Manual mode wins when on (single
     // segment). Otherwise the scrubber's committed list is the source
@@ -611,9 +686,9 @@ function MetadataCard() {
         );
         return;
       }
-      if (meta.duration_sec != null && seg.outSec > meta.duration_sec) {
+      if (activeMeta.duration_sec != null && seg.outSec > activeMeta.duration_sec) {
         setValidationErr(
-          `Segment Out (${seg.outSec.toFixed(1)}s) exceeds video duration (${Math.floor(meta.duration_sec)}s)`,
+          `Segment Out (${seg.outSec.toFixed(1)}s) exceeds video duration (${Math.floor(activeMeta.duration_sec)}s)`,
         );
         return;
       }
@@ -647,14 +722,21 @@ function MetadataCard() {
       // In audio mode we don't know exact bytes (yt-dlp picks "best"
       // and the post-extract converts container) — the progress bar
       // shows live-bytes without percent until done. Fine for audio.
-      totalBytesHint: downloadMode === "audio" ? null : bytesHint,
-      videoId: meta.id ?? "",
+      // The byte hint describes ONE format of ONE item, so it's a lie as
+      // soon as several items are queued under a single job — the bar
+      // would fill and then keep going. Fall back to live-bytes.
+      totalBytesHint:
+        downloadMode === "audio" || pickedItems.length > 1 ? null : bytesHint,
+      videoId: activeMeta.id ?? "",
       segments: effectiveSegments.length > 0 ? effectiveSegments : null,
       projectId: targetProjectId,
       transcodePreset,
-      meta,
+      meta: activeMeta,
       pickedFormat: downloadMode === "audio" ? null : selectedFormat,
       audioFormat: downloadMode === "audio" ? audioFormat : null,
+      // Empty selection (a plain single-video URL) sends null — no
+      // --playlist-items, yt-dlp takes whatever the URL resolves to.
+      mediaItems: pickedItems.length > 0 ? pickedItems.join(",") : null,
     });
     if (queuedFlashTimer.current != null) window.clearTimeout(queuedFlashTimer.current);
     setQueuedFlash(true);
@@ -667,8 +749,29 @@ function MetadataCard() {
     await cancelSingleDownload();
   }
 
-  const videoFormats = meta?.formats.filter((f) => f.has_video) ?? [];
-  const audioOnly = meta?.formats.filter((f) => !f.has_video && f.has_audio) ?? [];
+  // 1.13.4 — pre-download sanity check, so a bad pick is caught while
+  // it's still one click to fix instead of a cryptic ffmpeg error after
+  // the download. Two things actually bite people:
+  //   - a video-mode pick that carries no video stream (the format table
+  //     lists audio-only rows too). That's what produced a tester's
+  //     10-second .m4a, which then failed every transcode preset with
+  //     "Stream map '' matches no streams".
+  //   - a codec no NLE will import. Instagram serves plenty of VP9, and
+  //     After Effects has never read VP9/WebM. Only worth saying when
+  //     they're keeping the raw file — a transcode already solves it.
+  const pickedVcodec = (selectedFormat?.vcodec ?? "").toLowerCase();
+  const pickWarning: "audioOnly" | "nleCodec" | null =
+    downloadMode !== "video" || !selectedFormat
+      ? null
+      : !selectedFormat.has_video
+        ? "audioOnly"
+        : transcodePreset === "none" &&
+            (/^(vp0?[89]|av01)/.test(pickedVcodec) || selectedFormat.ext === "webm")
+          ? "nleCodec"
+          : null;
+
+  const videoFormats = activeMeta?.formats.filter((f) => f.has_video) ?? [];
+  const audioOnly = activeMeta?.formats.filter((f) => !f.has_video && f.has_audio) ?? [];
 
   return (
     <section className="card-box">
@@ -798,29 +901,29 @@ function MetadataCard() {
         </div>
       )}
 
-      {meta && (
+      {meta && activeMeta && (
         <>
           <div className="meta-hero">
-            {meta.thumbnail ? (
-              <img className="meta-thumb" src={meta.thumbnail} alt="" loading="lazy" />
+            {activeMeta.thumbnail ? (
+              <img className="meta-thumb" src={activeMeta.thumbnail} alt="" loading="lazy" />
             ) : (
               <div className="meta-thumb empty">no thumb</div>
             )}
             <div className="meta-info">
-              <h3 className="meta-title">{meta.title}</h3>
-              <div className="meta-channel">{meta.channel}</div>
+              <h3 className="meta-title">{activeMeta.title}</h3>
+              <div className="meta-channel">{activeMeta.channel}</div>
               <dl className="meta-stats">
                 <div>
                   <dt>Duration</dt>
-                  <dd>{fmtDuration(meta.duration_sec)}</dd>
+                  <dd>{fmtDuration(activeMeta.duration_sec)}</dd>
                 </div>
                 <div>
                   <dt>Uploaded</dt>
-                  <dd>{fmtUploadDate(meta.upload_date)}</dd>
+                  <dd>{fmtUploadDate(activeMeta.upload_date)}</dd>
                 </div>
                 <div>
                   <dt>Views</dt>
-                  <dd>{meta.view_count != null ? meta.view_count.toLocaleString() : "—"}</dd>
+                  <dd>{activeMeta.view_count != null ? activeMeta.view_count.toLocaleString() : "—"}</dd>
                 </div>
                 <div>
                   <dt>Formats</dt>
@@ -831,6 +934,67 @@ function MetadataCard() {
               </dl>
             </div>
           </div>
+
+          {/* 1.13.4 — carousel / multi-video picker. A single Instagram
+              post URL can resolve to a dozen slides, and pasting it used
+              to download every one of them while the card showed only
+              the first. Now you pick. Numbers are yt-dlp's playlist
+              indices, so they skip photo slides (a gap in 1,2,3,5 means
+              #4 is a still — nothing to download there). */}
+          {isMultiItem && (
+            <div className="dl-items">
+              <div className="dl-items-head">
+                <span className="label">{t("dl.postItems")}</span>
+                <span className="faint">
+                  {pickedItems.length}/{meta.items.length} {t("dl.postItemsCount")}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost dl-items-toggle"
+                  onClick={() =>
+                    applySelection(
+                      pickedItems.length === meta.items.length
+                        ? []
+                        : meta.items.map((i) => i.index),
+                    )
+                  }
+                >
+                  {pickedItems.length === meta.items.length
+                    ? t("dl.postItemsNone")
+                    : t("dl.postItemsAll")}
+                </button>
+              </div>
+              <div className="dl-items-strip">
+                {meta.items.map((it) => {
+                  const on = pickedItems.includes(it.index);
+                  return (
+                    <button
+                      key={it.index}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={on}
+                      className={"dl-item" + (on ? " active" : "")}
+                      onClick={() => toggleItem(it.index)}
+                    >
+                      {it.thumbnail ? (
+                        <img src={it.thumbnail} alt="" loading="lazy" />
+                      ) : (
+                        <span className="dl-item-noimg" />
+                      )}
+                      <span className="dl-item-badge mono">{it.index}</span>
+                      <span className="dl-item-check" aria-hidden="true">
+                        {on ? <Icon.check width={11} height={11} /> : null}
+                      </span>
+                      <span className="dl-item-dur mono">{fmtDuration(it.duration_sec)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {pickedItems.length === 0 && (
+                <span className="faint">{t("dl.postItemsEmpty")}</span>
+              )}
+            </div>
+          )}
 
           {/* 1.2.0 — Video | Audio mode tabs. Audio swaps the format
               picker for three big format buttons and silences the
@@ -860,7 +1024,7 @@ function MetadataCard() {
 
           {downloadMode === "video" && (
             <button className="meta-toggle" onClick={() => setShowFormats((s) => !s)}>
-              {showFormats ? "▾" : "▸"} {showFormats ? t("dl.hide") : t("dl.show")} {t("dl.formatList")} ({meta.formats.length})
+              {showFormats ? "▾" : "▸"} {showFormats ? t("dl.hide") : t("dl.show")} {t("dl.formatList")} ({activeMeta.formats.length})
             </button>
           )}
 
@@ -917,7 +1081,7 @@ function MetadataCard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {meta.formats.map((f) => {
+                  {activeMeta.formats.map((f) => {
                     const isSel = selectedFormat?.id === f.id;
                     return (
                       <tr key={f.id} className={isSel ? "sel" : ""} onClick={() => setSelectedFormat(f)}>
@@ -940,17 +1104,31 @@ function MetadataCard() {
             </div>
           )}
 
-          <Scrubber
-            sourceUrl={url}
-            videoId={meta.id}
-            formats={meta.formats}
-            durationHint={meta.duration_sec}
-            fpsHint={selectedFormat?.fps ?? null}
-            storyboard={meta.storyboard}
-            chapters={meta.chapters}
-            segments={segments}
-            onSegmentsChange={setSegments}
-          />
+          {/* 1.13.4 — trimming targets ONE clip. With several items of a
+              post ticked there's no single timeline to mark, and the same
+              in/out would be stamped onto every one of them, so the
+              scrubber steps aside until the selection is a single item. */}
+          {pickedItems.length > 1 ? (
+            <div className="msg-row" style={{ background: "var(--bg-2)" }}>
+              <span className="label">{t("dl.postItems")}</span>
+              <span style={{ flex: 1 }}>{t("dl.postItemsTrimNote")}</span>
+            </div>
+          ) : (
+            <Scrubber
+              sourceUrl={url}
+              videoId={activeMeta.id}
+              formats={activeMeta.formats}
+              durationHint={activeMeta.duration_sec}
+              fpsHint={selectedFormat?.fps ?? null}
+              storyboard={activeMeta.storyboard}
+              chapters={activeMeta.chapters}
+              // Only meaningful with exactly one item picked — which is
+              // the only case this branch renders.
+              mediaItems={pickedItems.length === 1 ? String(pickedItems[0]) : null}
+              segments={segments}
+              onSegmentsChange={setSegments}
+            />
+          )}
 
           <div className="bar">
             <button
@@ -1015,6 +1193,17 @@ function MetadataCard() {
             </div>
           )}
 
+          {pickWarning && (
+            <div className="msg-row dupe">
+              <span className="label">{t("dl.warnLabel")}</span>
+              <span style={{ flex: 1 }}>
+                {pickWarning === "audioOnly"
+                  ? t("dl.warnAudioOnly")
+                  : `${t("dl.warnNleCodec")} (${selectedFormat?.vcodec ?? "?"})`}
+              </span>
+            </div>
+          )}
+
           <div className="dlbar">
             <div className="dlbar-info">
               {downloadMode === "audio" ? (
@@ -1057,7 +1246,13 @@ function MetadataCard() {
             <button
               className={"btn" + (overrideLibrary ? " btn-override" : "")}
               onClick={download}
-              disabled={(downloadMode === "video" && !selectedFormat) || downloading}
+              disabled={
+                (downloadMode === "video" && !selectedFormat) ||
+                downloading ||
+                // Multi-item post with nothing ticked — there'd be
+                // nothing to fetch.
+                (isMultiItem && pickedItems.length === 0)
+              }
               title={overrideLibrary ? "Send to Library (Ctrl held)" : undefined}
             >
               <Icon.download width={13} height={13} />
@@ -1090,8 +1285,8 @@ function MetadataCard() {
               streams the bytes via HTTP with platform-aware Referer
               (Pinterest CDN etc.). Same progress channel, lands in
               the same scope as a normal download. */}
-          {meta != null &&
-            meta.formats.length === 0 &&
+          {activeMeta != null &&
+            activeMeta.formats.length === 0 &&
             isDirectMediaUrl(url) &&
             !downloading && (
               <div className="dlbar dlbar-fallback">

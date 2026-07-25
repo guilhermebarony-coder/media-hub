@@ -268,6 +268,20 @@ export const pt: Record<string, string> = {
   "dl.playlistNote": "Esta URL também faz parte de uma playlist. Por padrão, vamos baixar só este vídeo.",
   "dl.video": "Vídeo",
   "dl.audio": "Áudio",
+  // 1.13.4 — seletor de carrossel / post com vários vídeos.
+  "dl.postItems": "Itens deste post",
+  "dl.postItemsCount": "selecionados",
+  "dl.postItemsAll": "Selecionar todos",
+  "dl.postItemsNone": "Limpar",
+  "dl.postItemsEmpty": "Selecione ao menos um item para baixar.",
+  // 1.13.4 — avisos antes de baixar.
+  "dl.warnLabel": "atenção",
+  "dl.warnAudioOnly":
+    "Esse formato não tem faixa de vídeo — viria só o áudio. Escolha uma linha com vcodec, ou vá na aba Áudio.",
+  "dl.warnNleCodec":
+    "O After Effects não importa esse codec. Escolha um transcode abaixo que ele já chega pronto pra editar.",
+  "dl.postItemsTrimNote":
+    "Vários itens selecionados — cada um vem inteiro. Selecione um só para poder cortar.",
   "dl.show": "Mostrar",
   "dl.hide": "Ocultar",
   "dl.formatList": "lista de formatos",
