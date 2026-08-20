@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTauriEvent } from "../lib/useTauriEvent";
@@ -314,6 +314,27 @@ export default function LibraryPage() {
   // preference sticks across sessions. List view shows the same assets
   // as compact rows (thumb + title + meta columns) — useful when you're
   // hunting by metadata rather than scanning thumbnails.
+  // 1.14.0 — versions of one clip collapse into a single row with a
+  // drawer. An RTX render inherits the original's source_url, so they are
+  // already siblings in the data; this only changes how they are shown.
+  // Behind a flag because it changes how the whole list reads — one
+  // switch in the toolbar turns it off.
+  const [groupSiblings, setGroupSiblings] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("mh.library.groupSiblings") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("mh.library.groupSiblings", groupSiblings ? "1" : "0");
+    } catch {
+      /* quota — skip */
+    }
+  }, [groupSiblings]);
+  const [openFamilies, setOpenFamilies] = useState<Set<string>>(new Set());
+
   const [viewMode, setViewMode] = useState<"grid" | "list">(() => {
     try {
       const v = localStorage.getItem("mh.library.viewMode");
@@ -1821,6 +1842,68 @@ export default function LibraryPage() {
     return arr;
   }, [filteredRaw, sortMode]);
 
+  // Card wiring shared by the grid and by the family drawer, so a card
+  // inside a drawer selects, drags and right-clicks exactly like any other
+  // — it is the same asset, only shown somewhere else.
+  const gridCardProps = (a: Asset) => ({
+    asset: a,
+    selected: selection.has(a.id),
+    onDragStart: (ev: React.DragEvent<HTMLButtonElement>) => onCardDragStart(a, ev),
+    onClick: (ev: React.MouseEvent) => handleCardClick(a, ev),
+    onDoubleClick: () => void handleCardDoubleClick(a),
+    onContextMenu: (e: React.MouseEvent) => {
+      e.preventDefault();
+      // Right-click on an unselected card replaces the selection with that
+      // card; right-click inside the selection leaves it alone so the menu
+      // can act on the whole set.
+      if (!selection.has(a.id)) {
+        setSelection(new Set([a.id]));
+        setAnchor(a.id);
+      }
+      setContextMenu({ x: e.clientX, y: e.clientY, asset: a });
+    },
+  });
+
+  // 1.14.0 — fold versions of one clip into a single row plus a drawer.
+  //
+  // Grouping happens HERE, over the already-filtered and already-sorted
+  // list, and touches nothing else: the query, the filters, the sort and
+  // the selection all keep working on flat assets. The head of a family
+  // is simply whichever member the current sort puts first, so changing
+  // the sort still does what it says.
+  //
+  // Members are the other rows of the same source_url; a clip with no
+  // relatives is a family of one and renders exactly as before.
+  const families = useMemo(() => {
+    const famKey = (a: Asset) =>
+      a.source_url && a.source_url.trim() ? `u:${a.source_url}` : `i:${a.id}`;
+    if (!groupSiblings) {
+      return filtered.map((a) => ({ key: a.id, head: a, members: [] as Asset[] }));
+    }
+    const byKey = new Map<string, Asset[]>();
+    for (const a of filtered) {
+      const k = famKey(a);
+      const bucket = byKey.get(k);
+      if (bucket) bucket.push(a);
+      else byKey.set(k, [a]);
+    }
+    const out: { key: string; head: Asset; members: Asset[] }[] = [];
+    const seen = new Set<string>();
+    for (const a of filtered) {
+      const k = famKey(a);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      // WHERE the family sits follows the sort the user picked (first
+      // member encountered wins the slot). WHAT it shows does not: the
+      // cover is the ORIGINAL and the versions follow it, oldest first,
+      // because "the original, then what I made from it" is the order
+      // the eye expects — and it stays put when the sort changes.
+      const byAge = [...byKey.get(k)!].sort((x, y) => x.downloaded_at - y.downloaded_at);
+      out.push({ key: k, head: byAge[0], members: byAge.slice(1) });
+    }
+    return out;
+  }, [filtered, groupSiblings]);
+
   // 1.1.1 — apply a tag delta (add + remove) across the current
   // selection. Each asset gets its own `tag_set_for_asset` call with
   // the computed final list. N round trips but fine for typical
@@ -1932,6 +2015,19 @@ export default function LibraryPage() {
             onClick={() => setViewMode("list")}
           >
             <Icon.list width={12} height={12} /> {t("lib.list")}
+          </button>
+          {/* One switch turns the whole grouping off — the list goes back
+              to flat rows exactly as before. */}
+          <button
+            className={"ch-tab" + (groupSiblings ? " active" : "")}
+            title={
+              groupSiblings
+                ? "Versions of the same clip are grouped — click for a flat list"
+                : "Group versions of the same clip together"
+            }
+            onClick={() => setGroupSiblings((v) => !v)}
+          >
+            <Icon.folder width={11} height={11} /> Versions
           </button>
         </div>
       </div>
@@ -2384,51 +2480,109 @@ export default function LibraryPage() {
                   onResize={setColRatios}
                 />
 
-                {filtered.map((a) => (
-                  <LibRow
-                    key={a.id}
-                    asset={a}
-                    selected={selection.has(a.id)}
-                    onDragStart={(ev) => onCardDragStart(a, ev)}
-                    onClick={(ev) => handleCardClick(a, ev)}
-                    onDoubleClick={() => void handleCardDoubleClick(a)}
-                    onContextMenu={(e) => {
+                {families.map((fam) => {
+                  const open = openFamilies.has(fam.key);
+                  const rowProps = (a: Asset) => ({
+                    asset: a,
+                    selected: selection.has(a.id),
+                    onDragStart: (ev: React.DragEvent<HTMLButtonElement>) =>
+                      onCardDragStart(a, ev),
+                    onClick: (ev: React.MouseEvent) => handleCardClick(a, ev),
+                    onDoubleClick: () => void handleCardDoubleClick(a),
+                    onContextMenu: (e: React.MouseEvent) => {
                       e.preventDefault();
                       if (!selection.has(a.id)) {
                         setSelection(new Set([a.id]));
                         setAnchor(a.id);
                       }
                       setContextMenu({ x: e.clientX, y: e.clientY, asset: a });
-                    }}
-                  />
-                ))}
+                    },
+                  });
+                  return (
+                    <Fragment key={fam.key}>
+                      <LibRow
+                        {...rowProps(fam.head)}
+                        familyOpen={fam.members.length > 0 ? open : undefined}
+                        onToggleFamily={
+                          fam.members.length > 0
+                            ? () =>
+                                setOpenFamilies((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(fam.key)) next.delete(fam.key);
+                                  else next.add(fam.key);
+                                  return next;
+                                })
+                            : undefined
+                        }
+                      />
+                      {open &&
+                        fam.members.map((m) => <LibRow key={m.id} {...rowProps(m)} isChild />)}
+                    </Fragment>
+                  );
+                })}
               </div>
             ) : (
               <div className="lib-grid">
-                {filtered.map((a) => (
-                  <LibCard
-                    key={a.id}
-                    asset={a}
-                    selected={selection.has(a.id)}
-                    onDragStart={(ev) => onCardDragStart(a, ev)}
-                    onClick={(ev) => handleCardClick(a, ev)}
-                    onDoubleClick={() => void handleCardDoubleClick(a)}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      // Right-click on an unselected card replaces the
-                      // selection with that card. Right-click on a
-                      // card that's already in the selection leaves
-                      // the selection alone so the context menu can
-                      // act on it (future-friendly when the menu
-                      // grows batch actions).
-                      if (!selection.has(a.id)) {
-                        setSelection(new Set([a.id]));
-                        setAnchor(a.id);
-                      }
-                      setContextMenu({ x: e.clientX, y: e.clientY, asset: a });
-                    }}
-                  />
-                ))}
+                {families.map((fam) => {
+                  const open = openFamilies.has(fam.key);
+                  const hasFamily = fam.members.length > 0;
+                  const all = [fam.head, ...fam.members];
+                  const toggle = () =>
+                    setOpenFamilies((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(fam.key)) next.delete(fam.key);
+                      else next.add(fam.key);
+                      return next;
+                    });
+                  // Open families grow SIDEWAYS, taking one grid column per
+                  // version so the whole set sits on one line inside its
+                  // own outline. Capped at 4: past that the strip scrolls
+                  // rather than swallowing the entire row.
+                  //
+                  // At the end of a row the browser moves the whole block
+                  // to the next line instead of splitting it — it cannot
+                  // overflow. That leaves a gap behind it, which is the
+                  // deliberate trade: `grid-auto-flow: dense` would fill
+                  // the gap by pulling later cards forward, and then the
+                  // grid would no longer be in the order the user asked
+                  // for. A gap is ugly once; a lying sort is ugly always.
+                  const span = open && hasFamily ? Math.min(all.length, 4) : 1;
+                  if (!hasFamily) {
+                    // A clip with no versions is just a card — no wrapper
+                    // box, no frame, nothing to toggle.
+                    return (
+                      <div key={fam.key} className="lib-family">
+                        <LibCard {...gridCardProps(fam.head)} />
+                      </div>
+                    );
+                  }
+                  return (
+                    <div
+                      key={fam.key}
+                      className={"lib-family is-family" + (open ? " open" : "")}
+                      style={open ? { gridColumn: `span ${span}` } : undefined}
+                    >
+                      <div className="lib-family-head">
+                        <button
+                          type="button"
+                          className="lib-family-count mono"
+                          title={open ? "Collapse" : "Show every version of this clip"}
+                          onClick={toggle}
+                        >
+                          {open ? "▾" : "▸"} {all.length} versions
+                        </button>
+                        <span className="lib-family-title" title={fam.head.title}>
+                          {fam.head.title}
+                        </span>
+                      </div>
+                      <div className="lib-family-strip">
+                        {(open ? all : [fam.head]).map((m) => (
+                          <LibCard key={m.id} {...gridCardProps(m)} />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -2822,22 +2976,12 @@ function CardContextMenu({
         rtx.canEnhanceHeight(asset.height ?? null) && (
           <>
             <div className="ctx-sep" />
-            <button
-              className="ctx-item"
-              onClick={withClose(() =>
-                rtx.enqueue({
-                  id: asset.id,
-                  filePath: asset.file_path,
-                  title: asset.title,
-                  thumbnail: asset.thumbnail_url ?? null,
-                  width: asset.width ?? null,
-                  height: asset.height ?? null,
-                }),
-              )}
-            >
-              <Icon.video width={11} height={11} />
-              {t("ctx.rtxUpscale")}
-            </button>
+            {/* Queue first: it opens the window so the clip can be set up
+                and reviewed. "Quick" runs immediately on the saved
+                defaults, which is the sharper action and therefore the
+                second one. Distinct icons because both used to be
+                Icon.video — the wording was carrying the whole
+                distinction, and it wasn't carrying it. */}
             <button
               className="ctx-item"
               onClick={withClose(() =>
@@ -2851,8 +2995,24 @@ function CardContextMenu({
                 }),
               )}
             >
-              <Icon.video width={11} height={11} />
-              {t("ctx.rtxStage")}
+              <Icon.plus width={11} height={11} />
+              {t("ctx.rtxQueue")}
+            </button>
+            <button
+              className="ctx-item"
+              onClick={withClose(() =>
+                rtx.enqueue({
+                  id: asset.id,
+                  filePath: asset.file_path,
+                  title: asset.title,
+                  thumbnail: asset.thumbnail_url ?? null,
+                  width: asset.width ?? null,
+                  height: asset.height ?? null,
+                }),
+              )}
+            >
+              <Icon.play width={11} height={11} />
+              {t("ctx.rtxQuick")}
             </button>
           </>
         )}
@@ -3501,7 +3661,14 @@ function LibCard({
   onDoubleClick,
   onContextMenu,
   onDragStart,
+  familyOpen,
+  onToggleFamily,
 }: {
+  /** Set when this card heads a family: whether the drawer is open. */
+  familyOpen?: boolean;
+  /** Set when this card heads a family — turns the "+N" chip into the
+   *  drawer handle, exactly as in the list. */
+  onToggleFamily?: () => void;
   asset: Asset;
   /** Whether this card is in the active selection set. Drives the
    *  outlined visual; the inspector picks up details separately. */
@@ -3590,16 +3757,35 @@ function LibCard({
         <div className="title">{asset.title}</div>
         <div className="sub">
           <span className="ch">{asset.channel ?? "—"}</span>
-          {asset.sibling_count > 0 && (
-            <span
-              className="lib-card-siblings mono"
-              title={`${asset.sibling_count} other ${
-                asset.sibling_count === 1 ? "clip" : "clips"
-              } from the same source`}
-            >
-              +{asset.sibling_count}
-            </span>
-          )}
+          {asset.sibling_count > 0 &&
+            (onToggleFamily ? (
+              <button
+                type="button"
+                className={"lib-card-siblings mono is-handle" + (familyOpen ? " open" : "")}
+                title={
+                  familyOpen
+                    ? "Hide the other versions"
+                    : `Show ${asset.sibling_count} other ${
+                        asset.sibling_count === 1 ? "version" : "versions"
+                      } of this clip`
+                }
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleFamily();
+                }}
+              >
+                {familyOpen ? "▾" : "▸"} {asset.sibling_count}
+              </button>
+            ) : (
+              <span
+                className="lib-card-siblings mono"
+                title={`${asset.sibling_count} other ${
+                  asset.sibling_count === 1 ? "clip" : "clips"
+                } from the same source`}
+              >
+                +{asset.sibling_count}
+              </span>
+            ))}
           {isAudio ? (
             <span className="mono">{(asset.codec_audio ?? "audio").toUpperCase()}</span>
           ) : (
@@ -3649,6 +3835,9 @@ function LibRow({
   onDoubleClick,
   onContextMenu,
   onDragStart,
+  familyOpen,
+  onToggleFamily,
+  isChild,
 }: {
   asset: Asset;
   selected: boolean;
@@ -3656,12 +3845,20 @@ function LibRow({
   onDoubleClick: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
   onDragStart: (ev: React.DragEvent<HTMLButtonElement>) => void;
+  /** Set when this row heads a family: whether the drawer is open. */
+  familyOpen?: boolean;
+  /** Set when this row heads a family — turns the "+N" chip into the
+   *  drawer handle. Absent = the chip stays the plain badge it was. */
+  onToggleFamily?: () => void;
+  /** This row sits inside an open drawer (indented, quieter). */
+  isChild?: boolean;
 }) {
   const t = useT();
   const thumb = thumbnailSrc(asset.thumbnail_path, asset.thumbnail_url);
   const isAudio = asset.kind === "audio";
   const className = [
     "lib-row",
+    isChild ? "is-child" : "",
     selected ? "selected" : "",
     isAudio ? "audio" : "",
     asset.missing ? "is-missing" : "",
@@ -3713,16 +3910,39 @@ function LibRow({
             · {asset.channel}
           </span>
         )}
-        {asset.sibling_count > 0 && (
-          <span
-            className="lib-row-siblings mono"
-            title={`${asset.sibling_count} other ${
-              asset.sibling_count === 1 ? "clip" : "clips"
-            } from the same source`}
-          >
-            +{asset.sibling_count}
-          </span>
-        )}
+        {/* The chip already said "there are more of these". Making it the
+            handle attaches the action to an affordance that was already
+            carrying the meaning, instead of adding a second control. */}
+        {asset.sibling_count > 0 &&
+          (onToggleFamily ? (
+            <button
+              type="button"
+              className={"lib-row-siblings mono is-handle" + (familyOpen ? " open" : "")}
+              title={
+                familyOpen
+                  ? "Hide the other versions"
+                  : `Show ${asset.sibling_count} other ${
+                      asset.sibling_count === 1 ? "version" : "versions"
+                    } of this clip`
+              }
+              onClick={(e) => {
+                // Opening the drawer must never change the selection.
+                e.stopPropagation();
+                onToggleFamily();
+              }}
+            >
+              {familyOpen ? "▾" : "▸"} {asset.sibling_count}
+            </button>
+          ) : (
+            <span
+              className="lib-row-siblings mono"
+              title={`${asset.sibling_count} other ${
+                asset.sibling_count === 1 ? "clip" : "clips"
+              } from the same source`}
+            >
+              +{asset.sibling_count}
+            </span>
+          ))}
       </div>
       <div className="lib-list-col col-tags">
         {asset.tags.length === 0 ? (

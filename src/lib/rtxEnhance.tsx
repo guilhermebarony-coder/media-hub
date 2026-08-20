@@ -60,6 +60,15 @@ export type RtxJob = {
   preclean: PrecleanOpts;
   /** Optional ffmpeg clean pass AFTER VSR (cleans VSR's leftovers). */
   postclean: PrecleanOpts;
+  /** 1.14.0 — CodecClean compression-residue filter, run inside the worker
+   *  on luma at INPUT resolution, before VSR. Off by default. */
+  cc: boolean;
+  /** Filter strength 0.00-1.00. 1.00 is the tuned dose; 0.00 is an exact
+   *  bypass (which still requires the weights to load). */
+  ccStrength: number;
+  /** Output quality preset: lossless | master | entrega | previa.
+   *  Deliberately NOT called `quality` — that name is already VSR's 1-4. */
+  encPreset: string;
   status: RtxStatus;
   percent: number;
   fps: number;
@@ -100,6 +109,13 @@ type RtxContextValue = {
   jobs: RtxJob[];
   capability: RtxCapability | null;
   workerReady: boolean;
+  /** 1.14.0 — the bundle is installed but predates the build this app
+   *  expects. The old worker still upscales; what it does NOT do is the
+   *  CodecClean filter, which it accepts and ignores without a word. */
+  workerOutdated: boolean;
+  /** Install or update the worker bundle. Resolves when it's current;
+   *  safe (and instant) to call when it already is. */
+  ensureWorker: () => Promise<void>;
   /** True when a clip can be enhanced (always — 4K+ falls back to 1× clean). */
   canEnhanceHeight: (height: number | null) => boolean;
   /** Enqueue a library clip to run NOW (right-click fast path). */
@@ -136,6 +152,14 @@ type RtxContextValue = {
   // Default output scale (2 = 2× upscale, 1 = decompress only).
   defaultScale: number;
   setDefaultScale: (n: number) => void;
+  // 1.14.0 — CodecClean filter defaults. Off unless the user asks for it.
+  defaultCc: boolean;
+  setDefaultCc: (v: boolean) => void;
+  defaultCcStrength: number;
+  setDefaultCcStrength: (n: number) => void;
+  // Output quality preset (the worker's `--quality`).
+  defaultEncPreset: string;
+  setDefaultEncPreset: (v: string) => void;
   // Default pre-clean (deblock/deband) settings for new enqueues.
   defaultPreclean: PrecleanOpts;
   setDefaultPreclean: (p: PrecleanOpts) => void;
@@ -228,6 +252,9 @@ export type EnqueueOpts = {
   scale?: number;
   preclean?: PrecleanOpts;
   postclean?: PrecleanOpts;
+  cc?: boolean;
+  ccStrength?: number;
+  encPreset?: string;
 };
 
 /**
@@ -284,6 +311,27 @@ export function RtxEnhanceProvider({ children }: { children: ReactNode }) {
   const [jobs, setJobs] = useState<RtxJob[]>([]);
   const [capability, setCapability] = useState<RtxCapability | null>(null);
   const [workerReady, setWorkerReady] = useState(false);
+  const [workerOutdated, setWorkerOutdated] = useState(false);
+
+  // 1.14.0 — the worker is a versioned bundle now, so "is it there?" and
+  // "is it the build we expect?" are separate answers.
+  const refreshWorker = useCallback(async () => {
+    try {
+      const st = await invoke<{ installed: boolean; up_to_date: boolean }>(
+        "rtx_worker_status",
+      );
+      setWorkerReady(st.installed);
+      setWorkerOutdated(st.installed && !st.up_to_date);
+    } catch {
+      setWorkerReady(false);
+      setWorkerOutdated(false);
+    }
+  }, []);
+
+  const ensureWorker = useCallback(async () => {
+    await invoke("rtx_worker_ensure");
+    await refreshWorker();
+  }, [refreshWorker]);
   const [windowJobId, setWindowJobId] = useState<string | null>(null);
   // Default HDR persists across sessions — whatever you set in the window
   // becomes the default for the next right-click → upscale.
@@ -333,6 +381,51 @@ export function RtxEnhanceProvider({ children }: { children: ReactNode }) {
       /* quota — skip */
     }
   }, [defaultScale]);
+  // 1.14.0 — CodecClean. Off by default: it changes the picture, so it is
+  // opt-in, and the choice sticks like every other RTX default.
+  const [defaultCc, setDefaultCc] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("mh.rtx.cc") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("mh.rtx.cc", defaultCc ? "1" : "0");
+    } catch {
+      /* quota — skip */
+    }
+  }, [defaultCc]);
+  const [defaultCcStrength, setDefaultCcStrength] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem("mh.rtx.ccStrength"));
+      return v >= 0 && v <= 1 ? v : 1;
+    } catch {
+      return 1;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("mh.rtx.ccStrength", String(defaultCcStrength));
+    } catch {
+      /* quota — skip */
+    }
+  }, [defaultCcStrength]);
+  const [defaultEncPreset, setDefaultEncPreset] = useState<string>(() => {
+    try {
+      return localStorage.getItem("mh.rtx.encPreset") || "entrega";
+    } catch {
+      return "entrega";
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("mh.rtx.encPreset", defaultEncPreset);
+    } catch {
+      /* quota — skip */
+    }
+  }, [defaultEncPreset]);
   // Pre-clean defaults persist too (stored as JSON; merged over the baseline so
   // new fields added later don't break an old saved blob).
   const [defaultPreclean, setDefaultPreclean] = useState<PrecleanOpts>(() => {
@@ -386,7 +479,7 @@ export function RtxEnhanceProvider({ children }: { children: ReactNode }) {
           reason: "RTX detection failed.",
         }),
       );
-    void invoke<boolean>("rtx_worker_status").then(setWorkerReady).catch(() => setWorkerReady(false));
+    void refreshWorker();
   }, []);
 
   // Live per-frame progress. Match on assetId (the backend key) and only
@@ -433,6 +526,9 @@ export function RtxEnhanceProvider({ children }: { children: ReactNode }) {
                   hdr: next.hdr,
                   quality: next.quality,
                   scale: next.scale,
+                  ccEnabled: next.cc,
+                  ccStrength: next.ccStrength,
+                  encPreset: next.encPreset,
                   preclean: next.preclean,
                   postclean: next.postclean,
                   jobId: next.id,
@@ -443,6 +539,9 @@ export function RtxEnhanceProvider({ children }: { children: ReactNode }) {
                   hdr: next.hdr,
                   quality: next.quality,
                   scale: next.scale,
+                  ccEnabled: next.cc,
+                  ccStrength: next.ccStrength,
+                  encPreset: next.encPreset,
                   preclean: next.preclean,
                   postclean: next.postclean,
                   jobId: next.id,
@@ -485,14 +584,32 @@ export function RtxEnhanceProvider({ children }: { children: ReactNode }) {
       hdr: opts?.hdr ?? defaultHdr,
       quality: opts?.quality ?? defaultQuality,
       scale: opts?.scale ?? defaultScale,
-      preclean: opts?.preclean ?? defaultPreclean,
-      postclean: opts?.postclean ?? defaultPostclean,
+      // 1.14.0 — the ffmpeg clean passes are off for now: they cost
+      // real render time and the restoration research found pre-clean
+      // actively hurts. DEFAULT_PRECLEAN is the disabled shape, used
+      // instead of the stored defaults so a value persisted earlier
+      // can't keep running behind a UI that no longer shows it.
+      // Restoring the feature = put the two defaults back here.
+      preclean: opts?.preclean ?? DEFAULT_PRECLEAN,
+      postclean: opts?.postclean ?? DEFAULT_PRECLEAN,
+      cc: opts?.cc ?? defaultCc,
+      ccStrength: opts?.ccStrength ?? defaultCcStrength,
+      encPreset: opts?.encPreset ?? defaultEncPreset,
       status,
       percent: 0,
       fps: 0,
       eta: "",
     }),
-    [defaultHdr, defaultQuality, defaultScale, defaultPreclean, defaultPostclean],
+    [
+      defaultHdr,
+      defaultQuality,
+      defaultScale,
+      defaultPreclean,
+      defaultPostclean,
+      defaultCc,
+      defaultCcStrength,
+      defaultEncPreset,
+    ],
   );
 
   // Right-click fast path — run the clip NOW with the saved defaults.
@@ -536,8 +653,11 @@ export function RtxEnhanceProvider({ children }: { children: ReactNode }) {
             hdr: opts?.hdr ?? defaultHdr,
             quality: opts?.quality ?? defaultQuality,
             scale: opts?.scale ?? defaultScale,
-            preclean: opts?.preclean ?? defaultPreclean,
-            postclean: opts?.postclean ?? defaultPostclean,
+            preclean: opts?.preclean ?? DEFAULT_PRECLEAN,
+            postclean: opts?.postclean ?? DEFAULT_PRECLEAN,
+            cc: opts?.cc ?? defaultCc,
+            ccStrength: opts?.ccStrength ?? defaultCcStrength,
+            encPreset: opts?.encPreset ?? defaultEncPreset,
             status: "staged",
             percent: 0,
             fps: 0,
@@ -561,6 +681,9 @@ export function RtxEnhanceProvider({ children }: { children: ReactNode }) {
               scale: opts.scale ?? j.scale,
               preclean: opts.preclean ?? j.preclean,
               postclean: opts.postclean ?? j.postclean,
+              cc: opts.cc ?? j.cc,
+              ccStrength: opts.ccStrength ?? j.ccStrength,
+              encPreset: opts.encPreset ?? j.encPreset,
             }
           : j,
       ),
@@ -579,6 +702,9 @@ export function RtxEnhanceProvider({ children }: { children: ReactNode }) {
               scale: opts.scale ?? j.scale,
               preclean: opts.preclean ?? j.preclean,
               postclean: opts.postclean ?? j.postclean,
+              cc: opts.cc ?? j.cc,
+              ccStrength: opts.ccStrength ?? j.ccStrength,
+              encPreset: opts.encPreset ?? j.encPreset,
             }
           : j,
       ),
@@ -640,6 +766,14 @@ export function RtxEnhanceProvider({ children }: { children: ReactNode }) {
     jobs,
     capability,
     workerReady,
+    workerOutdated,
+    ensureWorker,
+    defaultCc,
+    setDefaultCc,
+    defaultCcStrength,
+    setDefaultCcStrength,
+    defaultEncPreset,
+    setDefaultEncPreset,
     canEnhanceHeight,
     enqueue,
     stageAsset,

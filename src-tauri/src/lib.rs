@@ -2050,6 +2050,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             binaries_version,
             bridge::bridge_frontend_ready,
+            tools::rtx_worker_ensure,
             metadata::yt_fetch_metadata,
             playlist::yt_fetch_playlist,
             yt_resolve_stream_url,

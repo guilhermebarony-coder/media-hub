@@ -390,8 +390,8 @@ export const en: Record<string, string> = {
   // Right-click menus (Library)
   "ctx.open": "Open",
   "ctx.reveal": "Reveal in Explorer",
-  "ctx.rtxUpscale": "Upscale (NVIDIA RTX Video)",
-  "ctx.rtxStage": "Set up in RTX window…",
+  "ctx.rtxQueue": "Add to queue…",
+  "ctx.rtxQuick": "Quick upscale",
   "ctx.transcode": "Transcode to…",
   "ctx.copyUrl": "Copy source URL",
   "ctx.copyPath": "Copy file path",

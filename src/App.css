@@ -2712,6 +2712,92 @@ body.lib-resizing-h * {
   text-overflow: ellipsis;
 }
 .lib-card .tags { display: flex; gap: 4px; flex-wrap: wrap; }
+/* 1.14.0 — a family of versions in grid view.
+   Collapsed it is just a card slot. Open, it grows SIDEWAYS by spanning
+   one grid column per version (set inline, capped at 4) and draws its own
+   outline, so the set reads as one object instead of neighbours that
+   happen to be adjacent. At the end of a row the browser relocates the
+   whole block to the next line rather than splitting it — it can never
+   overflow; it leaves a gap, which is preferred over `grid-auto-flow:
+   dense` because dense reorders the grid and the chosen sort stops being
+   true on screen. */
+/* A clip with no versions: the wrapper must not exist as far as the grid
+   is concerned. `.lib-card` has no height of its own and relies on being
+   the grid item that stretches to the row, so a real box around it broke
+   every card's height. `display: contents` hands the slot back to the
+   card. */
+.lib-family { display: contents; }
+
+/* A clip that HAS versions is framed whether or not it is open, so it can
+   be spotted in a wall of cards and so its toggle keeps one home. The
+   block takes the same grid slot as any card — the header's ~24px come
+   out of the card inside it, not out of the row, so neighbours are not
+   stretched. */
+.lib-family.is-family {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--accent-line);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--accent), transparent 96%);
+}
+.lib-family.is-family .lib-family-strip { flex: 1; min-height: 0; }
+.lib-family.is-family .lib-card { height: 100%; }
+.lib-family.open {
+  gap: 10px;
+  padding: 10px;
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent), transparent 92%);
+}
+.lib-family-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.lib-family-count {
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 600;
+  color: var(--bg-0);
+  background: var(--accent);
+  border: none;
+  border-radius: 3px;
+  padding: 2px 7px;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+.lib-family-count:hover { filter: brightness(1.08); }
+.lib-family-title {
+  font-size: 12px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Side by side. They share the spanned width when few; when a family has
+   more versions than the span allows, the strip scrolls instead of
+   shrinking the cards into stamps. */
+.lib-family-strip {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.lib-family-strip > * { flex: 1 0 180px; min-width: 0; }
+/* The "+N" chip when it doubles as the drawer handle. */
+.lib-card-siblings.is-handle {
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.lib-card-siblings.is-handle:hover,
+.lib-card-siblings.is-handle.open {
+  background: var(--bg-3);
+  color: var(--text-0);
+}
 .lib-card-siblings {
   display: inline-flex;
   align-items: center;
@@ -4685,6 +4771,30 @@ body.lib-resizing-h * {
   white-space: nowrap;
   min-width: 0;
 }
+/* 1.14.0 — a row sitting inside an open versions drawer. Indented and
+   dimmed so the family reads as one block with a head, not as five
+   unrelated rows that happen to be adjacent. */
+.lib-row.is-child {
+  margin-left: 22px;
+  border-left: 2px solid var(--accent-line);
+  background: color-mix(in oklab, var(--bg-1), transparent 35%);
+}
+.lib-row.is-child:hover { background: var(--bg-2); }
+/* The "+N" chip when it doubles as the drawer handle. */
+.lib-row-siblings.is-handle {
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.lib-row-siblings.is-handle:hover {
+  background: var(--bg-3);
+  color: var(--text-0);
+  border-color: var(--accent-line);
+}
+.lib-row-siblings.is-handle.open {
+  background: var(--bg-3);
+  color: var(--text-0);
+}
 .lib-row-siblings {
   font-size: 10px;
   color: var(--text-3);
@@ -5833,6 +5943,37 @@ body.lib-resizing-h * {
   gap: 8px;
 }
 .rtxw-prevbar .rtxw-newframe { position: static; top: auto; left: auto; }
+.rtxw-modes {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--accent-line);
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 5px;
+}
+.rtxw-mode {
+  padding: 3px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 11px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.rtxw-mode:hover { color: var(--text-0); }
+.rtxw-mode.active {
+  background: var(--accent);
+  color: var(--bg-0);
+  font-weight: 600;
+}
+.rtxw-modebusy {
+  align-self: center;
+  padding: 0 6px;
+  font-size: 11px;
+}
 .rtxw-vsrtoggle {
   display: flex;
   align-items: center;

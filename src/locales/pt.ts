@@ -388,8 +388,8 @@ export const pt: Record<string, string> = {
   // Menus de clique direito (Biblioteca)
   "ctx.open": "Abrir",
   "ctx.reveal": "Mostrar no Explorer",
-  "ctx.rtxUpscale": "Melhorar (NVIDIA RTX Video)",
-  "ctx.rtxStage": "Configurar na janela RTX…",
+  "ctx.rtxQueue": "Adicionar à fila…",
+  "ctx.rtxQuick": "Upscale rápido",
   "ctx.transcode": "Transcodar para…",
   "ctx.copyUrl": "Copiar URL de origem",
   "ctx.copyPath": "Copiar caminho do arquivo",

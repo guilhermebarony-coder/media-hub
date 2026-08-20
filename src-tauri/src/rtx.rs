@@ -246,11 +246,43 @@ fn worker_path(app: &AppHandle) -> Option<std::path::PathBuf> {
         .filter(|p| p.is_file())
 }
 
-/// Whether the RTX worker binary is present. The UI uses this to decide
-/// between "Enhance" and "download the enhancer first".
+/// CodecClean weights, installed beside the worker by the same bundle.
+/// Resolved HERE and never accepted from the frontend — it becomes a path
+/// argument to a child process.
+const CC_BLOB: &str = "cc_32x4.blob";
+
+fn cc_blob_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    crate::aria2::managed_bin_dir(app)
+        .ok()
+        .map(|d| d.join(CC_BLOB))
+        .filter(|p| p.is_file())
+}
+
+/// State of the installed RTX worker bundle.
+///
+/// 1.14.0 — was a bare `bool`, which could not express the state this
+/// machine was actually in: a worker present since July that silently
+/// ignores the CodecClean filter. "Installed" and "current" are different
+/// questions and the UI has to ask both.
+#[derive(Serialize)]
+pub struct RtxWorkerStatus {
+    /// The worker executable is on disk.
+    pub installed: bool,
+    /// Every file of the bundle is present AND the version marker matches
+    /// the build this app expects. False when an older bundle is staged.
+    pub up_to_date: bool,
+}
+
+/// Whether the RTX worker is present and current. The UI uses this to
+/// decide between "Enhance", "update the enhancer" and "install it".
 #[tauri::command]
-pub fn rtx_worker_status(app: AppHandle) -> bool {
-    worker_path(&app).is_some()
+pub fn rtx_worker_status(app: AppHandle) -> RtxWorkerStatus {
+    let installed = worker_path(&app).is_some();
+    #[cfg(windows)]
+    let up_to_date = crate::tools::rtx_worker_freshness(&app).unwrap_or(false);
+    #[cfg(not(windows))]
+    let up_to_date = false;
+    RtxWorkerStatus { installed, up_to_date }
 }
 
 /// Per-frame progress, emitted as `rtx:progress`. `asset_id` is the ORIGINAL
@@ -324,6 +356,51 @@ async fn probe_dimensions(app: &AppHandle, path: &str) -> Option<(i64, i64)> {
         }
     }
     None
+}
+
+/// Pixel format of the first video stream, as ffmpeg names it
+/// ("yuv420p", "yuv420p10le", "p010le"...). Read from the same `-i` probe
+/// `probe_dimensions` uses.
+async fn probe_pix_fmt(app: &AppHandle, path: &str) -> Option<String> {
+    let cmd = crate::tools::ffmpeg_command(app).ok()?;
+    let out = cmd.args(["-hide_banner", "-i", path]).output().await.ok()?;
+    let s = String::from_utf8_lossy(&out.stderr);
+    s.lines().find(|l| l.contains("Video:")).and_then(parse_pix_fmt)
+}
+
+/// Pick the pixel-format token out of an ffmpeg `Video:` line.
+///
+/// The line reads like
+/// `Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709), 720x960, …`
+/// so we walk the comma-separated fields AFTER the codec one and take the
+/// first that looks like a pixel format. The trailing `(tv, bt709…)` is
+/// dropped — it's colour metadata, not part of the name.
+fn parse_pix_fmt(line: &str) -> Option<String> {
+    let after = line.split("Video:").nth(1)?;
+    for field in after.split(',').skip(1) {
+        let tok = field.trim().split_whitespace().next()?;
+        let name = tok.split('(').next()?.trim();
+        if name.len() >= 3
+            && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            && ["yuv", "yuvj", "gbr", "rgb", "bgr", "gray", "nv1", "nv2", "p01", "p21"]
+                .iter()
+                .any(|f| name.starts_with(f))
+        {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+/// Does this pixel format carry more than 8 bits per component?
+///
+/// The CodecClean filter is 8-bit; the worker REFUSES a 10-bit input rather
+/// than quietly bypassing, so we check before spending a download's worth
+/// of decode on a job that will die.
+fn pix_fmt_is_high_bit(pix: &str) -> bool {
+    ["10le", "10be", "12le", "12be", "14le", "16le", "16be", "p010", "p012", "p016"]
+        .iter()
+        .any(|m| pix.contains(m))
 }
 
 /// Pull the first plausible `<w>x<h>` token (e.g. "1920x1080") out of a line.
@@ -637,6 +714,18 @@ async fn run_worker(
     hdr: bool,
     quality: u8,
     scale: u8,
+    // 1.14.0 — run the VSR network at all. False sends `--no-vsr`, which
+    // leaves the frame at its input resolution and does no upscaling: the
+    // only way to see what the CodecClean filter does BY ITSELF, since the
+    // filter lives inside this same worker and skipping the worker skips
+    // the filter too.
+    vsr: bool,
+    // CodecClean strength, `None` = filter off. `Some(0.0)` is a valid
+    // request meaning "exact bypass" and is NOT the same as off: the user
+    // asked for the filter, so the blob must still load.
+    cc: Option<f32>,
+    // Output quality preset (`--quality`).
+    enc_preset: EncPreset,
     preclean: Option<PrecleanOpts>,
     postclean: Option<PrecleanOpts>,
     keep_audio: bool,
@@ -704,18 +793,71 @@ async fn run_worker(
         }
     }
 
+    // ---- CodecClean pre-flight -------------------------------------
+    // Everything knowable before spawning is checked here, so a doomed job
+    // dies with a sentence instead of a worker abort.
+    let mut cc_blob: Option<String> = None;
+    let mut cc_k: Option<f32> = None;
+    let mut in_pix: Option<String> = None;
+    if let Some(k) = cc {
+        // `atof` in the worker never fails — a malformed strength silently
+        // becomes 0.0, an exact bypass. Clamping here means the number the
+        // user sees is the number applied.
+        cc_k = Some(k.clamp(0.0, 1.0));
+        let blob = cc_blob_path(app).ok_or(
+            "The compression filter needs its weights file, which isn't installed.              Open Settings and update the enhancer.",
+        )?;
+        cc_blob = Some(blob.to_string_lossy().to_string());
+
+        // The filter is 8-bit and the worker refuses 10-bit rather than
+        // bypassing. Checked against the file the worker will ACTUALLY
+        // open: when pre-clean ran, that's its intermediate, already
+        // yuv420p — so a 10-bit source must not be blocked there.
+        let pix = probe_pix_fmt(app, &worker_input).await;
+        if let Some(px) = pix.as_deref() {
+            if pix_fmt_is_high_bit(px) {
+                return Err(format!(
+                    "The compression filter is 8-bit, and this clip is {px} (10-bit).                      Turn the filter off, or enable pre-clean — it converts to 8-bit first."
+                ));
+            }
+        }
+        in_pix = pix;
+    }
+
     let mut args: Vec<String> = vec![worker_input.clone(), worker_out_str.clone(), "-v".into()];
     args.push("--vsr-quality".into());
     args.push(q.to_string());
-    args.push("--vsr-scale".into());
-    args.push(s.to_string());
+    if vsr {
+        args.push("--vsr-scale".into());
+        args.push(s.to_string());
+    } else {
+        // Scale is meaningless without the network, and passing both
+        // invites the worker to disagree with itself.
+        args.push("--no-vsr".into());
+    }
     if !hdr {
         args.push("--no-thdr".into());
     }
+    // Flag and value always pushed together: `--cc-blob` left as the final
+    // token access-violates the worker.
+    if let (Some(blob), Some(k)) = (cc_blob.as_ref(), cc_k) {
+        args.push("--cc-blob".into());
+        args.push(blob.clone());
+        args.push("--cc-strength".into());
+        args.push(format!("{k:.2}"));
+    }
+    args.push("--quality".into());
+    args.push(enc_preset.as_str().into());
+    let cc_desc = cc_k.map(|k| format!("{k:.2}")).unwrap_or_else(|| "off".into());
+    let pix_desc = in_pix.clone().unwrap_or_else(|| "?".into());
     diag::log(
         app,
         "rtx",
-        &format!("worker key={event_key} q={q} hdr={hdr} scale={scale}x -> {worker_out_str}"),
+        &format!(
+            "worker key={event_key} q={q} hdr={hdr} vsr={vsr} scale={}x preset={} cc={cc_desc} pix={pix_desc} -> {worker_out_str}",
+            if vsr { s.to_string() } else { "1 (no-vsr)".to_string() },
+            enc_preset.as_str()
+        ),
     );
 
     let (mut rx, child) = app
@@ -735,6 +877,13 @@ async fn run_worker(
     // an error tail.
     let mut stderr_tail: Vec<String> = Vec::new();
     let mut exit_code: Option<i32> = None;
+    // The worker announces `CodecClean ON` (at -v, which we always pass) the
+    // moment it arms the filter. We watch for it because the filter can be
+    // dropped WITHOUT an error: if hardware decode fails to initialize, the
+    // worker falls back to a CPU path where the filter doesn't exist. Newer
+    // workers refuse outright; a user still on an older bundle would
+    // otherwise get an unfiltered file marked "done".
+    let mut saw_cc_on = false;
     while let Some(event) = rx.recv().await {
         match event {
             CommandEvent::Stderr(bytes) | CommandEvent::Stdout(bytes) => {
@@ -743,6 +892,9 @@ async fn run_worker(
                     let seg = seg.trim();
                     if seg.is_empty() {
                         continue;
+                    }
+                    if seg.contains("CodecClean ON") {
+                        saw_cc_on = true;
                     }
                     if let Some(p) = parse_progress(seg) {
                         let _ = app.emit(
@@ -799,6 +951,10 @@ async fn run_worker(
                 stderr_tail.join("\n")
             ),
         );
+        // The worker creates the output container before it can fail,
+        // leaving a few dozen bytes of unplayable file behind. The cancel
+        // path above already cleaned up; this one did not.
+        let _ = std::fs::remove_file(&worker_out);
         let tail = stderr_tail
             .last()
             .cloned()
@@ -806,6 +962,28 @@ async fn run_worker(
         return Err(format!(
             "RTX enhance failed: {tail} — details in Settings → Diagnostics."
         ));
+    }
+
+    // The filter was requested but the worker never announced arming it.
+    //
+    // This is the defence against a silent drop: `--cc-blob` is simply
+    // IGNORED on the worker's CPU path, which it falls back to whenever the
+    // hardware decoder fails to initialize — no error, no warning, and an
+    // unfiltered file that looks finished. Workers from 888255f on refuse
+    // loudly, but a user whose bundle predates that would otherwise be told
+    // the job succeeded. Failing here costs a re-run; not failing ships a
+    // file that isn't what was asked for.
+    if cc.is_some() && !saw_cc_on {
+        let _ = std::fs::remove_file(&worker_out);
+        diag::log(
+            app,
+            "rtx",
+            &format!("worker never armed CodecClean key={event_key} — refusing the output"),
+        );
+        return Err(
+            "The compression filter was requested but the enhancer never applied it              (its GPU decode path didn't start). Update the enhancer in Settings, or              turn the filter off."
+                .into(),
+        );
     }
 
     // Optional post-clean: filter chain applied to the VSR output (at the
@@ -833,6 +1011,77 @@ async fn run_worker(
 }
 
 /// Output filename suffix for a given scale: 2× upscale vs 1× decompress-only.
+/// Output quality preset the worker understands (`--quality`).
+///
+/// A closed enum on purpose: the worker validates this string and `exit(1)`s
+/// on anything unknown, so a free-form value from the frontend would turn a
+/// typo into a dead job. Unknown input falls back to the shipped default
+/// instead of failing.
+///
+/// Measured on a 60 s clip: lossless 1.9 GB, master 190 MB, entrega 94 MB,
+/// previa 18 MB — and encode TIME is flat from qp 12 to 30, so the choice
+/// costs size, not speed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum EncPreset {
+    Lossless,
+    Master,
+    Entrega,
+    Previa,
+}
+
+impl EncPreset {
+    fn as_str(self) -> &'static str {
+        match self {
+            EncPreset::Lossless => "lossless",
+            EncPreset::Master => "master",
+            EncPreset::Entrega => "entrega",
+            EncPreset::Previa => "previa",
+        }
+    }
+
+    /// Parse a frontend string. Anything unrecognized becomes the default
+    /// rather than an error the user can't act on.
+    fn from_str(s: &str) -> EncPreset {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "lossless" => EncPreset::Lossless,
+            "master" => EncPreset::Master,
+            "previa" | "prévia" => EncPreset::Previa,
+            _ => EncPreset::Entrega,
+        }
+    }
+}
+
+/// First free `<stem><suffix>.mp4` in `parent`, adding " (2)", " (3)"… when
+/// the plain name is taken.
+///
+/// 1.14.0 — the output path used to be a pure function of the source name
+/// and the scale, so enhancing the same clip twice wrote over the first
+/// result. That is worse than losing a file: run 1 leaves a library row
+/// pointing at that path, so after run 2 the old row silently describes a
+/// render it did not produce — two rows, one file, one of them lying.
+/// (Same shape as the filename collision that swallowed a download earlier
+/// in 1.13.5, which is what made this one recognizable.)
+///
+/// Checking existence then creating is a race in principle. In practice the
+/// enhance queue runs one job at a time, and the worker creates the file
+/// within milliseconds of this call; the 999 cap keeps a pathological
+/// directory from spinning forever.
+fn unique_out_path(parent: &std::path::Path, stem: &str, suffix: &str) -> std::path::PathBuf {
+    let first = parent.join(format!("{stem}{suffix}.mp4"));
+    if !first.exists() {
+        return first;
+    }
+    for n in 2..=999 {
+        let candidate = parent.join(format!("{stem}{suffix} ({n}).mp4"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    // Every name taken: fall back to the plain one rather than refusing to
+    // render. Overwriting after 998 collisions is a deliberate last resort.
+    first
+}
+
 fn out_suffix(scale: u8) -> &'static str {
     if scale <= 1 {
         "_rtx-clean"
@@ -854,6 +1103,12 @@ pub async fn rtx_enhance(
     hdr: bool,
     quality: u8,
     scale: u8,
+    // 1.14.0 — CodecClean compression filter. Off by default; strength
+    // 0.00-1.00 (1.00 is the tuned dose, 0.00 an exact bypass).
+    cc_enabled: bool,
+    cc_strength: f32,
+    // Output quality preset: lossless | master | entrega | previa.
+    enc_preset: String,
     preclean: Option<PrecleanOpts>,
     postclean: Option<PrecleanOpts>,
     job_id: String,
@@ -897,7 +1152,7 @@ pub async fn rtx_enhance(
         .file_stem()
         .and_then(|s| s.to_str())
         .ok_or("source path is not valid UTF-8")?;
-    let out_path = parent.join(format!("{stem}{}.mp4", out_suffix(scale)));
+    let out_path = unique_out_path(parent, stem, out_suffix(scale));
     let out_str = out_path
         .to_str()
         .ok_or("output path is not valid UTF-8")?
@@ -906,7 +1161,8 @@ pub async fn rtx_enhance(
     // 3. Run the worker (optional pre-clean, then VSR at the chosen scale).
     //    keep_audio → mux the original soundtrack back onto the final output.
     run_worker(
-        &app, &registry, &worker, &orig.file_path, &out_path, hdr, quality, scale, preclean,
+        &app, &registry, &worker, &orig.file_path, &out_path, hdr, quality, scale, true,
+        if cc_enabled { Some(cc_strength) } else { None }, EncPreset::from_str(&enc_preset), preclean,
         postclean, true, &asset_id, &job_id,
     )
     .await?;
@@ -968,6 +1224,12 @@ pub async fn rtx_enhance_path(
     hdr: bool,
     quality: u8,
     scale: u8,
+    // 1.14.0 — CodecClean compression filter. Off by default; strength
+    // 0.00-1.00 (1.00 is the tuned dose, 0.00 an exact bypass).
+    cc_enabled: bool,
+    cc_strength: f32,
+    // Output quality preset: lossless | master | entrega | previa.
+    enc_preset: String,
     preclean: Option<PrecleanOpts>,
     postclean: Option<PrecleanOpts>,
     job_id: String,
@@ -1001,14 +1263,15 @@ pub async fn rtx_enhance_path(
         .file_stem()
         .and_then(|s| s.to_str())
         .ok_or("source path is not valid UTF-8")?;
-    let out_path = parent.join(format!("{stem}{}.mp4", out_suffix(scale)));
+    let out_path = unique_out_path(parent, stem, out_suffix(scale));
     let out_str = out_path
         .to_str()
         .ok_or("output path is not valid UTF-8")?
         .to_string();
 
     run_worker(
-        &app, &registry, &worker, &path, &out_path, hdr, quality, scale, preclean, postclean,
+        &app, &registry, &worker, &path, &out_path, hdr, quality, scale, true,
+        if cc_enabled { Some(cc_strength) } else { None }, EncPreset::from_str(&enc_preset), preclean, postclean,
         true, &job_id, &job_id,
     )
     .await?;
@@ -1142,7 +1405,9 @@ pub async fn rtx_preview(
     //    the preview reflects the pre-clean too).
     let scale = if scale <= 1 { 1u8 } else { 2u8 };
     run_worker(
-        &app, &registry, &worker, &before_str, &after, hdr, quality, scale, preclean, None,
+        &app, &registry, &worker, &before_str, &after, hdr, quality, scale, true,
+        // TODO: rtx_preview has no caller; filter stays off until it does.
+        None, EncPreset::Entrega, preclean, None,
         false, &preview_id, &preview_id,
     )
     .await?;
@@ -1264,6 +1529,15 @@ pub async fn rtx_slice_vsr(
     quality: u8,
     scale: u8,
     hdr: bool,
+    // 1.14.0 — run VSR? False isolates the CodecClean filter, which is the
+    // only way to see what each stage contributes on its own.
+    vsr: bool,
+    // 1.14.0 — CodecClean compression filter. Off by default; strength
+    // 0.00-1.00 (1.00 is the tuned dose, 0.00 an exact bypass).
+    cc_enabled: bool,
+    cc_strength: f32,
+    // Output quality preset: lossless | master | entrega | previa.
+    enc_preset: String,
     key: String,
 ) -> Result<String, String> {
     let cap = detect();
@@ -1282,7 +1556,8 @@ pub async fn rtx_slice_vsr(
     // Raw VSR only (no post-clean) — the frontend caches this and re-applies
     // post-clean separately via rtx_slice_post, so tuning post doesn't re-run VSR.
     run_worker(
-        &app, &registry, &worker, &cleaned, &after, hdr, quality, scale, None, None, false, &key,
+        &app, &registry, &worker, &cleaned, &after, hdr, quality, scale, vsr,
+        if cc_enabled { Some(cc_strength) } else { None }, EncPreset::from_str(&enc_preset), None, None, false, &key,
         &key,
     )
     .await?;
@@ -1387,6 +1662,83 @@ pub fn rtx_enhance_cancel(
 
 #[cfg(all(test, windows))]
 mod tests {
+    /// 1.14.0 — re-enhancing a clip must not overwrite the previous
+    /// render. Reproduced live: a second run of the same clip replaced the
+    /// first result in place, leaving an earlier library row describing a
+    /// file it never made.
+    #[test]
+    fn repeated_enhance_never_overwrites() {
+        let dir = std::env::temp_dir().join("mh-rtx-test-unique");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Nothing there yet: the plain name.
+        let first = unique_out_path(&dir, "clip [abc]", "_rtx-vsr");
+        assert_eq!(first.file_name().unwrap(), "clip [abc]_rtx-vsr.mp4");
+
+        // Once it exists, the next run must land somewhere else.
+        std::fs::write(&first, b"render 1").unwrap();
+        let second = unique_out_path(&dir, "clip [abc]", "_rtx-vsr");
+        assert_eq!(second.file_name().unwrap(), "clip [abc]_rtx-vsr (2).mp4");
+        assert_ne!(first, second);
+
+        std::fs::write(&second, b"render 2").unwrap();
+        let third = unique_out_path(&dir, "clip [abc]", "_rtx-vsr");
+        assert_eq!(third.file_name().unwrap(), "clip [abc]_rtx-vsr (3).mp4");
+
+        // The earlier renders are untouched — the whole point.
+        assert_eq!(std::fs::read(&first).unwrap(), b"render 1");
+        assert_eq!(std::fs::read(&second).unwrap(), b"render 2");
+
+        // A different scale has its own suffix and its own sequence.
+        let other = unique_out_path(&dir, "clip [abc]", "_rtx-4x");
+        assert_eq!(other.file_name().unwrap(), "clip [abc]_rtx-4x.mp4");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 1.14.0 — the 10-bit gate reads this. Lines below are VERBATIM
+    /// `ffmpeg -i` output from files generated for the purpose, not
+    /// hand-written fixtures — note the colour metadata `(tv, progressive)`
+    /// carries a comma INSIDE the field, which is what breaks a naive
+    /// comma-split.
+    #[test]
+    fn pix_fmt_is_read_from_real_ffmpeg_lines() {
+        let eight = "  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 320x240 [SAR 1:1 DAR 4:3], 50 kb/s, 10 fps, 10 tbr, 10240 tbn (default)";
+        assert_eq!(parse_pix_fmt(eight).as_deref(), Some("yuv420p"));
+        assert!(!pix_fmt_is_high_bit("yuv420p"));
+
+        let ten = "  Stream #0:0[0x1](und): Video: hevc (Main 10) (hev1 / 0x31766568), yuv420p10le(tv, progressive), 320x240 [SAR 1:1 DAR 4:3], 31 kb/s, 10 fps, 10 tbr, 10240 tbn (default)";
+        assert_eq!(parse_pix_fmt(ten).as_deref(), Some("yuv420p10le"));
+        assert!(pix_fmt_is_high_bit("yuv420p10le"));
+
+        // The codec tag (0x31637661) must never be mistaken for a format,
+        // and an audio line has no pixel format at all.
+        assert_eq!(parse_pix_fmt("Stream #0:1: Audio: aac (LC), 44100 Hz, stereo"), None);
+
+        // Formats the filter cannot take.
+        for hi in ["p010le", "yuv422p10le", "yuv444p12le", "p016le", "yuv420p10be"] {
+            assert!(pix_fmt_is_high_bit(hi), "{hi} must be flagged 10-bit+");
+        }
+        for ok in ["yuv420p", "yuvj420p", "nv12", "gbrp", "rgb24"] {
+            assert!(!pix_fmt_is_high_bit(ok), "{ok} is 8-bit");
+        }
+    }
+
+    /// The preset never reaches the worker as free-form text: it validates
+    /// the value and exits on anything unknown.
+    #[test]
+    fn enc_preset_is_closed_and_defaults_safely() {
+        assert_eq!(EncPreset::from_str("lossless").as_str(), "lossless");
+        assert_eq!(EncPreset::from_str("MASTER").as_str(), "master");
+        assert_eq!(EncPreset::from_str(" previa ").as_str(), "previa");
+        assert_eq!(EncPreset::from_str("prévia").as_str(), "previa");
+        // Garbage, empty and the shipped default all land on entrega.
+        for junk in ["", "  ", "qp=12", "--nvenc-qp 0", "ultra", "entrega"] {
+            assert_eq!(EncPreset::from_str(junk).as_str(), "entrega", "{junk:?}");
+        }
+    }
+
     use super::*;
 
     #[test]

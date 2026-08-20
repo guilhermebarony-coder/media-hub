@@ -331,7 +331,11 @@ function num(v: string, fallback: number): number {
  * for dialing in values on real footage, not a polished control. The raw box
  * lets you paste any ffmpeg `-vf` chain, which overrides everything above it.
  */
-function PrecleanFields({
+/** Deblock / deband controls. 1.14.0 — currently unmounted: the clean
+ *  passes cost real render time and pre-clean measured worse than not
+ *  running it. Kept (and exported) because the backend still accepts the
+ *  options and this is expected to come back in a trimmed form. */
+export function PrecleanFields({
   value,
   onChange,
   title = "Pre-clean (deblock / deband)",
@@ -515,14 +519,16 @@ function PrecleanFields({
 function SettingsFields({
   quality,
   scale,
-  preclean,
-  postclean,
+  cc,
+  ccStrength,
+  encPreset,
   onChange,
 }: {
   quality: number;
   scale: number;
-  preclean: PrecleanOpts;
-  postclean: PrecleanOpts;
+  cc: boolean;
+  ccStrength: number;
+  encPreset: string;
   onChange: (opts: EnqueueOpts) => void;
 }) {
   return (
@@ -544,15 +550,58 @@ function SettingsFields({
           <option value={1}>Decompress only (1×)</option>
         </select>
       </div>
-      <PrecleanFields value={preclean} onChange={(p) => onChange({ preclean: p })} />
-      <PrecleanFields
-        value={postclean}
-        title="Post-clean (after VSR)"
-        onChange={(p) => onChange({ postclean: p })}
-      />
+      {/* 1.14.0 — CodecClean. Off by default: it rewrites the picture, so
+          it is opt-in. Strength 1.00 is the tuned dose; 0 is an exact
+          bypass, kept selectable so a before/after is one drag away. */}
+      <div className="rtxw-field">
+        <span className="rtxw-field-label">Compression filter</span>
+        <label className="rtxw-check">
+          <input type="checkbox" checked={cc} onChange={(e) => onChange({ cc: e.target.checked })} />
+          <span>Remove compression artifacts</span>
+        </label>
+      </div>
+      {cc && (
+        <div className="rtxw-field">
+          <span className="rtxw-field-label">Strength</span>
+          <div className="rtxw-range-row">
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={ccStrength}
+              onChange={(e) => onChange({ ccStrength: Number(e.target.value) })}
+            />
+            <span className="rtxw-range-val mono">{ccStrength.toFixed(2)}</span>
+          </div>
+        </div>
+      )}
+      <div className="rtxw-field">
+        <span className="rtxw-field-label">Output</span>
+        <select
+          className="rtxw-select"
+          value={encPreset}
+          onChange={(e) => onChange({ encPreset: e.target.value })}
+        >
+          <option value="lossless">Lossless (largest)</option>
+          <option value="master">Master</option>
+          <option value="entrega">Delivery</option>
+          <option value="previa">Preview (smallest)</option>
+        </select>
+      </div>
+      {/* 1.14.0 — pre/post-clean controls removed for now. They added
+          substantial render time, and the restoration research found the
+          pre-clean pass hurts more than it helps. The backend still
+          accepts both, so bringing them back is re-adding these two
+          lines plus the job defaults in rtxEnhance.tsx. */}
     </>
   );
 }
+
+/** Which stages of the worker run in the live preview. The compression
+ *  filter and the VSR network share one worker pass, so this is a single
+ *  choice rather than two independent toggles. */
+type PrevMode = "off" | "cc" | "vsr" | "both";
 
 /** A live preview session: one raw slice, re-filtered in place; VSR on demand. */
 type Slice = { key: string; startSec: number; before: string; cleaned: string };
@@ -570,14 +619,16 @@ export function RtxEnhanceWindow() {
     applyToStaged,
     startJob,
     startAllStaged,
+    defaultCc,
+    setDefaultCc,
+    defaultCcStrength,
+    setDefaultCcStrength,
+    defaultEncPreset,
+    setDefaultEncPreset,
     defaultQuality,
     setDefaultQuality,
     defaultScale,
     setDefaultScale,
-    defaultPreclean,
-    setDefaultPreclean,
-    defaultPostclean,
-    setDefaultPostclean,
     capability,
   } = useRtxEnhance();
 
@@ -587,7 +638,7 @@ export function RtxEnhanceWindow() {
   // once, re-filtered live, with VSR rendered only when toggled on.
   const [slice, setSlice] = useState<Slice | null>(null);
   const [vsrPath, setVsrPath] = useState<string | null>(null);
-  const [vsrOn, setVsrOn] = useState(false);
+  const [prevMode, setPrevMode] = useState<PrevMode>("both");
   // Difference map (where VSR changed the frame) — needs VSR rendered first.
   const [diffPath, setDiffPath] = useState<string | null>(null);
   const [diffOn, setDiffOn] = useState(false);
@@ -645,7 +696,7 @@ export function RtxEnhanceWindow() {
     const key = `${job.id}-${Date.now()}`;
     setBusy("extract");
     setVsrPath(null);
-    setVsrOn(false);
+    setPrevMode("both");
     setDiffPath(null);
     setDiffOn(false);
     try {
@@ -664,7 +715,7 @@ export function RtxEnhanceWindow() {
   const clearSlice = useCallback(() => {
     setSlice(null);
     setVsrPath(null);
-    setVsrOn(false);
+    setPrevMode("both");
     setDiffPath(null);
     setDiffOn(false);
     setBusy(null);
@@ -682,7 +733,11 @@ export function RtxEnhanceWindow() {
   // the effect below; a sequence guard drops stale async results so a fast
   // slider drag always ends on the latest values.
   const regen = useCallback(
-    async (job: RtxJob, before: string, key: string, useVsr: boolean, useDiff: boolean) => {
+    async (job: RtxJob, before: string, key: string, mode: PrevMode, useDiff: boolean) => {
+      // The two stages live in the same worker call, so which of them runs
+      // is decided here rather than by skipping the call.
+      const wantCc = mode === "cc" || mode === "both";
+      const wantVsr = mode === "vsr" || mode === "both";
       const seq = ++regenSeq.current;
       setBusy("filter");
       try {
@@ -695,13 +750,18 @@ export function RtxEnhanceWindow() {
         });
         if (seq !== regenSeq.current) return;
         setSlice((s) => (s && s.key === key ? { ...s, cleaned } : s));
-        if (!useVsr) {
+        if (mode === "off") {
           setVsrPath(null);
           setDiffPath(null);
           return;
         }
         // Reuse the cached RAW VSR when only post-clean changed; otherwise run it.
-        const vsrSig = `${key}|${JSON.stringify(job.preclean)}|${job.quality}|${job.scale}`;
+        const vsrSig =
+          `${key}|${JSON.stringify(job.preclean)}|${job.quality}|${job.scale}` +
+          // 1.14.0 — the filter runs INSIDE this step, so it belongs in the
+          // cache key. Without it, turning CodecClean on and re-previewing
+          // silently reused the unfiltered render.
+          `|${mode}|${wantCc ? job.ccStrength : "off"}|${job.encPreset}`;
         let rawVsr: string;
         if (vsrCache.current && vsrCache.current.sig === vsrSig) {
           rawVsr = vsrCache.current.raw;
@@ -712,6 +772,10 @@ export function RtxEnhanceWindow() {
             quality: job.quality,
             scale: job.scale,
             hdr: job.hdr,
+            vsr: wantVsr,
+            ccEnabled: wantCc,
+            ccStrength: job.ccStrength,
+            encPreset: job.encPreset,
             key: `${key}-v${seq}`,
           });
           if (seq !== regenSeq.current) return;
@@ -757,10 +821,10 @@ export function RtxEnhanceWindow() {
   // Live update: debounce settings changes into a single regen pass.
   useEffect(() => {
     if (!sel || !slice) return;
-    const h = setTimeout(() => void regen(sel, slice.before, slice.key, vsrOn, diffOn), 350);
+    const h = setTimeout(() => void regen(sel, slice.before, slice.key, prevMode, diffOn), 350);
     return () => clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [precleanSig, postcleanSig, sel?.quality, sel?.scale, vsrOn, diffOn, slice?.key, slice?.before, regen]);
+  }, [precleanSig, postcleanSig, sel?.quality, sel?.scale, prevMode, diffOn, slice?.key, slice?.before, regen]);
 
   if (!isOpen) return null;
 
@@ -811,13 +875,23 @@ export function RtxEnhanceWindow() {
     }
     if (selected.status === "staged") {
       if (slice) {
-        const showVsr = vsrOn && !!vsrPath;
+        const showVsr = prevMode !== "off" && !!vsrPath;
         const showDiff = diffOn && showVsr && !!diffPath;
+        // Say which stage produced the right-hand image. "RTX" alone is
+        // ambiguous now that two different things can run.
+        const modeLabel =
+          prevMode === "cc"
+            ? "AFTER · filter only"
+            : prevMode === "vsr"
+              ? selected.scale <= 1
+                ? "AFTER · RTX clean"
+                : "AFTER · RTX"
+              : "AFTER · filter + RTX";
         // Diff mode wipes VSR-result vs. the change heatmap (same res); else
         // raw vs. cleaned/VSR.
         const beforePath = showDiff ? vsrPath! : slice.before;
         const afterPath = showDiff ? diffPath! : showVsr ? vsrPath! : slice.cleaned;
-        const afterLbl = showDiff ? "DIFF · where VSR acted" : showVsr ? label : "CLEANED";
+        const afterLbl = showDiff ? "DIFF · what changed" : showVsr ? modeLabel : "ORIGINAL";
         const busyLbl =
           busy === "vsr"
             ? " · rendering VSR…"
@@ -843,25 +917,42 @@ export function RtxEnhanceWindow() {
               <button className="rtxw-newframe" onClick={clearSlice}>
                 ◀ Pick another frame
               </button>
-              <label className="rtxw-vsrtoggle" title="Run RTX VSR on this frame (slower)">
-                <input
-                  type="checkbox"
-                  checked={vsrOn}
-                  onChange={(e) => {
-                    setVsrOn(e.target.checked);
-                    if (!e.target.checked) setDiffOn(false);
-                  }}
-                />
-                <span>Show VSR{busyLbl}</span>
-              </label>
+              {/* The compression filter and the VSR network run in the same
+                  worker pass, so "turn VSR off" used to take the filter with
+                  it and there was no way to see either one alone. Four
+                  explicit states answer "what is each stage doing?". */}
+              <div className="rtxw-modes" role="group" aria-label="Preview stages">
+                {(
+                  [
+                    ["off", "Off", "No processing — just the frame"],
+                    ["cc", "Filter", "Compression filter only, at source resolution"],
+                    ["vsr", "RTX", "RTX upscale only, no compression filter"],
+                    ["both", "Both", "Compression filter, then RTX upscale"],
+                  ] as [PrevMode, string, string][]
+                ).map(([m, lbl, tip]) => (
+                  <button
+                    key={m}
+                    type="button"
+                    className={"rtxw-mode" + (prevMode === m ? " active" : "")}
+                    title={tip}
+                    onClick={() => {
+                      setPrevMode(m);
+                      if (m === "off") setDiffOn(false);
+                    }}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+                {busyLbl && <span className="rtxw-modebusy faint">{busyLbl}</span>}
+              </div>
               <label
-                className={"rtxw-vsrtoggle" + (vsrOn ? "" : " disabled")}
-                title="Highlight where VSR changed the frame (needs VSR on)"
+                className={"rtxw-vsrtoggle" + (prevMode !== "off" ? "" : " disabled")}
+                title="Highlight what changed (needs a stage running)"
               >
                 <input
                   type="checkbox"
                   checked={diffOn}
-                  disabled={!vsrOn}
+                  disabled={prevMode === "off"}
                   onChange={(e) => setDiffOn(e.target.checked)}
                 />
                 <span>Diff map</span>
@@ -1029,8 +1120,9 @@ export function RtxEnhanceWindow() {
                   <SettingsFields
                     quality={editTarget.quality}
                     scale={editTarget.scale}
-                    preclean={editTarget.preclean}
-                    postclean={editTarget.postclean}
+                    cc={editTarget.cc}
+                    ccStrength={editTarget.ccStrength}
+                    encPreset={editTarget.encPreset}
                     onChange={(opts) => editStaged(editTarget.id, opts)}
                   />
                   <div className="rtxw-settings-actions">
@@ -1042,8 +1134,9 @@ export function RtxEnhanceWindow() {
                           quality: editTarget.quality,
                           scale: editTarget.scale,
                           hdr: editTarget.hdr,
-                          preclean: editTarget.preclean,
-                          postclean: editTarget.postclean,
+                          cc: editTarget.cc,
+                          ccStrength: editTarget.ccStrength,
+                          encPreset: editTarget.encPreset,
                         });
                       }}
                     >
@@ -1064,13 +1157,15 @@ export function RtxEnhanceWindow() {
                   <SettingsFields
                     quality={defaultQuality}
                     scale={defaultScale}
-                    preclean={defaultPreclean}
-                    postclean={defaultPostclean}
+                    cc={defaultCc}
+                    ccStrength={defaultCcStrength}
+                    encPreset={defaultEncPreset}
                     onChange={(opts) => {
                       if (opts.quality != null) setDefaultQuality(opts.quality);
                       if (opts.scale != null) setDefaultScale(opts.scale);
-                      if (opts.preclean != null) setDefaultPreclean(opts.preclean);
-                      if (opts.postclean != null) setDefaultPostclean(opts.postclean);
+                      if (opts.cc != null) setDefaultCc(opts.cc);
+                      if (opts.ccStrength != null) setDefaultCcStrength(opts.ccStrength);
+                      if (opts.encPreset != null) setDefaultEncPreset(opts.encPreset);
                     }}
                   />
                 </>

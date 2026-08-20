@@ -1119,13 +1119,23 @@ function TranscodeSection() {
 // without a capable RTX GPU (nothing to configure there).
 
 function RtxSection() {
+  const [workerBusy, setWorkerBusy] = useState(false);
+  const [workerErr, setWorkerErr] = useState<string | null>(null);
   const {
     capability,
     workerReady,
+    workerOutdated,
+    ensureWorker,
     defaultQuality,
     setDefaultQuality,
     defaultScale,
     setDefaultScale,
+    defaultCc,
+    setDefaultCc,
+    defaultCcStrength,
+    setDefaultCcStrength,
+    defaultEncPreset,
+    setDefaultEncPreset,
     defaultHdr,
     setDefaultHdr,
     openWindow,
@@ -1189,6 +1199,67 @@ function RtxSection() {
       </div>
 
       <div className="settings-row">
+        <span className="settings-label">Compression filter</span>
+        <label className="switch" style={{ flex: "0 0 auto" }}>
+          <input
+            type="checkbox"
+            checked={defaultCc}
+            onChange={(e) => setDefaultCc(e.target.checked)}
+          />
+          <span className="switch-slider" />
+        </label>
+        <span className="hint-text faint">
+          Removes compression artifacts before upscaling. Costs ~30% more time.
+        </span>
+      </div>
+
+      {defaultCc && (
+        <div className="settings-row">
+          <span className="settings-label">Filter strength</span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={defaultCcStrength}
+            onChange={(e) => setDefaultCcStrength(Number(e.target.value))}
+            style={{ flex: "0 0 auto", width: 160 }}
+          />
+          <span className="hint-text faint">
+            {Math.round(defaultCcStrength * 100)}% —{" "}
+            {defaultCcStrength >= 0.999
+              ? "the tuned dose."
+              : defaultCcStrength <= 0.001
+                ? "no change at all (exact bypass)."
+                : "lighter than tuned."}
+          </span>
+        </div>
+      )}
+
+      <div className="settings-row">
+        <span className="settings-label">Output</span>
+        <select
+          className="field-select"
+          value={defaultEncPreset}
+          onChange={(e) => setDefaultEncPreset(e.target.value)}
+        >
+          <option value="lossless">Lossless</option>
+          <option value="master">Master</option>
+          <option value="entrega">Delivery</option>
+          <option value="previa">Preview</option>
+        </select>
+        <span className="hint-text faint">
+          {defaultEncPreset === "lossless"
+            ? "Enormous files (~2 GB/min). For judging quality, not for keeping."
+            : defaultEncPreset === "master"
+              ? "Near-lossless, large. For finishing."
+              : defaultEncPreset === "previa"
+                ? "Small and soft. For checking a cut."
+                : "The balanced default. Encode time is the same either way — only size changes."}
+        </span>
+      </div>
+
+      <div className="settings-row">
         <span className="settings-label">SDR → HDR</span>
         <label className="switch" style={{ flex: "0 0 auto" }}>
           <input
@@ -1224,8 +1295,33 @@ function RtxSection() {
         </div>
         <div>
           <dt>Enhancer</dt>
-          <dd className={workerReady ? "" : "err"}>
-            {workerReady ? "installed" : "not installed yet"}
+          {/* 1.14.0 — three states, not two. An enhancer installed before
+              the CodecClean build accepts the filter and ignores it, so
+              "installed" alone was a misleading green light. */}
+          <dd className={workerReady && !workerOutdated ? "" : "err"}>
+            {!workerReady
+              ? "not installed yet"
+              : workerOutdated
+                ? "update available"
+                : "installed"}
+            {(!workerReady || workerOutdated) && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ marginLeft: 8 }}
+                disabled={workerBusy}
+                onClick={() => {
+                  setWorkerBusy(true);
+                  setWorkerErr(null);
+                  void ensureWorker()
+                    .catch((e) => setWorkerErr(String(e)))
+                    .finally(() => setWorkerBusy(false));
+                }}
+              >
+                {workerBusy ? "installing…" : workerReady ? "Update" : "Install"}
+              </button>
+            )}
+            {workerErr && <div className="hint-text err">{workerErr}</div>}
           </dd>
         </div>
       </dl>
