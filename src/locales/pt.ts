@@ -234,7 +234,8 @@ export const pt: Record<string, string> = {
   "set.src.fileOk": "✓ {n} cookies do youtube.com, token de login encontrado. Deve funcionar para vídeos com restrição de idade.",
   "set.src.fileWarnTitle": "⚠ Este arquivo de cookies está sem o seu login do YouTube",
   "set.src.lib.moveHint": "Move fisicamente as pastas Library/, Projects/ e _thumbnails/ e reescreve todos os caminhos de arquivo. Recusa enquanto houver algum download em andamento.",
-  "set.lib.templateHint": "Tokens: {title} · {channel} · {date} · {id}. Vazio = padrão. A extensão é adicionada automaticamente.",
+  "set.lib.templateHint":
+    "Tokens: {title} · {channel} · {date} · {id}. Vazio = padrão. A extensão é adicionada automaticamente, e o {id} também se você não colocar — dois vídeos podem ter o mesmo título, e sem ele o segundo sobrescreve o primeiro em silêncio.",
   "set.dl.workersHint": "Vale para a fila em lote. Downloads de URL única ignoram isto.",
   "set.dl.qualityHint": "Limite para a fila em lote + envios da extensão. Escolhe a maior opção até o limite; volta para a original se o vídeo não chegar lá. O seletor de formato da página Baixar tem prioridade sobre isto.",
   "set.dl.bandwidthHint": "KiB/s por processo. Desligado = sem limite. ex.: 5000 ≈ 5 MB/s por download paralelo.",
@@ -280,6 +281,8 @@ export const pt: Record<string, string> = {
     "Esse formato não tem faixa de vídeo — viria só o áudio. Escolha uma linha com vcodec, ou vá na aba Áudio.",
   "dl.warnNleCodec":
     "O After Effects não importa esse codec. Escolha um transcode abaixo que ele já chega pronto pra editar.",
+  "dl.warnGifLong":
+    "GIF de um clipe desse tamanho passa fácil de dezenas de MB — GIF não comprime entre quadros. Corte um trecho antes, ou use H.264 MP4.",
   "dl.postItemsTrimNote":
     "Vários itens selecionados — cada um vem inteiro. Selecione um só para poder cortar.",
   "dl.show": "Mostrar",
@@ -326,6 +329,8 @@ export const pt: Record<string, string> = {
   "preset.h264_mp4.hint": ".mp4 · arquivo pequeno · para compartilhar, não para editar",
   "preset.h264_nvenc_mp4": "H.264 MP4 (NVENC, GPU NVIDIA)",
   "preset.h264_nvenc_mp4.hint": ".mp4 · 5–10× mais rápido em NVIDIA · falha graciosamente sem GPU",
+  "preset.gif": "GIF",
+  "preset.gif.hint": ".gif · 480px · 15 fps · em loop · para compartilhar, não para editar",
   "dl.clearCompleted": "Limpar concluídos",
   "dl.retryFailed": "Repetir com falha",
   "dl.selectAll": "Selecionar tudo",

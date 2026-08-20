@@ -191,6 +191,7 @@
       { v: "dnxhr_sq", l: "DNxHR SQ" },
       { v: "h264_mp4", l: "H.264 MP4" },
       { v: "h264_nvenc_mp4", l: "H.264 NVENC" },
+      { v: "gif", l: "GIF (480p, em loop)" },
     ]);
     // Audio types have no quality/transcode meaning — hide those rows.
     // Class, not inline display: .mh-menu-row is `display: flex

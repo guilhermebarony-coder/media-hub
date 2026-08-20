@@ -281,6 +281,33 @@ pub fn build_filename_template(user_template: &str) -> String {
     if !out.contains("%(ext)s") {
         out.push_str(".%(ext)s");
     }
+    // 1.13.5 — the video id is NOT optional, even when the user's
+    // template leaves it out. Two distinct videos can produce the same
+    // filename, and then the second download is silently lost: yt-dlp
+    // sees the existing file and reports "has already been downloaded",
+    // so nothing is fetched while the library still gets a row pointing
+    // at the FIRST video's file.
+    //
+    // This is not a corner case. A tester hit it with two YouTube Shorts
+    // titled "SEU NOME VAI SER JOSE" and "SEU NOME VAI SER JOSÉ" —
+    // `--restrict-filenames` (always on) folds É to E, so two different
+    // videos collapsed onto one name. Reproduced exactly. The half-
+    // written `.part` from the first attempt also poisoned the second:
+    // aria2c tried to RESUME another video's audio stream and aborted
+    // with "total length mismatch".
+    //
+    // Keeping the id also restores cancel-cleanup, which finds a
+    // download's leftovers by its `[id]` marker and matched nothing at
+    // all under an id-less template.
+    if !out.contains("%(id)s") {
+        if let Some(pos) = out.rfind(".%(ext)s") {
+            out.insert_str(pos, " [%(id)s]");
+        } else if let Some(pos) = out.rfind("%(ext)s") {
+            out.insert_str(pos, " [%(id)s]");
+        } else {
+            out.push_str(" [%(id)s]");
+        }
+    }
     out
 }
 
@@ -959,4 +986,49 @@ pub fn settings_set(
     // settings, etc.) refresh their copies.
     let _ = app.emit("settings:changed", ());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 1.13.5 — the collision that silently lost a tester's download. Two
+    // YouTube Shorts whose titles differ only by an accent fold to the
+    // same ASCII name under --restrict-filenames; with no id in the
+    // template the second never downloads at all — yt-dlp reports "has
+    // already been downloaded" and the library row ends up pointing at
+    // the FIRST video's file. Reproduced against the real URLs before
+    // this test was written.
+    #[test]
+    fn filename_template_always_carries_the_video_id() {
+        // Default already has it, and must not gain a second copy.
+        let d = build_filename_template("");
+        assert_eq!(d.matches("%(id)s").count(), 1, "default: {d}");
+
+        // The tester's shape: title only.
+        assert_eq!(
+            build_filename_template("{title}"),
+            "%(title).120B [%(id)s].%(ext)s"
+        );
+        // Extension supplied by the user.
+        assert_eq!(
+            build_filename_template("{title}.%(ext)s"),
+            "%(title).120B [%(id)s].%(ext)s"
+        );
+        assert_eq!(
+            build_filename_template("{channel} - {date}"),
+            "%(channel)s - %(upload_date)s [%(id)s].%(ext)s"
+        );
+        // An explicit {id} is respected as-is — no duplicate, and the
+        // user's chosen position is preserved.
+        assert_eq!(
+            build_filename_template("{id} - {title}"),
+            "%(id)s - %(title).120B.%(ext)s"
+        );
+        for tpl in ["{title}", "{channel}", "{date}", "{title} ({date})"] {
+            let out = build_filename_template(tpl);
+            assert_eq!(out.matches("%(id)s").count(), 1, "{tpl} -> {out}");
+            assert!(out.ends_with(".%(ext)s"), "{tpl} -> {out}");
+        }
+    }
 }

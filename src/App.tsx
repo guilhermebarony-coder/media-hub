@@ -10,6 +10,7 @@ import { RtxEnhanceProvider } from "./lib/rtxEnhance";
 import { RtxQueueDock } from "./components/RtxQueueDock";
 import { RtxEnhanceWindow } from "./components/RtxEnhanceWindow";
 import { confirmDialog } from "./lib/dialog";
+import { TRANSCODE_PRESETS } from "./lib/types";
 import { DialogHost } from "./components/DialogHost";
 import { ToolsGate } from "./components/ToolsGate";
 import { lazy } from "react";
@@ -119,24 +120,29 @@ function BridgeListener() {
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let cancelled = false;
+    type BridgePayload = {
+      url: string;
+      audio_format: string | null;
+      project_id: string | null;
+      source: string;
+      quality: string | null;
+      transcode: string | null;
+      rename: string | null;
+      media_index: number | null;
+    };
     (async () => {
       try {
         const { listen } = await import("@tauri-apps/api/event");
-        const fn = await listen<{
-          url: string;
-          audio_format: string | null;
-          project_id: string | null;
-          source: string;
-          quality: string | null;
-          transcode: string | null;
-          rename: string | null;
-          media_index: number | null;
-        }>("bridge:enqueue", (e) => {
-          const p = e.payload;
+        const handle = (p: BridgePayload | null | undefined) => {
           if (!p || !p.url) return;
           // 1.13.x — honor the extension quick-menu overrides when present;
           // otherwise fall back to the user's Settings default.
-          const validPresets = ["none", "prores_422_lt", "dnxhr_sq", "h264_mp4", "h264_nvenc_mp4"];
+          // Allowlist, because this arrives over the bridge from the
+          // extension. Derived from the preset registry rather than
+          // retyped — a hand-written copy silently dropped every new
+          // preset (GIF was added in 1.13.5 and would have fallen back
+          // to the Settings default without a word).
+          const validPresets = TRANSCODE_PRESETS.map((p) => p.value) as string[];
           const transcodePreset = (
             p.transcode && validPresets.includes(p.transcode)
               ? p.transcode
@@ -159,9 +165,25 @@ function BridgeListener() {
                 : undefined,
           });
           console.log(`[bridge] enqueued from ${p.source}: ${p.url}`);
-        });
-        if (cancelled) fn();
-        else unlisten = fn;
+        };
+        const fn = await listen<BridgePayload>("bridge:enqueue", (e) => handle(e.payload));
+        if (cancelled) {
+          fn();
+          return;
+        }
+        unlisten = fn;
+        // 1.13.5 — tell Rust we're listening, and take whatever arrived
+        // before we were. The bridge's HTTP server binds during Tauri
+        // setup(), so on a cold start /health answers "up" seconds
+        // before this effect runs — an enqueue in that window used to be
+        // emitted into the void and silently lost, which is why clicking
+        // the extension button on a closed app opened it and did nothing
+        // until you clicked a second time.
+        const missed = await invoke<BridgePayload[]>("bridge_frontend_ready");
+        for (const p of missed) handle(p);
+        if (missed.length > 0) {
+          console.log(`[bridge] drained ${missed.length} enqueue(s) buffered during startup`);
+        }
       } catch (e) {
         console.warn("[bridge] listen failed:", e);
       }

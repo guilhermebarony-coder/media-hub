@@ -97,6 +97,36 @@ pub(crate) fn resolve_preset(preset: &str) -> Result<(Vec<&'static str>, &'stati
             "mp4",
             "h264nv",
         )),
+        // 1.13.5 — real GIF out. X/Twitter serves "GIFs" as silent
+        // looping MP4s, so grabbing one gave you an .mp4 that no chat
+        // window or issue tracker will animate.
+        //
+        // One-pass palette: split the stream, build a palette from it,
+        // and apply that palette to the other branch. GIF is capped at
+        // 256 colours, so ffmpeg's default web-safe palette bands badly
+        // on real footage — `stats_mode=diff` weights the palette toward
+        // the pixels that actually move, and Bayer dithering keeps the
+        // file far smaller than error-diffusion (which adds noise that
+        // GIF's LZW cannot compress).
+        //
+        // 15 fps and a 480px cap are the sharing-friendly middle: a GIF
+        // runs 5-6× the size of the source MP4 at 480px and ~12× at
+        // 720px (measured). `min(480,iw)` never UPSCALES — an X GIF is
+        // often smaller than that already, and blowing it up would cost
+        // size for blur. `-an` drops the audio the caller mapped:
+        // verified to override `-map 0:a:0?` rather than conflict.
+        "gif" => Ok((
+            vec![
+                "-vf",
+                "fps=15,scale='min(480,iw)':-1:flags=lanczos,split[s0][s1];\
+                 [s0]palettegen=stats_mode=diff[p];\
+                 [s1][p]paletteuse=dither=bayer:bayer_scale=5",
+                "-an",
+                "-loop", "0",  // 0 = loop forever, GIF's whole point
+            ],
+            "gif",
+            "gif",
+        )),
         other => Err(format!("unknown preset: {other}")),
     }
 }
@@ -373,6 +403,33 @@ pub async fn media_transcode(
 
 #[cfg(test)]
 mod tests {
+    // 1.13.5 — the GIF filter is written across several source lines with
+    // `\` continuations. That strips the newline AND the next line's
+    // indentation, but one stray space would make ffmpeg reject the whole
+    // graph. This pins the assembled string to the exact one verified
+    // against ffmpeg (quoting included: `scale=min(480,iw)` UNQUOTED fails
+    // with "No option name near 'lanczos'" because the comma inside min()
+    // splits the filter's option list).
+    #[test]
+    fn gif_preset_builds_the_filter_ffmpeg_accepts() {
+        let (args, ext, suffix) = resolve_preset("gif").expect("gif is a known preset");
+        assert_eq!(ext, "gif");
+        assert_eq!(suffix, "gif");
+        let vf = args
+            .iter()
+            .position(|a| *a == "-vf")
+            .map(|i| args[i + 1])
+            .expect("gif preset must pass a filtergraph");
+        assert_eq!(
+            vf,
+            "fps=15,scale='min(480,iw)':-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5"
+        );
+        // Callers map audio unconditionally; GIF has none. `-an` is what
+        // keeps `-map 0:a:0?` from poisoning the output.
+        assert!(args.contains(&"-an"), "gif must drop audio");
+        assert!(args.windows(2).any(|w| w == ["-loop", "0"]), "gif must loop forever");
+    }
+
     // 1.13.4 — the guard that turns ffmpeg's "Stream map '' matches no
     // streams" into a sentence. Fixtures are real `ffmpeg -i` output:
     // the audio one is the exact probe from the tester's failed job.

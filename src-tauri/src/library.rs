@@ -470,6 +470,38 @@ pub async fn library_insert(
     state: State<'_, LibraryState>,
     input: AssetInput,
 ) -> Result<String, String> {
+    // 1.14.0 — one file, one row. Never record the same path twice.
+    //
+    // A user hit this in the wild: a download still in flight when the app
+    // closed is re-queued on the next launch (see loadQueueFromStorage),
+    // so it ran again the next morning and recorded a SECOND row pointing
+    // at the SAME file. The library then showed two identical clips, and
+    // deleting either one took the shared file with it — there was no way
+    // to remove the duplicate without losing the video.
+    //
+    // Returning the existing id makes recording idempotent: the same file
+    // is the same asset, no matter which path led here. Segment downloads
+    // are unaffected — each cut is its own file.
+    if !input.file_path.trim().is_empty() {
+        let existing: Option<(String,)> =
+            sqlx::query_as("SELECT id FROM assets WHERE file_path = ? LIMIT 1")
+                .bind(&input.file_path)
+                .fetch_optional(&state.pool)
+                .await
+                .map_err(|e| format!("library_insert (duplicate check): {e}"))?;
+        if let Some((existing_id,)) = existing {
+            crate::diag::log(
+                &app,
+                "library",
+                &format!(
+                    "insert skipped: {} is already recorded as {existing_id}",
+                    input.file_path
+                ),
+            );
+            return Ok(existing_id);
+        }
+    }
+
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp();
 

@@ -760,15 +760,23 @@ function MetadataCard() {
   //     After Effects has never read VP9/WebM. Only worth saying when
   //     they're keeping the raw file — a transcode already solves it.
   const pickedVcodec = (selectedFormat?.vcodec ?? "").toLowerCase();
-  const pickWarning: "audioOnly" | "nleCodec" | null =
+  //   - a GIF of something long. GIF has no interframe compression, so
+  //     it runs 5-6x the source MP4 at 480px (measured) — fine for the
+  //     few seconds an X GIF lasts, brutal for a full clip.
+  const GIF_WARN_SEC = 30;
+  const pickWarning: "audioOnly" | "nleCodec" | "gifLong" | null =
     downloadMode !== "video" || !selectedFormat
       ? null
       : !selectedFormat.has_video
         ? "audioOnly"
-        : transcodePreset === "none" &&
-            (/^(vp0?[89]|av01)/.test(pickedVcodec) || selectedFormat.ext === "webm")
-          ? "nleCodec"
-          : null;
+        : transcodePreset === "gif" &&
+            (activeMeta?.duration_sec ?? 0) > GIF_WARN_SEC &&
+            segments.length === 0
+          ? "gifLong"
+          : transcodePreset === "none" &&
+              (/^(vp0?[89]|av01)/.test(pickedVcodec) || selectedFormat.ext === "webm")
+            ? "nleCodec"
+            : null;
 
   const videoFormats = activeMeta?.formats.filter((f) => f.has_video) ?? [];
   const audioOnly = activeMeta?.formats.filter((f) => !f.has_video && f.has_audio) ?? [];
@@ -1199,7 +1207,9 @@ function MetadataCard() {
               <span style={{ flex: 1 }}>
                 {pickWarning === "audioOnly"
                   ? t("dl.warnAudioOnly")
-                  : `${t("dl.warnNleCodec")} (${selectedFormat?.vcodec ?? "?"})`}
+                  : pickWarning === "gifLong"
+                    ? t("dl.warnGifLong")
+                    : `${t("dl.warnNleCodec")} (${selectedFormat?.vcodec ?? "?"})`}
               </span>
             </div>
           )}

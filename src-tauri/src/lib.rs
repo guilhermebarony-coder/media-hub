@@ -1695,8 +1695,10 @@ fn dispatch_deeplink(app: &AppHandle, raw_url: &str) {
         "project_id": project_id,
         "source": "deep-link",
     });
-    if let Err(e) = app.emit("bridge:enqueue", payload) {
-        eprintln!("[deeplink] emit failed: {e}");
+    // Via bridge::deliver, not emit: a deep link is what LAUNCHES the
+    // app, so the renderer is never listening yet on a cold start.
+    if let Err(e) = bridge::deliver(app, payload) {
+        eprintln!("[deeplink] deliver failed: {e}");
     } else {
         eprintln!("[deeplink] enqueued: {}", url);
     }
@@ -1954,6 +1956,9 @@ pub fn run() {
                 }
             }
             app.manage(settings_state);
+            // Unconditional: the deep-link channel parks here too, and it
+            // works even when the HTTP bridge is switched off.
+            app.manage(bridge::BridgeInbox::default());
 
             // 1.2.16 — yt-dlp engine auto-updater. Fire a silent,
             // throttled (24h) background check on every launch so testers
@@ -2044,6 +2049,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             binaries_version,
+            bridge::bridge_frontend_ready,
             metadata::yt_fetch_metadata,
             playlist::yt_fetch_playlist,
             yt_resolve_stream_url,

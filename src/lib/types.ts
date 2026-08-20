@@ -103,7 +103,8 @@ export type TranscodePreset =
   | "prores_422_lt"
   | "dnxhr_sq"
   | "h264_mp4"
-  | "h264_nvenc_mp4";
+  | "h264_nvenc_mp4"
+  | "gif";
 
 export type TranscodePresetMeta = {
   value: TranscodePreset;
@@ -128,6 +129,13 @@ export const TRANSCODE_PRESETS: TranscodePresetMeta[] = [
     value: "h264_nvenc_mp4",
     label: "H.264 MP4 (NVENC, NVIDIA GPU)",
     hint: ".mp4 · 5–10× faster on NVIDIA · errors gracefully if no GPU",
+  },
+  // 1.13.5 — X/Twitter serves "GIFs" as silent looping MP4s; this gives
+  // you back an actual .gif. Sized for sharing, not editing.
+  {
+    value: "gif",
+    label: "GIF",
+    hint: ".gif · 480px · 15 fps · looping · for sharing, not editing",
   },
 ];
 

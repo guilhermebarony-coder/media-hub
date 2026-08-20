@@ -236,7 +236,8 @@ export const en: Record<string, string> = {
   "set.src.fileOk": "✓ {n} youtube.com cookies, login token found. Should work for age-restricted videos.",
   "set.src.fileWarnTitle": "⚠ This cookies file is missing your YouTube login",
   "set.src.lib.moveHint": "Physically moves Library/, Projects/ and _thumbnails/ and rewrites every file path. Refused while any download is running.",
-  "set.lib.templateHint": "Tokens: {title} · {channel} · {date} · {id}. Empty = default. The extension is added automatically.",
+  "set.lib.templateHint":
+    "Tokens: {title} · {channel} · {date} · {id}. Empty = default. The extension is added automatically, and so is {id} if you leave it out — two videos can share a title, and without it the second one silently overwrites the first.",
   "set.dl.workersHint": "Applies to the batch queue. Single-URL downloads ignore this.",
   "set.dl.qualityHint": "Cap for the batch queue + extension sends. Picks the highest option at or below the cap; falls back to the original if the video doesn't go that high. The Download page's format picker overrides this.",
   "set.dl.bandwidthHint": "KiB/s per worker. Off = unlimited. e.g. 5000 ≈ 5 MB/s per parallel download.",
@@ -282,6 +283,8 @@ export const en: Record<string, string> = {
     "This format has no video track — you'd get an audio file. Pick a row with a vcodec, or switch to the Audio tab.",
   "dl.warnNleCodec":
     "After Effects doesn't import this codec. Pick a transcode preset below and it lands edit-ready.",
+  "dl.warnGifLong":
+    "A GIF of a clip this long runs to tens of megabytes — GIF has no interframe compression. Trim a segment first, or use H.264 MP4.",
   "dl.postItemsTrimNote":
     "Several items selected — each is downloaded whole. Pick a single item to trim it.",
   "dl.show": "Show",
@@ -328,6 +331,8 @@ export const en: Record<string, string> = {
   "preset.h264_mp4.hint": ".mp4 · small file · for sharing, not editing",
   "preset.h264_nvenc_mp4": "H.264 MP4 (NVENC, NVIDIA GPU)",
   "preset.h264_nvenc_mp4.hint": ".mp4 · 5–10× faster on NVIDIA · errors gracefully if no GPU",
+  "preset.gif": "GIF",
+  "preset.gif.hint": ".gif · 480px · 15 fps · looping · for sharing, not editing",
   "dl.clearCompleted": "Clear completed",
   "dl.retryFailed": "Retry failed",
   "dl.selectAll": "Select all",

@@ -170,6 +170,98 @@ struct EnqueueEvent {
     media_index: Option<u32>,
 }
 
+/// 1.13.5 — enqueues that arrived before the renderer was listening.
+///
+/// `emit` is fire-and-forget: with no listener registered the event is
+/// dropped and `emit` still returns Ok, so the HTTP call answered 200
+/// while nothing happened. That is a race we lose by construction on a
+/// cold start — the axum server binds inside Tauri's `setup()`, so
+/// `/health` says "up" seconds before React mounts and subscribes.
+/// A tester hit it every time: "it opens Media Hub but doesn't start the
+/// download, I end up clicking twice."
+///
+/// So the renderer announces itself instead. Until it does, deliveries
+/// are parked here; `bridge_frontend_ready` flips the flag and drains
+/// them in the same lock, which closes the window where a request could
+/// land between the drain and the flip.
+#[derive(Default)]
+pub struct BridgeInbox {
+    inner: std::sync::Mutex<InboxState>,
+}
+
+#[derive(Default)]
+struct InboxState {
+    ready: bool,
+    pending: Vec<serde_json::Value>,
+}
+
+/// Outcome of handing a payload to the inbox.
+#[derive(Debug, PartialEq)]
+enum Accepted {
+    /// Renderer is live — emit this now.
+    EmitNow(serde_json::Value),
+    /// Renderer still booting — parked for the drain.
+    Parked,
+    /// Parked too many; the renderer is evidently not coming.
+    Overflow,
+}
+
+impl InboxState {
+    fn accept(&mut self, value: serde_json::Value) -> Accepted {
+        if self.ready {
+            return Accepted::EmitNow(value);
+        }
+        if self.pending.len() >= MAX_PENDING {
+            return Accepted::Overflow;
+        }
+        self.pending.push(value);
+        Accepted::Parked
+    }
+
+    /// Mark the renderer live and hand over everything it missed.
+    fn drain_ready(&mut self) -> Vec<serde_json::Value> {
+        self.ready = true;
+        std::mem::take(&mut self.pending)
+    }
+}
+
+/// Bound on the park — a renderer that never comes up (webview crash)
+/// must not grow this without limit. Far above any real burst of clicks.
+const MAX_PENDING: usize = 32;
+
+/// Hand an enqueue to the renderer, parking it when nobody's listening.
+/// Both channels go through here: the HTTP bridge and the `mediahub://`
+/// deep link (which is itself what launches the app, so it races hardest).
+pub fn deliver(app: &AppHandle, payload: impl Serialize) -> Result<(), String> {
+    let value = serde_json::to_value(payload).map_err(|e| e.to_string())?;
+    let outcome = {
+        let inbox = app.state::<BridgeInbox>();
+        let mut guard = inbox
+            .inner
+            .lock()
+            .map_err(|_| "bridge inbox lock poisoned".to_string())?;
+        guard.accept(value)
+    };
+    match outcome {
+        Accepted::EmitNow(value) => app
+            .emit("bridge:enqueue", value)
+            .map_err(|e| e.to_string()),
+        Accepted::Parked => Ok(()),
+        Accepted::Overflow => Err("too many queued enqueues while the app starts".into()),
+    }
+}
+
+/// Called by the renderer once its `bridge:enqueue` listener is live.
+/// Returns everything that arrived while it was still booting.
+#[tauri::command]
+pub fn bridge_frontend_ready(app: AppHandle) -> Vec<serde_json::Value> {
+    let inbox = app.state::<BridgeInbox>();
+    let Ok(mut guard) = inbox.inner.lock() else {
+        return Vec::new();
+    };
+    guard.drain_ready()
+}
+
 #[derive(Serialize)]
 struct HealthResponse {
     ok: bool,
@@ -287,15 +379,15 @@ async fn enqueue_handler(
         media_index: body.media_index,
     };
 
-    // Fire to the renderer. If the emit fails the queue isn't going
-    // to receive it — return 500 so the extension can show a real
-    // error instead of silently dropping the request.
-    if let Err(e) = state.app.emit("bridge:enqueue", payload) {
+    // Hand to the renderer (parked if it's still booting — see
+    // BridgeInbox). On failure return 500 so the extension can show a
+    // real error instead of silently dropping the request.
+    if let Err(e) = deliver(&state.app, payload) {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 ok: false,
-                error: format!("emit failed: {e}"),
+                error: format!("deliver failed: {e}"),
             }),
         ));
     }
@@ -414,4 +506,49 @@ pub fn spawn(app: AppHandle, token: String, port: u16) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(url: &str) -> serde_json::Value {
+        serde_json::json!({ "url": url })
+    }
+
+    /// 1.13.5 — the cold-start race. `/health` answers as soon as axum
+    /// binds inside Tauri's setup(), which is seconds before React
+    /// mounts and subscribes; an enqueue in that window was emitted with
+    /// nobody listening and lost, so the extension opened the app and
+    /// then did nothing until you clicked a second time.
+    #[test]
+    fn enqueues_before_the_renderer_is_ready_are_kept() {
+        let mut inbox = InboxState::default();
+        assert_eq!(inbox.accept(v("a")), Accepted::Parked);
+        assert_eq!(inbox.accept(v("b")), Accepted::Parked);
+
+        // The renderer announces itself and collects what it missed —
+        // in arrival order, so a double click keeps its order.
+        let missed = inbox.drain_ready();
+        assert_eq!(missed, vec![v("a"), v("b")]);
+
+        // From here on delivery is immediate, and the drain doesn't
+        // repeat itself (which would double-download).
+        assert_eq!(inbox.accept(v("c")), Accepted::EmitNow(v("c")));
+        assert!(inbox.drain_ready().is_empty());
+    }
+
+    /// A renderer that never arrives (webview crash) must not let the
+    /// park grow without bound.
+    #[test]
+    fn parking_is_bounded() {
+        let mut inbox = InboxState::default();
+        for i in 0..MAX_PENDING {
+            assert_eq!(inbox.accept(v(&i.to_string())), Accepted::Parked, "i={i}");
+        }
+        assert_eq!(inbox.accept(v("one too many")), Accepted::Overflow);
+        // Overflow reports an error rather than silently dropping, and
+        // what was already parked still survives.
+        assert_eq!(inbox.drain_ready().len(), MAX_PENDING);
+    }
 }

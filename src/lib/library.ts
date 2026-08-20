@@ -172,6 +172,10 @@ export function videoCodecFor(
     case "h264_mp4":
     case "h264_nvenc_mp4":
       return "h264";
+    // 1.13.5 — the GIF preset re-encodes to the GIF codec and drops
+    // audio entirely (see audioCodecFor).
+    case "gif":
+      return "gif";
     case "none":
       return sourceVcodec ? sourceVcodec.split(".")[0] : null;
   }
@@ -188,6 +192,9 @@ export function audioCodecFor(
     case "h264_mp4":
     case "h264_nvenc_mp4":
       return "aac";
+    // GIF carries no audio track at all.
+    case "gif":
+      return null;
     case "none":
       return sourceAcodec ? sourceAcodec.split(".")[0] : null;
   }
