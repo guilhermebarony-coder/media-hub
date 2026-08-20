@@ -745,7 +745,15 @@ export function RtxEnhanceProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const clearFinished = useCallback(() => {
-    setJobs((prev) => prev.filter((j) => j.status === "queued" || j.status === "running"));
+    // Everything that is still ahead of you survives — including "staged",
+    // which this used to drop. A staged batch is unfinished WORK (settings
+    // you tuned by hand), not a finished result, and clearing results must
+    // never take it with them.
+    setJobs((prev) =>
+      prev.filter(
+        (j) => j.status === "staged" || j.status === "queued" || j.status === "running",
+      ),
+    );
   }, []);
 
   const openWindow = useCallback((jobId?: string) => {

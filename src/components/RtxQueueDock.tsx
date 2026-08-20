@@ -76,7 +76,12 @@ export function RtxQueueDock() {
 
   if (jobs.length === 0) return null;
 
-  const hasFinished = jobs.some((j) => j.status === "done" || j.status === "failed");
+  // Mirror clearFinished's own definition of "finished" -- it deletes
+  // canceled jobs too, so leaving them out here hid the button in exactly
+  // the case where stopping a clip was what created the row.
+  const hasFinished = jobs.some(
+    (j) => j.status === "done" || j.status === "failed" || j.status === "canceled",
+  );
 
   return (
     <div className={`rtx-dock ${collapsed ? "rtx-dock-collapsed" : ""}`}>

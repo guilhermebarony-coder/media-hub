@@ -5593,7 +5593,7 @@ body.lib-resizing-h * {
 
 /* Queue sidebar */
 .rtxw-side {
-  width: 320px;
+  width: 348px;
   flex-shrink: 0;
   border-left: 1px solid var(--border);
   background: var(--bg-1);
@@ -5608,59 +5608,175 @@ body.lib-resizing-h * {
   flex-direction: column;
   gap: 14px;
 }
-.rtxw-group { display: flex; flex-direction: column; gap: 2px; }
+.rtxw-group { display: flex; flex-direction: column; gap: 5px; }
 .rtxw-group-head {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 4px 6px;
+  padding: 2px 4px 1px;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.5px;
   text-transform: uppercase;
   color: var(--text-2);
 }
-.rtxw-row-meta { font-size: 10px; color: var(--text-3); flex-shrink: 0; white-space: nowrap; }
-.rtxw-side-head {
-  padding: 10px 14px;
-  font-size: 11px;
+/* The count is a chip, not "· 3" glued to the heading — it reads as a
+   quantity at a glance and stops the heading itself from changing width. */
+.rtxw-group-n {
+  min-width: 17px;
+  height: 16px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--bg-3);
+  color: var(--text-1);
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  color: var(--text-2);
-  border-bottom: 1px solid var(--border);
+  letter-spacing: 0;
 }
-.rtxw-side-list { flex: 1; overflow-y: auto; padding: 6px; }
-.rtxw-empty { padding: 16px; text-align: center; font-size: 12px; }
-.rtxw-row {
+.rtxw-empty { padding: 14px 16px; text-align: center; font-size: 12px; }
+
+/* ---- Queue cards ------------------------------------------------------
+   Each card answers three questions without being read: WHICH clip (the
+   frame), WHAT it is doing (the pill, the colour, the bar) and THAT it is
+   clickable (it lifts and brightens under the pointer). */
+.rtxw-card {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 32px 8px 10px;
-  border-radius: 8px;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
   cursor: pointer;
-  border: 1px solid transparent;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease,
+    transform 0.12s ease;
 }
-.rtxw-row:hover { background: var(--bg-2); }
-.rtxw-row.sel { background: var(--bg-2); border-color: var(--accent-line); }
-.rtxw-row-title {
+/* The hover has to read as "this whole thing is a button" from the corner
+   of the eye: it lifts off the panel (shadow), the ring brightens past any
+   resting border in the app, and it slides a hair toward the pointer. */
+.rtxw-card:hover {
+  background: var(--bg-3);
+  border-color: var(--text-3);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45);
+  transform: translateX(2px);
+}
+.rtxw-card.sel:hover { border-color: var(--accent); }
+.rtxw-card:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 1px; }
+/* The selected card is the clip the viewer on the left is showing, which is
+   worth more than a border tint: it gets the accent spine as well. */
+.rtxw-card.sel { background: var(--accent-dim); border-color: var(--accent-line); }
+.rtxw-card.sel::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+}
+.rtxw-card.s-running { border-color: var(--accent-line); }
+.rtxw-card.s-failed { border-color: rgba(255, 128, 128, 0.4); }
+.rtxw-card.s-canceled { opacity: 0.62; }
+
+.rtxw-card-thumb {
+  position: relative;
+  flex-shrink: 0;
+  width: 52px;
+  height: 32px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--bg-0);
+  box-shadow: inset 0 0 0 1px var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+}
+.rtxw-card-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+/* A clip that failed or was stopped is not a result — the grey frame says
+   so before the pill does. */
+.rtxw-card.s-failed .rtxw-card-thumb img,
+.rtxw-card.s-canceled .rtxw-card-thumb img { filter: grayscale(1); }
+
+.rtxw-card-body {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.rtxw-card-title {
   font-size: 12px;
+  line-height: 1.25;
   color: var(--text-0);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.rtxw-row-status { font-size: 10px; text-transform: uppercase; color: var(--text-3); flex-shrink: 0; }
-.rtxw-row-status.s-done { color: var(--accent); }
-.rtxw-row-status.s-failed { color: #ff8080; }
-.rtxw-row-status.s-running { color: var(--text-0); }
-.rtxw-row-x {
-  position: absolute;
-  right: 6px;
-  top: 50%;
-  transform: translateY(-50%);
+.rtxw-card-sub { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.rtxw-card-meta {
+  font-size: 10px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rtxw-pill {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.rtxw-pill.p-staged { background: var(--bg-4); color: var(--text-1); }
+.rtxw-pill.p-queued { background: var(--bg-4); color: var(--text-1); }
+/* Only the clip actually on the GPU gets the solid accent — one loud pill
+   in the panel, and it is always the one that is moving. */
+.rtxw-pill.p-running { background: var(--accent); color: var(--accent-ink); }
+.rtxw-pill.p-done {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent-line);
+}
+.rtxw-pill.p-failed {
+  background: rgba(255, 128, 128, 0.16);
+  color: #ff9a9a;
+  border-color: rgba(255, 128, 128, 0.4);
+}
+.rtxw-pill.p-canceled { background: var(--bg-3); color: var(--text-2); }
+
+.rtxw-card-track {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg-4);
+  overflow: hidden;
+}
+.rtxw-card-track i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.rtxw-card-act { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.rtxw-card-x {
   width: 22px;
   height: 22px;
   display: inline-flex;
@@ -5671,8 +5787,15 @@ body.lib-resizing-h * {
   color: var(--text-2);
   cursor: pointer;
   border-radius: 5px;
+  /* Present but quiet until the pointer is on the card — otherwise every
+     card in the panel shouts "delete me" from across the room. */
+  opacity: 0.4;
+  transition: opacity 0.12s ease;
 }
-.rtxw-row-x:hover { background: var(--bg-4); color: #ff8080; }
+.rtxw-card:hover .rtxw-card-x,
+.rtxw-card:focus-within .rtxw-card-x,
+.rtxw-card.sel .rtxw-card-x { opacity: 1; }
+.rtxw-card-x:hover { background: var(--bg-4); color: #ff8080; }
 .rtxw-settings {
   padding: 12px 14px;
   border-top: 1px solid var(--border);
@@ -5697,7 +5820,21 @@ body.lib-resizing-h * {
   justify-content: space-between;
   gap: 8px;
 }
-.rtxw-field-label { font-size: 12px; color: var(--text-0); }
+.rtxw-field-label { font-size: 12px; color: var(--text-0); flex-shrink: 0; }
+.rtxw-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--text-1);
+  cursor: pointer;
+  text-align: right;
+}
+.rtxw-check input { flex-shrink: 0; accent-color: var(--accent); margin: 0; }
+.rtxw-range-row { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.rtxw-range-row input[type="range"] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.rtxw-range-val { font-size: 11px; color: var(--text-1); flex-shrink: 0; width: 30px; text-align: right; }
 .rtxw-select {
   background: var(--bg-2);
   border: 1px solid var(--border);
@@ -5811,9 +5948,6 @@ body.lib-resizing-h * {
 .rtxw-tsep { width: 1px; align-self: stretch; background: var(--border); margin: 2px 2px; }
 
 /* ---- Staging ("Setting up") ---- */
-.rtxw-stagebox { border-bottom: 1px solid var(--border); display: flex; flex-direction: column; max-height: 46%; }
-.rtxw-stagebox .rtxw-side-head { display: flex; align-items: center; gap: 6px; }
-.rtxw-stagebox .rtxw-side-list { flex: 1; }
 .rtxw-linkbtn {
   border: none;
   background: transparent;
@@ -5827,6 +5961,9 @@ body.lib-resizing-h * {
 }
 .rtxw-linkbtn:hover { color: var(--text-0); background: var(--bg-3); }
 .rtxw-startall {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   border: 1px solid var(--accent-line);
   background: var(--accent-dim);
   color: var(--accent);
@@ -5839,15 +5976,6 @@ body.lib-resizing-h * {
   letter-spacing: 0;
 }
 .rtxw-startall:hover { background: var(--accent); color: var(--accent-ink); }
-.rtxw-staged {
-  padding: 7px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  margin-bottom: 6px;
-  background: var(--bg-2);
-}
-.rtxw-staged-top { display: flex; align-items: center; gap: 6px; }
-.rtxw-staged-top .rtxw-row-title { flex: 1; }
 .rtxw-startone {
   width: 20px;
   height: 20px;
@@ -5863,25 +5991,6 @@ body.lib-resizing-h * {
   flex-shrink: 0;
 }
 .rtxw-startone:hover { background: var(--accent); color: var(--accent-ink); }
-.rtxw-staged-ctrls { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
-.rtxw-mini {
-  background: var(--bg-1);
-  border: 1px solid var(--border);
-  color: var(--text-0);
-  font: inherit;
-  font-size: 11px;
-  padding: 2px 4px;
-  border-radius: 5px;
-  cursor: pointer;
-}
-.rtxw-mini-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--text-1);
-  cursor: pointer;
-}
 
 /* ---- Settings card (context-aware: selected clip or defaults) ---- */
 .rtxw-settings-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; }

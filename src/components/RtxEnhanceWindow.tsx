@@ -606,6 +606,156 @@ type PrevMode = "off" | "cc" | "vsr" | "both";
 /** A live preview session: one raw slice, re-filtered in place; VSR on demand. */
 type Slice = { key: string; startSec: number; before: string; cleaned: string };
 
+/**
+ * One clip in the queue panel.
+ *
+ * The old row was a line of text: a truncated title, a bare enum ("done",
+ * "queued") and an x. Three things were missing and all three were things
+ * the eye should get for free — WHICH clip this is (the frame), WHAT it is
+ * doing (a coloured pill, and a bar while it renders) and THAT it can be
+ * clicked at all (a card that lifts under the pointer).
+ */
+function QueueCard({
+  job,
+  selected,
+  place,
+  onOpen,
+  onStart,
+  onRemove,
+}: {
+  job: RtxJob;
+  /** This clip is the one the viewer on the left is showing. */
+  selected: boolean;
+  /** 1-based place in the GPU line — queued jobs only. */
+  place?: number;
+  onOpen: () => void;
+  /** Staged jobs only: start this one without starting the whole batch. */
+  onStart?: () => void;
+  onRemove: () => void;
+}) {
+  const s = job.status;
+  const pct = Math.max(0, Math.min(100, job.percent));
+  const qLabel =
+    job.quality === 4 ? "Ultra" : job.quality === 3 ? "High" : job.quality === 2 ? "Med" : "Low";
+
+  // The pill says what state it is in; the line under the title says what
+  // that means for you right now — the settings while you can still change
+  // them, the speed while it runs, the invitation once it is done.
+  const recipe = `${qLabel} · ${job.scale <= 1 ? "1×" : "2×"}${
+    job.cc ? ` · Filter ${job.ccStrength.toFixed(2)}` : ""
+  }`;
+  const view =
+    s === "staged"
+      ? { pill: "Ready", meta: recipe, hint: "Open this clip to set it up" }
+      : s === "queued"
+        ? {
+            pill: place === 1 ? "Next up" : `#${place ?? "?"} in line`,
+            meta: recipe,
+            hint: "Waiting for the GPU — the card above it is using it",
+          }
+        : s === "running"
+          ? {
+              pill: `${pct.toFixed(0)}%`,
+              meta:
+                [job.fps > 0 ? `${job.fps.toFixed(0)} fps` : null, job.eta ? `${job.eta} left` : null]
+                  .filter(Boolean)
+                  .join(" · ") || "Starting…",
+              hint: "Rendering now",
+            }
+          : s === "done"
+            ? {
+                pill: "Done",
+                meta: "Click to compare before / after",
+                hint: "Open the before/after comparison",
+              }
+            : s === "failed"
+              ? { pill: "Failed", meta: job.error || "No details", hint: job.error || "Enhance failed" }
+              : { pill: "Stopped", meta: recipe, hint: "You canceled this one" };
+
+  return (
+    <div
+      className={`rtxw-card s-${s}${selected ? " sel" : ""}`}
+      role="button"
+      tabIndex={0}
+      // A long title is cut off in a 348px panel, so the tooltip carries the
+      // whole name as well as the hint -- hovering is how you tell two
+      // near-identical AMV filenames apart.
+      title={`${job.title}
+${view.hint}`}
+      onClick={onOpen}
+      // The card has to be a div — it holds buttons of its own, and a button
+      // inside a button is invalid — so it carries by hand the keyboard
+      // behaviour a <button> would have given it for free.
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+    >
+      <div className="rtxw-card-thumb">
+        <Icon.video width={13} height={13} />
+        {job.thumbnail && (
+          <img
+            src={job.thumbnail}
+            alt=""
+            loading="lazy"
+            // If the thumbnail is gone, the film icon underneath shows
+            // through instead of a broken-image glyph.
+            onError={(e) => {
+              e.currentTarget.style.visibility = "hidden";
+            }}
+          />
+        )}
+      </div>
+
+      <div className="rtxw-card-body">
+        <div className="rtxw-card-title">{job.title}</div>
+        <div className="rtxw-card-sub">
+          <span className={`rtxw-pill p-${s}`}>{view.pill}</span>
+          <span className="rtxw-card-meta">{view.meta}</span>
+        </div>
+        {s === "running" && (
+          <div className="rtxw-card-track">
+            <i style={{ width: `${pct}%` }} />
+          </div>
+        )}
+      </div>
+
+      <div className="rtxw-card-act">
+        {onStart && (
+          <button
+            className="rtxw-startone"
+            title="Start this clip now"
+            onClick={(e) => {
+              e.stopPropagation();
+              onStart();
+            }}
+          >
+            <Icon.play width={10} height={10} />
+          </button>
+        )}
+        <button
+          className="rtxw-card-x"
+          title={
+            s === "running"
+              ? "Stop rendering"
+              : s === "queued"
+                ? "Take out of the queue"
+                : "Remove from the list"
+          }
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+        >
+          <Icon.x width={12} height={12} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function RtxEnhanceWindow() {
   const {
     jobs,
@@ -614,6 +764,7 @@ export function RtxEnhanceWindow() {
     closeWindow,
     removeJob,
     cancelJob,
+    clearFinished,
     enqueuePaths,
     setJobOptions,
     applyToStaged,
@@ -679,6 +830,24 @@ export function RtxEnhanceWindow() {
 
   const staged = useMemo(() => jobs.filter((j) => j.status === "staged"), [jobs]);
   const rendering = useMemo(() => jobs.filter((j) => j.status !== "staged"), [jobs]);
+  // One list headed "Rendering" used to hold the queue AND everything that
+  // had already finished, so it showed rows saying DONE under a header
+  // saying RENDERING. "Is it my turn yet?" and "can I look at the result?"
+  // are different questions and now they are different lists.
+  const active = useMemo(
+    () => rendering.filter((j) => j.status === "queued" || j.status === "running"),
+    [rendering],
+  );
+  const finished = useMemo(
+    () => rendering.filter((j) => j.status !== "queued" && j.status !== "running"),
+    [rendering],
+  );
+  // Place in line, counted over the WAITING jobs only — the one on the GPU
+  // is not "#1", it is already going.
+  const waitingIds = useMemo(
+    () => active.filter((j) => j.status === "queued").map((j) => j.id),
+    [active],
+  );
 
   const selected = useMemo(
     () =>
@@ -970,7 +1139,7 @@ export function RtxEnhanceWindow() {
         />
       );
     }
-    // running / queued / failed → status card
+    // running / queued / canceled / failed → status card
     return (
       <div className="rtxw-placeholder">
         {selected.status === "failed" ? (
@@ -984,7 +1153,11 @@ export function RtxEnhanceWindow() {
             {selected.title}
             <br />
             <span className="faint">
-              {selected.status === "running" ? `Enhancing… ${selected.percent.toFixed(0)}%` : "Queued"}
+              {selected.status === "running"
+                ? `Enhancing… ${selected.percent.toFixed(0)}%`
+                : selected.status === "canceled"
+                  ? "Stopped before it finished"
+                  : "Queued"}
             </span>
           </p>
         )}
@@ -1026,86 +1199,85 @@ export function RtxEnhanceWindow() {
 
           <aside className="rtxw-side">
             <div className="rtxw-side-scroll">
-              {/* STAGE 1 — Setting up. */}
+              {/* STAGE 1 — Setting up: dropped in, not committed to the GPU. */}
               {staged.length > 0 && (
                 <div className="rtxw-group">
                   <div className="rtxw-group-head">
-                    <span>Setting up · {staged.length}</span>
+                    <span>Setting up</span>
+                    <span className="rtxw-group-n">{staged.length}</span>
                     <span className="rtxw-spacer" />
-                    <button className="rtxw-startall" onClick={startAllStaged} title="Start all">
-                      ▶ Start all
+                    <button
+                      className="rtxw-startall"
+                      onClick={startAllStaged}
+                      title="Send every clip below to the GPU"
+                    >
+                      <Icon.play width={9} height={9} /> Start all
                     </button>
                   </div>
                   {staged.map((j) => (
-                    <div
+                    <QueueCard
                       key={j.id}
-                      className={`rtxw-row ${selected?.id === j.id ? "sel" : ""}`}
-                      onClick={() => openWindow(j.id)}
-                    >
-                      <span className="rtxw-row-title" title={j.title}>
-                        {j.title}
-                      </span>
-                      <span className="rtxw-row-meta">
-                        {j.quality === 4 ? "Ultra" : j.quality === 3 ? "High" : j.quality === 2 ? "Med" : "Low"} ·{" "}
-                        {j.scale <= 1 ? "1×" : "2×"}
-                      </span>
-                      <button
-                        className="rtxw-startone"
-                        title="Start this clip"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          startJob(j.id);
-                        }}
-                      >
-                        ▶
-                      </button>
-                      <button
-                        className="rtxw-row-x"
-                        title="Remove"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          removeJob(j.id);
-                        }}
-                      >
-                        <Icon.x width={13} height={13} />
-                      </button>
-                    </div>
+                      job={j}
+                      selected={selected?.id === j.id}
+                      onOpen={() => openWindow(j.id)}
+                      onStart={() => startJob(j.id)}
+                      onRemove={() => removeJob(j.id)}
+                    />
                   ))}
                 </div>
               )}
 
-              {/* STAGE 2 — Rendering / done. */}
+              {/* STAGE 2 — on the GPU, or waiting for it. */}
               <div className="rtxw-group">
                 <div className="rtxw-group-head">
-                  <span>Rendering</span>
+                  <span>In the queue</span>
+                  {active.length > 0 && <span className="rtxw-group-n">{active.length}</span>}
                 </div>
-                {rendering.length === 0 && <div className="rtxw-empty faint">Nothing rendering yet</div>}
-                {rendering.map((j) => (
-                  <div
+                {active.length === 0 && (
+                  <div className="rtxw-empty faint">Nothing rendering right now</div>
+                )}
+                {active.map((j) => (
+                  <QueueCard
                     key={j.id}
-                    className={`rtxw-row ${selected?.id === j.id ? "sel" : ""}`}
-                    onClick={() => openWindow(j.id)}
-                  >
-                    <span className="rtxw-row-title" title={j.title}>
-                      {j.title}
-                    </span>
-                    <span className={`rtxw-row-status s-${j.status}`}>
-                      {j.status === "running" ? `${j.percent.toFixed(0)}%` : j.status}
-                    </span>
-                    <button
-                      className="rtxw-row-x"
-                      title={j.status === "running" ? "Stop" : "Remove"}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (j.status === "running") cancelJob(j.id);
-                        else removeJob(j.id);
-                      }}
-                    >
-                      <Icon.x width={13} height={13} />
-                    </button>
-                  </div>
+                    job={j}
+                    selected={selected?.id === j.id}
+                    place={j.status === "queued" ? waitingIds.indexOf(j.id) + 1 : undefined}
+                    onOpen={() => openWindow(j.id)}
+                    onRemove={() => {
+                      if (j.status === "running") cancelJob(j.id);
+                      else removeJob(j.id);
+                    }}
+                  />
                 ))}
               </div>
+
+              {/* STAGE 3 — finished with. Kept out of the queue list so the
+                  queue only ever shows work that is still ahead of you. */}
+              {finished.length > 0 && (
+                <div className="rtxw-group">
+                  <div className="rtxw-group-head">
+                    <span>Finished</span>
+                    <span className="rtxw-group-n">{finished.length}</span>
+                    <span className="rtxw-spacer" />
+                    <button
+                      className="rtxw-linkbtn"
+                      title="Empty this list — the rendered files stay in your library"
+                      onClick={clearFinished}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  {finished.map((j) => (
+                    <QueueCard
+                      key={j.id}
+                      job={j}
+                      selected={selected?.id === j.id}
+                      onOpen={() => openWindow(j.id)}
+                      onRemove={() => removeJob(j.id)}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* ONE settings card — the selected staged clip, or the defaults. */}
