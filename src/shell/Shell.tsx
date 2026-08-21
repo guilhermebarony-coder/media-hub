@@ -222,11 +222,12 @@ function useNavShortcuts() {
   }, [navigate]);
 }
 
-/** Opens the RTX before/after window from the top bar. Hidden when the
- *  machine can't run RTX enhance, so it never teases an unusable feature. */
+/** Opens the RTX before/after window from the top bar. Hidden unless the
+ *  feature can actually run — capable GPU AND the sidecar installed — so it
+ *  never teases something that would fail on click. */
 function RtxTopBarButton() {
-  const { capability, openWindow } = useRtxEnhance();
-  if (!capability?.supported) return null;
+  const { rtxAvailable, openWindow } = useRtxEnhance();
+  if (!rtxAvailable) return null;
   return (
     <button
       type="button"

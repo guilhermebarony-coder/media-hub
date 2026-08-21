@@ -28,6 +28,10 @@ media-hub-extension-*.zip
 
 # Sidecar binaries — fetched via scripts/fetch-sidecars.ps1
 src-tauri/binaries/*.exe
+
+# NVIDIA proprietary runtime, bundled into the installer but NEVER in the
+# repo. Drop it in by hand — see src-tauri/resources/README.md.
+src-tauri/resources/*.dll
 src-tauri/binaries/yt-dlp*
 src-tauri/binaries/ffmpeg*
 src-tauri/binaries/deno*

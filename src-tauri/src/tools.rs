@@ -51,6 +51,11 @@ struct ToolSpec {
     /// until now a downloaded executable was trusted on the strength of an
     /// HTTP 200 alone.
     sha256: Option<&'static str>,
+    /// Size of the archive in bytes, when known. Purely informational: the
+    /// UI shows it BEFORE the user commits to a download, which for the RTX
+    /// bundle is the difference between "Install" and "Install (28 MB)".
+    /// Lives here so it is updated in the same edit as `url` and `sha256`.
+    bytes: Option<u64>,
 }
 
 #[cfg(windows)]
@@ -64,6 +69,7 @@ fn ffmpeg_spec() -> ToolSpec {
         out_name: "ffmpeg.exe",
         version: None,
         sha256: None,
+        bytes: None,
     }
 }
 #[cfg(not(windows))]
@@ -75,6 +81,7 @@ fn ffmpeg_spec() -> ToolSpec {
         out_name: "ffmpeg",
         version: None,
         sha256: None,
+        bytes: None,
     }
 }
 
@@ -87,6 +94,7 @@ fn deno_spec() -> ToolSpec {
         out_name: "deno.exe",
         version: None,
         sha256: None,
+        bytes: None,
     }
 }
 #[cfg(not(windows))]
@@ -98,6 +106,7 @@ fn deno_spec() -> ToolSpec {
         out_name: "deno",
         version: None,
         sha256: None,
+        bytes: None,
     }
 }
 
@@ -123,17 +132,100 @@ fn rtx_worker_spec() -> ToolSpec {
     ToolSpec {
         id: "rtx-worker",
         url: "https://github.com/guilhermebarony-coder/media-hub/releases/download/rtx-worker-v0.2.0-15/rtx-worker-win64.zip",
+        // 1.15.0 — MIT files ONLY. The two NVIDIA DLLs used to be extracted
+        // from here; `nvngx_vsr.dll` now ships inside the Media Hub installer
+        // (see RTX_RUNTIME_DLLS) and `nvngx_truehdr.dll` is gone entirely.
+        // Listing fewer members than the archive contains is fine — members
+        // are looked up by name, the rest is discarded with the extract dir.
         members: &[
             ("RTXVideoProcessor.exe", "RTXVideoProcessor.exe"),
             ("cc_32x4.blob", "cc_32x4.blob"),
-            ("nvngx_vsr.dll", "nvngx_vsr.dll"),
-            ("nvngx_truehdr.dll", "nvngx_truehdr.dll"),
         ],
         out_name: "RTXVideoProcessor.exe",
         version: Some("v0.2.0-15-g8ef4b82"),
         sha256: Some("bb862505e283e085e524af5ce6838ec01dae07b5e0ee4c1176d2551bd2e832db"),
+        bytes: Some(29_382_853),
     }
 }
+
+/// NVIDIA's proprietary runtime — NOT in the download.
+///
+/// Two facts forced this shape:
+///
+///  1. The archive is a public GitHub release asset. NVIDIA's grant covers
+///     redistribution *incorporated into an application*; a binary sitting at
+///     a URL anyone can curl is the standalone case. Shipping it inside our
+///     own installer is the co-distribution model NVIDIA's NGX guide actually
+///     describes ("installs in the app's folder … remove on uninstall").
+///
+///  2. It has to end up BESIDE `RTXVideoProcessor.exe`, not merely reachable.
+///     The worker statically links NGX's loader, and that loader resolves
+///     feature DLLs from the executable's own directory only. Measured
+///     2026-08-20 against the shipped worker: DLL on `PATH` → "RTX API create
+///     failed"; DLL in the working directory → same failure; DLL next to the
+///     exe → clean run. So we copy, we do not point at it.
+#[cfg(windows)]
+const RTX_RUNTIME_DLLS: &[&str] = &["nvngx_vsr.dll"];
+
+/// Files older bundles put in `bin` that we do not ship any more. Deleted on
+/// every RTX install so dropping a feature actually shrinks what is on the
+/// user's disk — leaving a proprietary DLL behind after removing the feature
+/// it served is the one outcome that gets the legal surface wrong twice.
+#[cfg(windows)]
+const RTX_OBSOLETE: &[&str] = &["nvngx_truehdr.dll"];
+
+/// Copy the bundled NVIDIA runtime next to the worker, and sweep away
+/// anything a previous bundle left behind.
+#[cfg(windows)]
+fn place_rtx_runtime(app: &AppHandle) -> Result<(), String> {
+    use tauri::path::BaseDirectory;
+    use tauri::Manager;
+    let dir = crate::aria2::managed_bin_dir(app)?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create bin dir: {e}"))?;
+
+    for name in RTX_RUNTIME_DLLS {
+        let src = app
+            .path()
+            .resolve(format!("resources/{name}"), BaseDirectory::Resource)
+            .map_err(|e| format!("resolve bundled {name}: {e}"))?;
+        if !src.is_file() {
+            // A build without the SDK drop-in. Say so plainly instead of
+            // installing a worker that cannot start.
+            return Err(format!(
+                "{name} is missing from this build of Media Hub — the RTX                  enhancer cannot be installed. See src-tauri/resources/README.md.",
+            ));
+        }
+        let dst = dir.join(name);
+        install_file(&src, &dst).map_err(|e| format!("place {name}: {e}"))?;
+    }
+
+    sweep_rtx_obsolete(app);
+    sweep_replaced(&dir);
+    Ok(())
+}
+
+/// Delete RTX files we no longer ship, wherever a previous version put them.
+///
+/// Called at startup, NOT only from the install path. Everyone who already
+/// had the old bundle also has a matching version marker, so they report
+/// "up to date" and would never trigger an install — the exact users holding
+/// the obsolete DLL are the ones an install-time-only cleanup cannot reach.
+/// Best-effort by design: a file held open just waits for the next launch.
+#[cfg(windows)]
+pub fn sweep_rtx_obsolete(app: &AppHandle) {
+    let Ok(dir) = crate::aria2::managed_bin_dir(app) else {
+        return;
+    };
+    for name in RTX_OBSOLETE {
+        let path = dir.join(name);
+        if path.is_file() && std::fs::remove_file(&path).is_ok() {
+            crate::diag::log(app, "tools", &format!("removed obsolete {name}"));
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn sweep_rtx_obsolete(_app: &AppHandle) {}
 
 /// Installed path of a tool (may not exist yet).
 fn tool_path(app: &AppHandle, out_name: &str) -> Option<std::path::PathBuf> {
@@ -443,6 +535,11 @@ pub async fn rtx_worker_ensure(app: AppHandle) -> Result<(), String> {
     #[cfg(windows)]
     {
         ensure(&app, &rtx_worker_spec()).await?;
+        // The download is only half the install — the NVIDIA runtime comes
+        // from our own installer. Unconditional: `ensure` short-circuits when
+        // the version marker already matches, and an app update that changes
+        // only the bundled DLL still has to land it.
+        place_rtx_runtime(&app)?;
         Ok(())
     }
     #[cfg(not(windows))]
@@ -452,16 +549,28 @@ pub async fn rtx_worker_ensure(app: AppHandle) -> Result<(), String> {
     }
 }
 
+/// Download size of the RTX worker bundle, for the install prompt.
+pub fn rtx_worker_download_bytes() -> u64 {
+    rtx_worker_spec().bytes.unwrap_or(0)
+}
+
 /// Whether the installed RTX worker bundle is present AND current.
 /// `None` means "not installed at all".
 #[cfg(windows)]
 pub fn rtx_worker_freshness(app: &AppHandle) -> Option<bool> {
     let spec = rtx_worker_spec();
+    // "Present" spans both halves of the install: the downloaded members AND
+    // the runtime we copy in ourselves. A worker with no `nvngx_vsr.dll`
+    // beside it starts and then fails at RTX init, which is the worst of the
+    // three possible states to report as installed.
     let present = tool_path(app, spec.out_name).is_some_and(|p| p.is_file())
         && spec
             .members
             .iter()
-            .all(|(_, out)| tool_path(app, out).is_some_and(|p| p.is_file()));
+            .all(|(_, out)| tool_path(app, out).is_some_and(|p| p.is_file()))
+        && RTX_RUNTIME_DLLS
+            .iter()
+            .all(|n| tool_path(app, n).is_some_and(|p| p.is_file()));
     if !present {
         return None;
     }
@@ -471,6 +580,55 @@ pub fn rtx_worker_freshness(app: &AppHandle) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 1.15.0 — the RTX bundle is now the ONLY way the enhancer reaches a
+    /// machine: it is not in the installer, and the whole RTX UI stays
+    /// hidden until this download lands. So every fact the install path
+    /// depends on has to be present, and `out_name` has to be a file the
+    /// extraction actually produces — otherwise `tool_path` looks for a
+    /// name nothing writes and the app installs successfully forever
+    /// while reporting "not installed".
+    #[cfg(windows)]
+    #[test]
+    fn the_rtx_bundle_can_actually_install_itself() {
+        let spec = rtx_worker_spec();
+        assert!(spec.url.starts_with("https://"), "url must be https");
+        assert!(spec.version.is_some(), "the bundle is version-tracked");
+        assert!(spec.sha256.is_some(), "the archive is verified before extraction");
+        assert_eq!(
+            spec.sha256.unwrap().len(),
+            64,
+            "sha256 must be 64 lowercase hex chars",
+        );
+        assert!(
+            spec.bytes.is_some_and(|b| b > 0),
+            "the install prompt quotes this size before the user agrees to it",
+        );
+        assert!(
+            spec.members.iter().any(|(_, out)| *out == spec.out_name),
+            "out_name ({}) is not produced by any member",
+            spec.out_name,
+        );
+        for needed in ["RTXVideoProcessor.exe", "cc_32x4.blob"] {
+            assert!(
+                spec.members.iter().any(|(_, out)| *out == needed),
+                "bundle is missing {needed}",
+            );
+        }
+        // The whole point of 1.15.0's split: nothing proprietary is pulled
+        // from the public archive. If someone re-adds a DLL to `members` to
+        // "fix" an install, this fails and sends them to SHIPPING_LEGAL.md.
+        for forbidden in RTX_RUNTIME_DLLS.iter().chain(RTX_OBSOLETE.iter()) {
+            assert!(
+                !spec.members.iter().any(|(m, out)| m == forbidden || out == forbidden),
+                "{forbidden} must NOT come from the public archive — see                  docs/SHIPPING_LEGAL.md",
+            );
+        }
+        assert!(
+            !RTX_RUNTIME_DLLS.is_empty(),
+            "the worker needs NVIDIA's runtime beside it; an empty list means              nothing is ever placed and every enhance fails at RTX init",
+        );
+    }
 
     /// 1.14.0 — the predicate behind the stale-binary fix. The RTX worker
     /// staged on this machine was from 2026-07-05 and silently ignored the

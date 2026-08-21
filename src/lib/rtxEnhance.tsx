@@ -113,8 +113,29 @@ type RtxContextValue = {
    *  expects. The old worker still upscales; what it does NOT do is the
    *  CodecClean filter, which it accepts and ignores without a word. */
   workerOutdated: boolean;
+  /**
+   * 1.15.0 — the ONE rule every RTX entry point asks before showing itself:
+   * a capable GPU AND the sidecar on disk. The sidecar is a download, not
+   * part of the installer, so a capable GPU alone used to light up a menu
+   * that could only fail at run time.
+   */
+  rtxAvailable: boolean;
+  /** A capable GPU with no sidecar yet — the one state where we OFFER the
+   *  download (the wizard card and the Settings card, nothing else). */
+  rtxInstallable: boolean;
+  /** Size of the sidecar download in bytes (0 = unknown). Shown before the
+   *  user agrees to it. */
+  installBytes: number;
+  /** A download is running right now. Shared state so the wizard card and
+   *  the Settings card can never disagree about it. */
+  installing: boolean;
+  /** 0-100 while downloading, null before the first progress event. */
+  installPercent: number | null;
+  /** Last failure, cleared when a new attempt starts. */
+  installError: string | null;
   /** Install or update the worker bundle. Resolves when it's current;
-   *  safe (and instant) to call when it already is. */
+   *  safe (and instant) to call when it already is. Never rejects — the
+   *  failure lands in `installError` so both cards render it the same. */
   ensureWorker: () => Promise<void>;
   /** True when a clip can be enhanced (always — 4K+ falls back to 1× clean). */
   canEnhanceHeight: (height: number | null) => boolean;
@@ -143,7 +164,11 @@ type RtxContextValue = {
   windowJobId: string | null;
   openWindow: (jobId?: string) => void;
   closeWindow: () => void;
-  // Default HDR (TrueHDR) for future enqueues — off by default.
+  // 1.15.0 — TrueHDR is REMOVED from the product: it needed a second
+  // NVIDIA proprietary DLL and nobody was using it. This state survives
+  // only so the removal stays a one-line decision in rtx.rs (run_worker
+  // forces --no-thdr regardless of what is set here). Nothing in the UI
+  // writes it any more. See docs/SHIPPING_LEGAL.md before reviving it.
   defaultHdr: boolean;
   setDefaultHdr: (v: boolean) => void;
   // Default VSR quality (1–4, 4 = Ultra) for future enqueues.
@@ -312,26 +337,67 @@ export function RtxEnhanceProvider({ children }: { children: ReactNode }) {
   const [capability, setCapability] = useState<RtxCapability | null>(null);
   const [workerReady, setWorkerReady] = useState(false);
   const [workerOutdated, setWorkerOutdated] = useState(false);
+  const [installBytes, setInstallBytes] = useState(0);
+  const [installing, setInstalling] = useState(false);
+  const [installPercent, setInstallPercent] = useState<number | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
 
   // 1.14.0 — the worker is a versioned bundle now, so "is it there?" and
   // "is it the build we expect?" are separate answers.
   const refreshWorker = useCallback(async () => {
     try {
-      const st = await invoke<{ installed: boolean; up_to_date: boolean }>(
-        "rtx_worker_status",
-      );
+      const st = await invoke<{
+        installed: boolean;
+        up_to_date: boolean;
+        download_bytes: number;
+      }>("rtx_worker_status");
       setWorkerReady(st.installed);
       setWorkerOutdated(st.installed && !st.up_to_date);
+      setInstallBytes(st.download_bytes ?? 0);
     } catch {
       setWorkerReady(false);
       setWorkerOutdated(false);
     }
   }, []);
 
+  // Swallowing the rejection is deliberate: two different cards call this,
+  // and if each had to catch and store its own error they would drift. The
+  // error is state, like the progress is.
   const ensureWorker = useCallback(async () => {
-    await invoke("rtx_worker_ensure");
-    await refreshWorker();
+    setInstalling(true);
+    setInstallError(null);
+    setInstallPercent(null);
+    try {
+      await invoke("rtx_worker_ensure");
+    } catch (e) {
+      setInstallError(String(e));
+    } finally {
+      setInstalling(false);
+      await refreshWorker();
+    }
   }, [refreshWorker]);
+
+  // The backend already streams `tools:progress` for every managed download;
+  // we just filter to our own bundle's id.
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    (async () => {
+      const fn = await listen<{ tool: string; percent: number | null }>(
+        "tools:progress",
+        (e) => {
+          if (e.payload.tool !== "rtx-worker") return;
+          setInstallPercent(e.payload.percent);
+        },
+      );
+      if (cancelled) fn();
+      else unlisten = fn;
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
   const [windowJobId, setWindowJobId] = useState<string | null>(null);
   // Default HDR persists across sessions — whatever you set in the window
   // becomes the default for the next right-click → upscale.
@@ -770,11 +836,21 @@ export function RtxEnhanceProvider({ children }: { children: ReactNode }) {
     [jobs],
   );
 
+  // Derived once here so no caller can invent its own version of the rule.
+  const rtxAvailable = !!capability?.supported && workerReady;
+  const rtxInstallable = !!capability?.supported && !workerReady;
+
   const value: RtxContextValue = {
     jobs,
     capability,
     workerReady,
     workerOutdated,
+    rtxAvailable,
+    rtxInstallable,
+    installBytes,
+    installing,
+    installPercent,
+    installError,
     ensureWorker,
     defaultCc,
     setDefaultCc,

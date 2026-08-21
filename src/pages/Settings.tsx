@@ -7,6 +7,7 @@ import { alertDialog, confirmDialog } from "../lib/dialog";
 import { HelpHint } from "../components/HelpHint";
 import { useSettings } from "../lib/settings";
 import { useRtxEnhance } from "../lib/rtxEnhance";
+import { RtxInstallCard } from "../components/RtxInstallCard";
 import { useT } from "../lib/i18n";
 import { APP_VERSION } from "../lib/version";
 import {
@@ -1119,12 +1120,12 @@ function TranscodeSection() {
 // without a capable RTX GPU (nothing to configure there).
 
 function RtxSection() {
-  const [workerBusy, setWorkerBusy] = useState(false);
-  const [workerErr, setWorkerErr] = useState<string | null>(null);
   const {
     capability,
     workerReady,
     workerOutdated,
+    installing,
+    installError,
     ensureWorker,
     defaultQuality,
     setDefaultQuality,
@@ -1136,8 +1137,6 @@ function RtxSection() {
     setDefaultCcStrength,
     defaultEncPreset,
     setDefaultEncPreset,
-    defaultHdr,
-    setDefaultHdr,
     openWindow,
   } = useRtxEnhance();
 
@@ -1145,6 +1144,21 @@ function RtxSection() {
   if (capability === null) return null;
   // No capable GPU → nothing to configure; keep Settings uncluttered.
   if (!capability.supported) return null;
+
+  // 1.15.0 — the enhancer is a download, so until it is on disk there is
+  // nothing here to configure. Quality, scale, filter and output all feed a
+  // worker that does not exist yet; showing them was offering settings that
+  // could not take effect. The section becomes the offer, and nothing else.
+  if (!workerReady) {
+    return (
+      <section className="card-box">
+        <h2>
+          RTX Video <span className="chip">enhance</span>
+        </h2>
+        <RtxInstallCard />
+      </section>
+    );
+  }
 
   return (
     <section className="card-box">
@@ -1260,21 +1274,6 @@ function RtxSection() {
       </div>
 
       <div className="settings-row">
-        <span className="settings-label">SDR → HDR</span>
-        <label className="switch" style={{ flex: "0 0 auto" }}>
-          <input
-            type="checkbox"
-            checked={defaultHdr}
-            onChange={(e) => setDefaultHdr(e.target.checked)}
-          />
-          <span className="switch-slider" />
-        </label>
-        <span className="hint-text faint">
-          Expand SDR footage to HDR (TrueHDR). Leave off for normal clips.
-        </span>
-      </div>
-
-      <div className="settings-row">
         <span className="settings-label">Review window</span>
         <button className="btn btn-secondary" onClick={() => openWindow()}>
           <Icon.video width={12} height={12} /> Open enhance window
@@ -1295,33 +1294,24 @@ function RtxSection() {
         </div>
         <div>
           <dt>Enhancer</dt>
-          {/* 1.14.0 — three states, not two. An enhancer installed before
-              the CodecClean build accepts the filter and ignores it, so
-              "installed" alone was a misleading green light. */}
-          <dd className={workerReady && !workerOutdated ? "" : "err"}>
-            {!workerReady
-              ? "not installed yet"
-              : workerOutdated
-                ? "update available"
-                : "installed"}
-            {(!workerReady || workerOutdated) && (
+          {/* Only reachable when the bundle IS installed (the not-installed
+              case returns the install card above), so this is a two-state
+              row: current, or an older build that accepts the CodecClean
+              filter and silently ignores it. */}
+          <dd className={workerOutdated ? "err" : ""}>
+            {workerOutdated ? "update available" : "installed"}
+            {workerOutdated && (
               <button
                 type="button"
                 className="btn btn-secondary"
                 style={{ marginLeft: 8 }}
-                disabled={workerBusy}
-                onClick={() => {
-                  setWorkerBusy(true);
-                  setWorkerErr(null);
-                  void ensureWorker()
-                    .catch((e) => setWorkerErr(String(e)))
-                    .finally(() => setWorkerBusy(false));
-                }}
+                disabled={installing}
+                onClick={() => void ensureWorker()}
               >
-                {workerBusy ? "installing…" : workerReady ? "Update" : "Install"}
+                {installing ? "updating…" : "Update"}
               </button>
             )}
-            {workerErr && <div className="hint-text err">{workerErr}</div>}
+            {installError && <div className="hint-text err">{installError}</div>}
           </dd>
         </div>
       </dl>

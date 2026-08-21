@@ -391,6 +391,19 @@ export const pt: Record<string, string> = {
   "ctx.rtxQueue": "Adicionar à fila…",
   "ctx.rtxQuick": "Upscale rápido",
   "ctx.transcode": "Transcodar para…",
+  // Card de instalação do RTX (1.15.0)
+  "rtx.install.title": "RTX Video enhance",
+  "rtx.install.yourGpu": "Sua GPU NVIDIA RTX",
+  "rtx.install.body":
+    "Sua GPU consegue limpar artefatos de compressão e aumentar a resolução dos clipes. O enhancer não vem junto com o Media Hub — é um download único de {size}.",
+  "rtx.install.bodyNoSize":
+    "Sua GPU consegue limpar artefatos de compressão e aumentar a resolução dos clipes. O enhancer não vem junto com o Media Hub — é um download único.",
+  "rtx.install.cta": "Instalar enhancer",
+  "rtx.install.retry": "Tentar de novo",
+  "rtx.install.starting": "iniciando…",
+  "rtx.install.later": "Dá pra fazer isso depois no Settings.",
+  "rtx.install.legal":
+    "Inclui componentes do runtime NVIDIA RTX Video, usados sob os termos de licença da NVIDIA.",
   "ctx.copyUrl": "Copiar URL de origem",
   "ctx.copyPath": "Copiar caminho do arquivo",
   "ctx.sendEagle": "Enviar para o Eagle",

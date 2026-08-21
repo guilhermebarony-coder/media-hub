@@ -11,7 +11,9 @@
  *   2. Configure    — pick library root + default transcode preset
  *   3. Cookies      — heads-up about the closed-browser requirement;
  *                     "skip for now" leaves cookies disabled
- *   4. Workflow tip — segment download + NLE watch-folder pattern
+ *   4. Workflow tip — segment download + NLE watch-folder pattern,
+ *                     plus the RTX enhancer offer on machines that
+ *                     have a capable GPU (optional, never blocking)
  *
  * On Finish, the draft state writes to settings.json in one save:
  *   - library_root         (only if non-empty + differs from default)
@@ -28,6 +30,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Icon } from "../lib/icons";
 import { useSettings } from "../lib/settings";
 import { useT } from "../lib/i18n";
+import { RtxInstallCard } from "./RtxInstallCard";
 import {
   TRANSCODE_PRESETS,
   type CookiesSource,
@@ -430,6 +433,12 @@ function ScreenWorkflow() {
           <strong>{t("onb.wf.proLabel")}</strong> {t("onb.wf.proBody")}
         </div>
       </div>
+
+      {/* 1.15.0 — renders itself only on a machine with a capable RTX GPU
+          and no sidecar yet. Deliberately NOT a wizard step: it is optional,
+          it is a 28 MB download, and "Finish" must stay one click away for
+          everyone who does not want it. */}
+      <RtxInstallCard showLater />
     </div>
   );
 }

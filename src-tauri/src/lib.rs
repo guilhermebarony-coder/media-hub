@@ -1956,6 +1956,12 @@ pub fn run() {
                 }
             }
             app.manage(settings_state);
+            // 1.15.0 — delete RTX files we no longer ship. Has to run at
+            // startup rather than on install: everyone holding the obsolete
+            // TrueHDR DLL also has a matching version marker, so they report
+            // "up to date" and would never trigger the install path that
+            // would have cleaned it up. Best-effort and cheap (one stat).
+            tools::sweep_rtx_obsolete(&app_handle);
             // Unconditional: the deep-link channel parks here too, and it
             // works even when the HTTP bridge is switched off.
             app.manage(bridge::BridgeInbox::default());

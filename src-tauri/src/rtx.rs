@@ -271,18 +271,36 @@ pub struct RtxWorkerStatus {
     /// Every file of the bundle is present AND the version marker matches
     /// the build this app expects. False when an older bundle is staged.
     pub up_to_date: bool,
+    /// Size of the download, so the install prompt can say what it costs
+    /// before the user agrees to it. 0 when unknown / not applicable.
+    pub download_bytes: u64,
 }
 
 /// Whether the RTX worker is present and current. The UI uses this to
 /// decide between "Enhance", "update the enhancer" and "install it".
 #[tauri::command]
 pub fn rtx_worker_status(app: AppHandle) -> RtxWorkerStatus {
-    let installed = worker_path(&app).is_some();
+    // 1.15.0 — the worker executable alone is not an install: without the
+    // NVIDIA runtime beside it, every enhance dies at RTX init. `freshness`
+    // answers both questions in one probe — None = not there at all, Some(b) =
+    // there, and b says whether it is the build we expect. Probed once so the
+    // two answers cannot disagree.
     #[cfg(windows)]
-    let up_to_date = crate::tools::rtx_worker_freshness(&app).unwrap_or(false);
+    let (installed, up_to_date) = match crate::tools::rtx_worker_freshness(&app) {
+        Some(fresh) => (true, fresh),
+        None => (false, false),
+    };
     #[cfg(not(windows))]
-    let up_to_date = false;
-    RtxWorkerStatus { installed, up_to_date }
+    let (installed, up_to_date) = (worker_path(&app).is_some(), false);
+    #[cfg(windows)]
+    let download_bytes = crate::tools::rtx_worker_download_bytes();
+    #[cfg(not(windows))]
+    let download_bytes = 0;
+    RtxWorkerStatus {
+        installed,
+        up_to_date,
+        download_bytes,
+    }
 }
 
 /// Per-frame progress, emitted as `rtx:progress`. `asset_id` is the ORIGINAL
@@ -835,9 +853,16 @@ async fn run_worker(
         // invites the worker to disagree with itself.
         args.push("--no-vsr".into());
     }
-    if !hdr {
-        args.push("--no-thdr".into());
-    }
+    // 1.15.0 — TrueHDR is off, always, and this is the single line that
+    // enforces it. Not a quality call: `nvngx_truehdr.dll` is a second piece
+    // of NVIDIA's proprietary runtime, and dropping the feature drops the DLL
+    // (verified 2026-08-20 — the worker runs fine with `--no-thdr` and no
+    // truehdr DLL on disk). The `hdr` plumbing is deliberately left intact so
+    // this stays a one-line decision, but bringing it back means recutting
+    // the bundle AND covering truehdr in the NVIDIA notification. See
+    // docs/SHIPPING_LEGAL.md before you touch it.
+    let _ = hdr;
+    args.push("--no-thdr".into());
     // Flag and value always pushed together: `--cc-blob` left as the final
     // token access-violates the worker.
     if let (Some(blob), Some(k)) = (cc_blob.as_ref(), cc_k) {

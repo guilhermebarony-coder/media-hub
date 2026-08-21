@@ -393,6 +393,20 @@ export const en: Record<string, string> = {
   "ctx.rtxQueue": "Add to queue…",
   "ctx.rtxQuick": "Quick upscale",
   "ctx.transcode": "Transcode to…",
+  // RTX install card (1.15.0) — shown in the first-run wizard and in
+  // Settings when the machine has an RTX GPU but not the sidecar yet.
+  "rtx.install.title": "RTX Video enhance",
+  "rtx.install.yourGpu": "Your NVIDIA RTX GPU",
+  "rtx.install.body":
+    "Your GPU can clean up compression artifacts and upscale clips. The enhancer isn\u2019t part of Media Hub — it\u2019s a one-time {size} download.",
+  "rtx.install.bodyNoSize":
+    "Your GPU can clean up compression artifacts and upscale clips. The enhancer isn\u2019t part of Media Hub — it\u2019s a one-time download.",
+  "rtx.install.cta": "Install enhancer",
+  "rtx.install.retry": "Try again",
+  "rtx.install.starting": "starting…",
+  "rtx.install.later": "You can also do this later in Settings.",
+  "rtx.install.legal":
+    "Includes NVIDIA RTX Video runtime components, used under NVIDIA\u2019s licence terms.",
   "ctx.copyUrl": "Copy source URL",
   "ctx.copyPath": "Copy file path",
   "ctx.sendEagle": "Send to Eagle",

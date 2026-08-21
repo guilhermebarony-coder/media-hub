@@ -369,7 +369,66 @@ can ship immediately; the 2×/4× selector activates once the forked worker is i
   CLI). Revisit as an optional, off-by-default control inside the Phase-4 worker
   fork (single-pass GPU sharpen). VSR already sharpens, so low priority.
 - ~~In-app before/after?~~ → RESOLVED: in scope, Phase 2 (frame A/B slider).
-- Do we expose HDR (TrueHDR) at all in v1, or ship VSR-only and add HDR later?
-- Sidecar size budget + hosting (our GitHub release assets vs elsewhere).
-- Non-RTX NVIDIA and AMD/Intel users: hide entirely, or offer the ffmpeg
-  cleanup filters (the earlier compression-reducer prototype) as a fallback path?
+- ~~Do we expose HDR (TrueHDR) at all?~~ → RESOLVED 2026-08-20: **no**. The
+  switch is removed, `--no-thdr` is forced, and `nvngx_truehdr.dll` is not
+  shipped or extracted anywhere. It cost a second proprietary DLL for a feature
+  nobody was using.
+- ~~Sidecar size budget + hosting~~ → RESOLVED 2026-08-20: **split install**.
+  The public GitHub asset carries MIT files only (worker + CodecClean weights);
+  `nvngx_vsr.dll` ships inside the Media Hub installer and is copied beside the
+  worker at install time. Rationale, the measurements behind it, and what is
+  still owed: `docs/SHIPPING_LEGAL.md`.
+- ~~Non-RTX NVIDIA and AMD/Intel users: hide entirely, or offer a fallback?~~
+  → RESOLVED: hide entirely. No teasing, no disabled controls.
+
+---
+
+## Phase 5 — the enhancer is an install, not a feature (1.15.0)
+
+Nothing RTX is in the installer (`tauri.conf.json` has no `resources`, and
+`externalBin` is yt-dlp only). The sidecar arrives only when the user asks for
+it, from one of exactly two places.
+
+**One rule, derived once** in `rtxEnhance.tsx` so no caller can invent its own:
+
+```
+rtxAvailable   = capability.supported && workerReady   // show every RTX control
+rtxInstallable = capability.supported && !workerReady  // show the offer, nothing else
+```
+
+- `rtxAvailable` gates the library right-click items and the top-bar button.
+  Previously they were gated on `capability.supported` alone — a capable GPU
+  with no sidecar lit up a menu whose only outcome was an error a minute later.
+- `rtxInstallable` renders `<RtxInstallCard />`, the same component in both
+  entry points so the wording, the progress and the failure cannot drift:
+  - **first-run wizard**, appended to the last step. Deliberately NOT its own
+    step: it is optional and 29 MB, and "Finish" stays one click away.
+  - **Settings → RTX Video**, where the section *becomes* the card. The
+    quality / scale / filter / output rows are hidden until the worker exists,
+    because they were settings that could not take effect.
+- Install progress rides the existing `tools:progress` event, filtered on
+  `tool === "rtx-worker"`. `ensureWorker` never rejects; the failure is state,
+  so both cards render it identically.
+- `RtxWorkerStatus` carries `download_bytes` from the spec, so the prompt quotes
+  the real size instead of a React string nobody updates when the bundle is recut.
+- `tools::tests::the_rtx_bundle_can_actually_install_itself` pins the spec:
+  https url, version, 64-char sha256, non-zero size, `out_name` actually
+  produced by a member, the MIT files present — and, since 1.15.0, that no
+  NVIDIA DLL is listed as a member at all. Re-adding one to "fix" an install
+  fails the test and points at SHIPPING_LEGAL.md.
+
+### The install is two halves now
+
+`rtx_worker_ensure` = `ensure()` (download the MIT archive) + `place_rtx_runtime()`
+(copy `nvngx_vsr.dll` out of our own installer, delete anything in
+`RTX_OBSOLETE`). Both `rtx_worker_freshness` and `RtxWorkerStatus.installed`
+require **both** halves, because a worker without the runtime beside it starts
+and then dies at RTX init — the worst of the three states to report as
+"installed".
+
+Build-time cost, measured 2026-08-20 (not estimated): the NSIS installer goes
+from **23.8 MB → 36.4 MB**, +12.6 MB, for a 19.1 MB DLL after LZMA. The 29 MB
+worker executable — the bigger half — still downloads on demand, so a user who
+never touches RTX never fetches it. Verified inside the built installer:
+`resources
+vngx_vsr.dll`, 19,140,144 bytes.

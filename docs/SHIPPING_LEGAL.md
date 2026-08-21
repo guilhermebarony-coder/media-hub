@@ -19,7 +19,7 @@ link them. Each is a separate process. Media Hub's own source is MIT (confirm in
 | `deno.exe` | MIT | Include MIT text + copyright. |
 | `RTXVideoProcessor.exe` (our fork of DrC0ns0le) | MIT | Include MIT text + copyright. Publish our fork source (MIT requires nothing more, but we host it anyway). |
 | `nvngx_vsr.dll` | **NVIDIA proprietary** (RTX Video SDK / NGX EULA) | See NVIDIA section below. **Gating item.** |
-| `nvngx_truehdr.dll` | NVIDIA proprietary | **DROP IT** — TrueHDR was removed from the UI, so we don't ship this at all. Shrinks the legal surface to one DLL. |
+| `nvngx_truehdr.dll` | NVIDIA proprietary | ✅ **DROPPED for real (2026-08-20).** The row used to claim this while the switch was still in Settings and the DLL still in the bundle. Now: the **SDR → HDR** switch is gone, `run_worker` forces `--no-thdr` unconditionally, the DLL is out of `members`, and `tools::RTX_OBSOLETE` deletes any copy an older bundle left in `bin`. Verified against the shipped worker: 2× upscale runs clean with no truehdr DLL on disk. Legal surface is **one** proprietary DLL. |
 
 The MIT source repo must **never contain** `nvngx_vsr.dll`, GPL binaries, or any
 non-MIT binary. Binaries live only in the built installer / lazy-download host.
@@ -29,9 +29,14 @@ non-MIT binary. Binaries live only in the built installer / lazy-download host.
 Per NVIDIA's NGX Programming Guide (docs.nvidia.com/rtx/ngx/programming-guide):
 
 1. **Pre-release notification is REQUIRED.** Before releasing a product with NGX,
-   notify NVIDIA at <https://developer.nvidia.com/sw-notification>. NVIDIA returns
-   an **NGX-compatible application ID**. → **HUMAN action.** We currently init NGX
-   with `APP_ID = 0` in the worker; once we have the real ID, wire it in.
+   notify NVIDIA at <https://developer.nvidia.com/sw-notification>.
+   ⚠️ **Correction (2026-08-20):** this item used to say NVIDIA "returns an
+   NGX-compatible application ID", and that we should wire it in once we have
+   it. Reading the RTX Video SDK licence supplement §4, the obligation is
+   **notification only** — there is no approval step and no application ID is
+   issued back. `APP_ID = 0` in the worker is therefore not a placeholder
+   waiting on NVIDIA; it is the end state. What still has to happen is the
+   notification itself. → **HUMAN action, still open.**
 2. **Ship only DLLs for features used** → just `nvngx_vsr.dll` (VSR). Not truehdr.
 3. **Co-distribution model:** the DLL installs in the app's folder and the
    installer "should treat these DLLs like other components and remove them on
@@ -45,6 +50,52 @@ Per NVIDIA's NGX Programming Guide (docs.nvidia.com/rtx/ngx/programming-guide):
    wording and whether an **end-user EULA passthrough** clause applies (i.e. our
    app's ToS/EULA must surface NVIDIA's terms to the end user). → **HUMAN: read EULA,
    confirm passthrough.**
+
+### Where this stands in the shipped code (2026-08-20)
+
+Up to 1.14.0 the app lazy-downloaded **both** NVIDIA DLLs from a public GitHub
+release asset — exactly the shape item 3 above calls "likely outside the grant".
+1.15.0 splits that install; see below.
+
+### DECIDED 2026-08-20: option B, split install
+
+The app no longer takes any NVIDIA binary from the public archive.
+
+| Half | Where it comes from | Licence |
+|---|---|---|
+| `RTXVideoProcessor.exe`, `cc_32x4.blob` | public GitHub release asset, downloaded on demand | MIT |
+| `nvngx_vsr.dll` | **inside the Media Hub installer** (`bundle.resources`), copied to `bin` at install time by `tools::place_rtx_runtime` | NVIDIA proprietary |
+| `nvngx_truehdr.dll` | nowhere — feature removed | — |
+
+Rejected: **A (leave it)** — the asset URL is compiled into the app, so if the
+release asset is ever pulled, the Install button breaks in every copy already
+installed, with no fallback. **C (app-tied endpoint)** — buys obscurity, not
+compliance; a non-guessable URL is still hosting, and it costs a server plus a
+client secret that eventually leaks.
+
+**Why the DLL is copied rather than pointed at.** It must sit beside
+`RTXVideoProcessor.exe`. The worker statically links NGX's loader
+(`nvsdk_ngx_s`), which resolves feature DLLs from the executable's directory
+only. Measured 2026-08-20 against the shipped worker:
+
+| DLL location | Result |
+|---|---|
+| on `PATH` | `Failed to init RTX GPU path: RTX API create failed` |
+| in the working directory | same failure |
+| beside the exe | clean run, 24.9 fps |
+
+### Still owed
+
+- [ ] **Worker author: recut `rtx-worker-win64.zip` without the two NVIDIA
+      DLLs.** Until then the app simply does not extract them — but they are
+      still sitting in the public asset, so the hosting concern is not closed.
+      When the new zip lands, update `url` / `version` / `sha256` / `bytes` in
+      `rtx_worker_spec()`.
+- [ ] **NSIS uninstall hook** to delete `%APPDATA%\com.guilherme.mediahub\bin`.
+      The copy lands there, so today it survives an uninstall — NVIDIA's guide
+      asks that the installer remove these DLLs. (No worse than before, when
+      the DLL also lived there; but now we are choosing the location.)
+- [ ] **File the NVIDIA notification** (item 1 above) — now for VSR only.
 
 ## GPL obligations (ffmpeg, aria2c)
 

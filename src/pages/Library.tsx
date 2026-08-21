@@ -2972,7 +2972,10 @@ function CardContextMenu({
       </button>
       {!inTrash &&
         asset.kind === "video" &&
-        rtx.capability?.supported &&
+        // 1.15.0 — rtxAvailable, not capability.supported: the enhancer is a
+        // download now, and offering "Quick upscale" before it exists only
+        // buys the user an error a minute later.
+        rtx.rtxAvailable &&
         rtx.canEnhanceHeight(asset.height ?? null) && (
           <>
             <div className="ctx-sep" />

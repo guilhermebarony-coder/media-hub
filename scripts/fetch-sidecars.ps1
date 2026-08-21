@@ -74,6 +74,33 @@ Remove-Item -Force $denoZip
 Remove-Item -Recurse -Force $denoExtract
 Write-Host "      -> $denoOut" -ForegroundColor Green
 
+# ---------------------------------------------------------------------------
+# NVIDIA RTX Video runtime (bundled into the installer, NOT downloadable).
+#
+# Not fetched: it is behind an NVIDIA developer login and must never live in
+# this repo. Without it `npm run tauri build` fails at the bundle step, which
+# is deliberate -- see src-tauri/resources/README.md.
+# ---------------------------------------------------------------------------
+$vsrOut = Join-Path $PSScriptRoot '..\src-tauriesources
+vngx_vsr.dll'
+if (Test-Path $vsrOut) {
+  Write-Host "      -> nvngx_vsr.dll already in place" -ForegroundColor Green
+} else {
+  $sdkGuess = 'E:\TESTE RTX VIDEO\sdkin\Windowsdel
+vngx_vsr.dll'
+  if (Test-Path $sdkGuess) {
+    New-Item -ItemType Directory -Force (Split-Path $vsrOut) | Out-Null
+    Copy-Item $sdkGuess $vsrOut -Force
+    Write-Host "      -> copied nvngx_vsr.dll from the local RTX Video SDK" -ForegroundColor Green
+  } else {
+    Write-Host "[!] nvngx_vsr.dll is MISSING." -ForegroundColor Red
+    Write-Host "    Get the RTX Video SDK (developer.nvidia.com/rtx-video-sdk) and copy" -ForegroundColor Red
+    Write-Host "    bin\Windowsdel
+vngx_vsr.dll into src-tauriesources\." -ForegroundColor Red
+    Write-Host "    The RTX enhancer cannot be built without it." -ForegroundColor Red
+  }
+}
+
 Write-Host ""
 Write-Host "Sidecars ready. Verify with:" -ForegroundColor Yellow
 Write-Host "  & '$ytdlpOut' --version"

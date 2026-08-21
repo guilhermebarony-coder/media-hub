@@ -5278,6 +5278,99 @@ body.lib-resizing-h * {
 }
 
 /* ============================================================
+   RTX install card (1.15.0)
+
+   The same card renders inside the first-run wizard and inside a
+   Settings section, so it owns its whole look instead of inheriting
+   two different hosts' spacing. It is the ONLY RTX surface a machine
+   sees before the sidecar is downloaded.
+   ============================================================ */
+.rtx-install {
+  border: 1px solid var(--accent-line);
+  background: var(--accent-dim);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+.rtx-install-head { display: flex; align-items: center; gap: 10px; }
+.rtx-install-icon {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.rtx-install-heading { min-width: 0; }
+.rtx-install-title { font-size: 13px; font-weight: 600; color: var(--text-0); }
+/* The GPU name is the evidence for the whole offer -- it is why this card
+   is on screen at all -- so it is shown, not paraphrased. */
+.rtx-install-gpu {
+  font-size: 10.5px;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rtx-install-body {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-1);
+}
+.rtx-install-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.rtx-install-later { font-size: 11.5px; color: var(--text-1); }
+.rtx-install-prog { display: flex; align-items: center; gap: 10px; }
+.rtx-install-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-0);
+  overflow: hidden;
+}
+.rtx-install-track i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+/* Before the first progress event there is no percentage to show. A sliding
+   sliver says "working" without inventing a number. */
+.rtx-install-track i.indet {
+  width: 35%;
+  animation: rtx-install-slide 1.1s ease-in-out infinite;
+}
+@keyframes rtx-install-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(286%); }
+}
+.rtx-install-pct { font-size: 11px; color: var(--text-1); min-width: 54px; text-align: right; }
+.rtx-install-err {
+  font-size: 11.5px;
+  color: #ff9a9a;
+  background: rgba(255, 128, 128, 0.12);
+  border: 1px solid rgba(255, 128, 128, 0.35);
+  border-radius: 7px;
+  padding: 7px 9px;
+  word-break: break-word;
+}
+/* Quiet, but a licence notice nobody can read is worse than none. */
+.rtx-install-legal {
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+  border-top: 1px solid var(--accent-line);
+  padding-top: 9px;
+  margin-top: 2px;
+}
+
+/* ============================================================
    RTX enhance queue dock (bottom-left status popup, Phase 1)
    ============================================================ */
 .rtx-dock {

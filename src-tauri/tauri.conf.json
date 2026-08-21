@@ -46,12 +46,17 @@
     ],
     "externalBin": [
       "binaries/yt-dlp"
+    ],
+    "resources": [
+      "resources/nvngx_vsr.dll"
     ]
   },
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["mediahub"]
+        "schemes": [
+          "mediahub"
+        ]
       }
     },
     "updater": {
