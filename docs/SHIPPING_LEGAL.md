@@ -64,7 +64,7 @@ The app no longer takes any NVIDIA binary from the public archive.
 | Half | Where it comes from | Licence |
 |---|---|---|
 | `RTXVideoProcessor.exe`, `cc_32x4.blob` | public GitHub release asset, downloaded on demand | MIT |
-| `nvngx_vsr.dll` | **inside the Media Hub installer** (`bundle.resources`), copied to `bin` at install time by `tools::place_rtx_runtime` | NVIDIA proprietary |
+| `nvngx_vsr.dll` | **inside the Media Hub installer** (`bundle.resources` in `tauri.windows.conf.json`), copied to `bin` at install time by `tools::place_rtx_runtime`. Reaches the build machine from the PRIVATE `guilhermebarony-coder/media-hub-deps` repo (CI, via `MH_DEPS_TOKEN`) or from a local SDK install. | NVIDIA proprietary |
 | `nvngx_truehdr.dll` | nowhere — feature removed | — |
 
 Rejected: **A (leave it)** — the asset URL is compiled into the app, so if the
@@ -83,6 +83,26 @@ only. Measured 2026-08-20 against the shipped worker:
 | on `PATH` | `Failed to init RTX GPU path: RTX API create failed` |
 | in the working directory | same failure |
 | beside the exe | clean run, 24.9 fps |
+
+### Where the build machine gets it
+
+The DLL is in no public place at all. `scripts/fetch-sidecars.ps1` resolves it
+in this order:
+
+1. already in `src-tauri/resources/` and matching its sha256 → use it;
+2. `MH_DEPS_TOKEN` set (CI) → `gh release download nvngx-vsr-sdk-1.0` from the
+   **private** `media-hub-deps` repo, then verify sha256 or `exit 1`;
+3. local RTX Video SDK install → copy from it;
+4. none of the above → `exit 1` with instructions.
+
+Verified 2026-08-20: the private asset returns **HTTP 404 to an unauthenticated
+request**, and the download with credentials matches
+`c3d88eea…bf58a1ed`.
+
+`bundle.resources` lives in `tauri.windows.conf.json`, not the shared config —
+RTX is Windows-only (`rtx::detect` refuses elsewhere), so the macOS bundle must
+not carry NVIDIA's runtime. It also could not: the shared config broke the
+macOS job too, at compile time.
 
 ### Still owed
 

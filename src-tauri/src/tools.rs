@@ -552,6 +552,10 @@ pub async fn rtx_worker_ensure(app: AppHandle) -> Result<(), String> {
 }
 
 /// Download size of the RTX worker bundle, for the install prompt.
+/// Windows-only, like `rtx_worker_spec` it reads from — without the gate
+/// this compiles here and fails on the macOS runner, where the spec does
+/// not exist. Its only caller is already behind the same cfg.
+#[cfg(windows)]
 pub fn rtx_worker_download_bytes() -> u64 {
     rtx_worker_spec().bytes.unwrap_or(0)
 }

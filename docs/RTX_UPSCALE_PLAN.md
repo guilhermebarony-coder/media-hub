@@ -430,5 +430,4 @@ Build-time cost, measured 2026-08-20 (not estimated): the NSIS installer goes
 from **23.8 MB → 36.4 MB**, +12.6 MB, for a 19.1 MB DLL after LZMA. The 29 MB
 worker executable — the bigger half — still downloads on demand, so a user who
 never touches RTX never fetches it. Verified inside the built installer:
-`resources
-vngx_vsr.dll`, 19,140,144 bytes.
+`resources/nvngx_vsr.dll`, 19,140,144 bytes.

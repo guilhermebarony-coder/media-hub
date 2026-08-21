@@ -75,29 +75,67 @@ Remove-Item -Recurse -Force $denoExtract
 Write-Host "      -> $denoOut" -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
-# NVIDIA RTX Video runtime (bundled into the installer, NOT downloadable).
+# NVIDIA RTX Video runtime -- packed INTO the installer, never downloaded by
+# the app.
 #
-# Not fetched: it is behind an NVIDIA developer login and must never live in
-# this repo. Without it `npm run tauri build` fails at the bundle step, which
-# is deliberate -- see src-tauri/resources/README.md.
+# It cannot live in the public repo (proprietary), and it cannot sit behind a
+# public URL either: NVIDIA's grant covers redistribution incorporated into an
+# application, not standalone hosting of the binary. So the build machine gets
+# it from one of two access-controlled places:
+#
+#   CI     -> the private media-hub-deps repo, using MH_DEPS_TOKEN
+#   local  -> your own RTX Video SDK install
+#
+# Without it the build fails at COMPILE time with "resource path
+# resources\nvngx_vsr.dll doesn't exist". That is deliberate: an installer
+# silently missing the runtime would ship an "Install enhancer" button that
+# downloads a worker which then dies at RTX init.
 # ---------------------------------------------------------------------------
-$vsrOut = Join-Path $PSScriptRoot '..\src-tauriesources
-vngx_vsr.dll'
-if (Test-Path $vsrOut) {
-  Write-Host "      -> nvngx_vsr.dll already in place" -ForegroundColor Green
-} else {
-  $sdkGuess = 'E:\TESTE RTX VIDEO\sdkin\Windowsdel
-vngx_vsr.dll'
+$vsrDir = Join-Path $PSScriptRoot '..\src-tauri\resources'
+$vsrOut = Join-Path $vsrDir 'nvngx_vsr.dll'
+$vsrSha = 'c3d88eea5ff7a548edefa66414cf6e77464d0947277c904f324dd23abf58a1ed'
+
+function Test-VsrHash {
+  param([string]$Path)
+  if (-not (Test-Path $Path)) { return $false }
+  return (Get-FileHash -Algorithm SHA256 $Path).Hash -ieq $vsrSha
+}
+
+Write-Host ""
+Write-Host "[RTX] nvngx_vsr.dll (NVIDIA runtime, 19 MB)..." -ForegroundColor Cyan
+
+if (Test-VsrHash $vsrOut) {
+  Write-Host "      -> already in place" -ForegroundColor Green
+}
+elseif ($env:MH_DEPS_TOKEN) {
+  # CI path. gh is preinstalled on GitHub runners.
+  New-Item -ItemType Directory -Force $vsrDir | Out-Null
+  $env:GH_TOKEN = $env:MH_DEPS_TOKEN
+  gh release download nvngx-vsr-sdk-1.0 `
+    --repo guilhermebarony-coder/media-hub-deps `
+    --pattern nvngx_vsr.dll `
+    --dir $vsrDir --clobber
+  if (-not (Test-VsrHash $vsrOut)) {
+    # A wrong or truncated DLL would be packed into an installer we then sign.
+    # Refuse rather than ship it.
+    Write-Host "[!] nvngx_vsr.dll failed its sha256 check after download." -ForegroundColor Red
+    exit 1
+  }
+  Write-Host "      -> fetched from media-hub-deps (sha256 ok)" -ForegroundColor Green
+}
+else {
+  $sdkGuess = 'E:\TESTE RTX VIDEO\sdk\bin\Windows\x64\rel\nvngx_vsr.dll'
   if (Test-Path $sdkGuess) {
-    New-Item -ItemType Directory -Force (Split-Path $vsrOut) | Out-Null
+    New-Item -ItemType Directory -Force $vsrDir | Out-Null
     Copy-Item $sdkGuess $vsrOut -Force
-    Write-Host "      -> copied nvngx_vsr.dll from the local RTX Video SDK" -ForegroundColor Green
-  } else {
-    Write-Host "[!] nvngx_vsr.dll is MISSING." -ForegroundColor Red
-    Write-Host "    Get the RTX Video SDK (developer.nvidia.com/rtx-video-sdk) and copy" -ForegroundColor Red
-    Write-Host "    bin\Windowsdel
-vngx_vsr.dll into src-tauriesources\." -ForegroundColor Red
-    Write-Host "    The RTX enhancer cannot be built without it." -ForegroundColor Red
+    Write-Host "      -> copied from the local RTX Video SDK" -ForegroundColor Green
+  }
+  else {
+    Write-Host "[!] nvngx_vsr.dll is MISSING and no MH_DEPS_TOKEN is set." -ForegroundColor Red
+    Write-Host "    Local build: install the RTX Video SDK and copy" -ForegroundColor Red
+    Write-Host "    bin\Windows\x64\rel\nvngx_vsr.dll into src-tauri\resources\." -ForegroundColor Red
+    Write-Host "    See src-tauri\resources\README.md." -ForegroundColor Red
+    exit 1
   }
 }
 

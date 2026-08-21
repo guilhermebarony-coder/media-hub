@@ -46,9 +46,6 @@
     ],
     "externalBin": [
       "binaries/yt-dlp"
-    ],
-    "resources": [
-      "resources/nvngx_vsr.dll"
     ]
   },
   "plugins": {

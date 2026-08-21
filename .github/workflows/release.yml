@@ -10,6 +10,17 @@ name: Release
 # Required repo secrets (Settings -> Secrets and variables -> Actions):
 #   TAURI_SIGNING_PRIVATE_KEY           contents of ~/.tauri/media-hub.key
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  the key password (empty for ours)
+#   MH_DEPS_TOKEN                       PAT with read access to the PRIVATE
+#                                       guilhermebarony-coder/media-hub-deps
+#                                       repo, which holds nvngx_vsr.dll.
+#
+# Why that last one exists: since 1.15.0 the Windows installer PACKS NVIDIA's
+# nvngx_vsr.dll (bundle.resources in tauri.windows.conf.json). It cannot be in
+# this public repo, and it cannot sit behind a public URL either -- NVIDIA's
+# grant covers redistribution incorporated into an application, not standalone
+# hosting. So the Windows runner pulls it from a private repo at build time.
+# Without the secret the Windows job fails at COMPILE time with
+# "resource path resources/nvngx_vsr.dll doesn't exist".
 
 on:
   push:
@@ -65,7 +76,9 @@ jobs:
       # (binaries/yt-dlp-<triple>) exists at compile time. If we run tests
       # before fetching, that check fails with "resource path ... doesn't
       # exist" (exit 101). So: fetch, then test, then smoke, then build.
-      - name: Fetch sidecars (yt-dlp + ffmpeg)
+      - name: Fetch sidecars (yt-dlp + ffmpeg + NVIDIA runtime on Windows)
+        env:
+          MH_DEPS_TOKEN: ${{ secrets.MH_DEPS_TOKEN }}
         run: ${{ matrix.fetch_sidecars }}
 
       # Layer A — pure-logic unit tests (parsers, JSON deserialization,

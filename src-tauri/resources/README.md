@@ -10,19 +10,22 @@ excludes `src-tauri/resources/*.dll`; if you ever see one staged, stop.
 
 ### Where to get it
 
-1. Download the **RTX Video SDK for Windows**:
-   <https://developer.nvidia.com/rtx-video-sdk> (free NVIDIA developer account)
-2. Copy `bin/Windows/x64/rel/nvngx_vsr.dll` into this folder.
+`scripts/fetch-sidecars.ps1` handles this. It takes the first that works:
 
-On Gui's machine the SDK is already unpacked:
+1. **already here** and matching sha256 `c3d88eea…bf58a1ed` — nothing to do;
+2. **CI**: `MH_DEPS_TOKEN` set → pulled from the private
+   `guilhermebarony-coder/media-hub-deps` repo, sha256 verified;
+3. **local**: copied from an RTX Video SDK install
+   (<https://developer.nvidia.com/rtx-video-sdk>, free developer account —
+   the file is `bin/Windows/x64/rel/nvngx_vsr.dll`). On Gui's machine the SDK
+   is already unpacked at `E:\TESTE RTX VIDEO\sdk`;
+4. otherwise it stops with `exit 1` and tells you which of the above to fix.
 
-```powershell
-Copy-Item "E:\TESTE RTX VIDEO\sdk\bin\Windows\x64\rel\nvngx_vsr.dll" src-tauri\resources\
-```
-
-Without it, `npm run tauri build` fails at the bundle step. That is deliberate:
-a Media Hub installer that silently lacks the runtime would ship an "Install
-enhancer" button that downloads a worker which then dies at RTX init.
+Without it, `npm run tauri build` fails at COMPILE time with `resource path
+resources/nvngx_vsr.dll doesn't exist` (measured -- earlier than the bundle
+step this file used to claim). That is deliberate: a Media Hub installer that
+silently lacks the runtime would ship an "Install enhancer" button that
+downloads a worker which then dies at RTX init.
 
 ### Why it is here and not in the download
 
