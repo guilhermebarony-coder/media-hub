@@ -13,6 +13,15 @@ name: Release
 #   MH_DEPS_TOKEN                       PAT with read access to the PRIVATE
 #                                       guilhermebarony-coder/media-hub-deps
 #                                       repo, which holds nvngx_vsr.dll.
+#                                       Set 2026-08-21, NO expiry -- so if the
+#                                       Windows job ever fails on gh auth it is
+#                                       a revoked/rotated token, not a lapsed
+#                                       one. To replace: fine-grained PAT,
+#                                       owner guilhermebarony-coder, ONLY the
+#                                       media-hub-deps repo, Contents:
+#                                       Read-only, then
+#                                         gh secret set MH_DEPS_TOKEN \
+#                                           --repo guilhermebarony-coder/media-hub
 #
 # Why that last one exists: since 1.15.0 the Windows installer PACKS NVIDIA's
 # nvngx_vsr.dll (bundle.resources in tauri.windows.conf.json). It cannot be in
