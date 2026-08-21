@@ -86,11 +86,18 @@ only. Measured 2026-08-20 against the shipped worker:
 
 ### Still owed
 
-- [ ] **Worker author: recut `rtx-worker-win64.zip` without the two NVIDIA
-      DLLs.** Until then the app simply does not extract them — but they are
-      still sitting in the public asset, so the hosting concern is not closed.
-      When the new zip lands, update `url` / `version` / `sha256` / `bytes` in
-      `rtx_worker_spec()`.
+- [x] ~~Worker author: recut the archive without the NVIDIA DLLs.~~ **DONE
+      2026-08-20** — `rtx-worker-v0.2.0-18` holds `RTXVideoProcessor.exe` +
+      `cc_32x4.blob` and nothing else (12,757,040 bytes, sha256
+      `8a29e58d…9a235211`). Verified by downloading the published asset back
+      and listing it, not by trusting the build. `rtx_worker_spec()` points
+      at it.
+- [ ] **Delete the `rtx-worker-v0.2.0-15` release asset.** It is still public
+      and it still contains both NVIDIA DLLs — that asset, not the new one,
+      is the remaining exposure. Not deleted yet because any tester still
+      running a Media Hub build that pins v-15 would lose their Install
+      button. Do it once everyone is on a build pointing at v-18:
+      `gh release delete rtx-worker-v0.2.0-15 --repo guilhermebarony-coder/media-hub --yes`
 - [ ] **NSIS uninstall hook** to delete `%APPDATA%\com.guilherme.mediahub\bin`.
       The copy lands there, so today it survives an uninstall — NVIDIA's guide
       asks that the installer remove these DLLs. (No worse than before, when

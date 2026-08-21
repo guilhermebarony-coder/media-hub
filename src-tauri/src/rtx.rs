@@ -871,8 +871,12 @@ async fn run_worker(
         args.push("--cc-strength".into());
         args.push(format!("{k:.2}"));
     }
-    args.push("--quality".into());
-    args.push(enc_preset.as_str().into());
+    // Unconditional until 1.15.0, which is why the worker's own default was
+    // unreachable from the app: there is no `--quality` value that selects it.
+    if let Some(q) = enc_preset.as_flag() {
+        args.push("--quality".into());
+        args.push(q.into());
+    }
     let cc_desc = cc_k.map(|k| format!("{k:.2}")).unwrap_or_else(|| "off".into());
     let pix_desc = in_pix.clone().unwrap_or_else(|| "?".into());
     diag::log(
@@ -881,7 +885,7 @@ async fn run_worker(
         &format!(
             "worker key={event_key} q={q} hdr={hdr} vsr={vsr} scale={}x preset={} cc={cc_desc} pix={pix_desc} -> {worker_out_str}",
             if vsr { s.to_string() } else { "1 (no-vsr)".to_string() },
-            enc_preset.as_str()
+            enc_preset.as_flag().unwrap_or("padrao (worker default)")
         ),
     );
 
@@ -1005,10 +1009,10 @@ async fn run_worker(
             "rtx",
             &format!("worker never armed CodecClean key={event_key} — refusing the output"),
         );
-        return Err(
-            "The compression filter was requested but the enhancer never applied it              (its GPU decode path didn't start). Update the enhancer in Settings, or              turn the filter off."
-                .into(),
-        );
+        return Err("The compression filter was requested but the enhancer never \
+applied it (its GPU decode path didn't start). Update the enhancer in \
+Settings, or turn the filter off."
+            .into());
     }
 
     // Optional post-clean: filter chain applied to the VSR output (at the
@@ -1051,26 +1055,43 @@ pub enum EncPreset {
     Lossless,
     Master,
     Entrega,
+    /// The worker's own default (qp 21). Has no name on the CLI — it is the
+    /// ABSENCE of `--quality`, and the worker's parser exits with an error on
+    /// any name it does not know, so there is no string that selects it.
+    /// Roughly a third the size of `Entrega` (qp 15) on the same source.
+    Padrao,
     Previa,
 }
 
 impl EncPreset {
-    fn as_str(self) -> &'static str {
+    /// The `--quality` value, or None when the preset means "don't pass the
+    /// flag at all".
+    fn as_flag(self) -> Option<&'static str> {
         match self {
-            EncPreset::Lossless => "lossless",
-            EncPreset::Master => "master",
-            EncPreset::Entrega => "entrega",
-            EncPreset::Previa => "previa",
+            EncPreset::Lossless => Some("lossless"),
+            EncPreset::Master => Some("master"),
+            EncPreset::Entrega => Some("entrega"),
+            EncPreset::Previa => Some("previa"),
+            EncPreset::Padrao => None,
         }
     }
 
-    /// Parse a frontend string. Anything unrecognized becomes the default
+    /// Parse a frontend string. Anything unrecognized becomes `Entrega`
     /// rather than an error the user can't act on.
+    ///
+    /// Note this is NOT the product default (the frontend ships `padrao`
+    /// since 1.15.0). It is the landing spot for a value that should never
+    /// arrive, and it errs toward MORE headroom: a typo that quietly shrank
+    /// someone's master is worse than one that quietly grew it.
     fn from_str(s: &str) -> EncPreset {
-        match s.trim().to_ascii_lowercase().as_str() {
+        // Unicode lowercase, not ASCII: `to_ascii_lowercase` leaves Ã and É
+        // untouched, so "PADRÃO" and "PRÉVIA" silently fell through to the
+        // catch-all and became `entrega`.
+        match s.trim().to_lowercase().as_str() {
             "lossless" => EncPreset::Lossless,
             "master" => EncPreset::Master,
             "previa" | "prévia" => EncPreset::Previa,
+            "padrao" | "padrão" => EncPreset::Padrao,
             _ => EncPreset::Entrega,
         }
     }
@@ -1754,13 +1775,35 @@ mod tests {
     /// the value and exits on anything unknown.
     #[test]
     fn enc_preset_is_closed_and_defaults_safely() {
-        assert_eq!(EncPreset::from_str("lossless").as_str(), "lossless");
-        assert_eq!(EncPreset::from_str("MASTER").as_str(), "master");
-        assert_eq!(EncPreset::from_str(" previa ").as_str(), "previa");
-        assert_eq!(EncPreset::from_str("prévia").as_str(), "previa");
+        assert_eq!(EncPreset::from_str("lossless").as_flag(), Some("lossless"));
+        assert_eq!(EncPreset::from_str("MASTER").as_flag(), Some("master"));
+        assert_eq!(EncPreset::from_str(" previa ").as_flag(), Some("previa"));
+        assert_eq!(EncPreset::from_str("prévia").as_flag(), Some("previa"));
         // Garbage, empty and the shipped default all land on entrega.
         for junk in ["", "  ", "qp=12", "--nvenc-qp 0", "ultra", "entrega"] {
-            assert_eq!(EncPreset::from_str(junk).as_str(), "entrega", "{junk:?}");
+            assert_eq!(EncPreset::from_str(junk).as_flag(), Some("entrega"), "{junk:?}");
+        }
+    }
+
+    /// 1.15.0 — the worker's own default (qp 21) is reachable ONLY by not
+    /// passing `--quality`, because its parser exits on any name it does not
+    /// know. So "padrao" must map to None, and every other preset must map to
+    /// a name the worker actually accepts — a typo here is a dead job, not a
+    /// wrong file size.
+    #[test]
+    fn padrao_means_no_quality_flag_at_all() {
+        assert_eq!(EncPreset::from_str("padrao").as_flag(), None);
+        assert_eq!(EncPreset::from_str("PADRÃO").as_flag(), None);
+        // The four named presets are exactly the ones config_parser.cpp knows.
+        const WORKER_ACCEPTS: [&str; 4] = ["lossless", "master", "entrega", "previa"];
+        for p in [
+            EncPreset::Lossless,
+            EncPreset::Master,
+            EncPreset::Entrega,
+            EncPreset::Previa,
+        ] {
+            let flag = p.as_flag().expect("named presets pass a flag");
+            assert!(WORKER_ACCEPTS.contains(&flag), "worker would reject {flag:?}");
         }
     }
 

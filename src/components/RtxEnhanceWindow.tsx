@@ -586,6 +586,7 @@ function SettingsFields({
           <option value="lossless">Lossless (largest)</option>
           <option value="master">Master</option>
           <option value="entrega">Delivery</option>
+          <option value="padrao">Standard</option>
           <option value="previa">Preview (smallest)</option>
         </select>
       </div>

@@ -1260,6 +1260,7 @@ function RtxSection() {
           <option value="lossless">Lossless</option>
           <option value="master">Master</option>
           <option value="entrega">Delivery</option>
+          <option value="padrao">Standard</option>
           <option value="previa">Preview</option>
         </select>
         <span className="hint-text faint">
@@ -1269,7 +1270,9 @@ function RtxSection() {
               ? "Near-lossless, large. For finishing."
               : defaultEncPreset === "previa"
                 ? "Small and soft. For checking a cut."
-                : "The balanced default. Encode time is the same either way — only size changes."}
+                : defaultEncPreset === "padrao"
+                  ? "The enhancer's own default (qp 21). About a third the size of Delivery."
+                  : "Generous headroom (qp 15). Roughly 3× the size of Standard — encode time is the same, only size changes."}
         </span>
       </div>
 

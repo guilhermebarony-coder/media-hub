@@ -131,7 +131,7 @@ fn deno_spec() -> ToolSpec {
 fn rtx_worker_spec() -> ToolSpec {
     ToolSpec {
         id: "rtx-worker",
-        url: "https://github.com/guilhermebarony-coder/media-hub/releases/download/rtx-worker-v0.2.0-15/rtx-worker-win64.zip",
+        url: "https://github.com/guilhermebarony-coder/media-hub/releases/download/rtx-worker-v0.2.0-18/rtx-worker-win64.zip",
         // 1.15.0 — MIT files ONLY. The two NVIDIA DLLs used to be extracted
         // from here; `nvngx_vsr.dll` now ships inside the Media Hub installer
         // (see RTX_RUNTIME_DLLS) and `nvngx_truehdr.dll` is gone entirely.
@@ -142,9 +142,11 @@ fn rtx_worker_spec() -> ToolSpec {
             ("cc_32x4.blob", "cc_32x4.blob"),
         ],
         out_name: "RTXVideoProcessor.exe",
-        version: Some("v0.2.0-15-g8ef4b82"),
-        sha256: Some("bb862505e283e085e524af5ce6838ec01dae07b5e0ee4c1176d2551bd2e832db"),
-        bytes: Some(29_382_853),
+        version: Some("v0.2.0-18-gfee4166"),
+        sha256: Some("8a29e58d22c7c0852c0b97602fcbde4ae70f75cde66f7106c30226fe9a235211"),
+        // 29.4 MB -> 12.8 MB: the drop is the two NVIDIA DLLs leaving the
+        // archive, not the worker shrinking (the exe grew).
+        bytes: Some(12_757_040),
     }
 }
 

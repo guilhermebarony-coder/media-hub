@@ -66,7 +66,10 @@ export type RtxJob = {
   /** Filter strength 0.00-1.00. 1.00 is the tuned dose; 0.00 is an exact
    *  bypass (which still requires the weights to load). */
   ccStrength: number;
-  /** Output quality preset: lossless | master | entrega | previa.
+  /** Output quality preset: lossless | master | entrega | padrao | previa.
+   *  1.15.0 — `padrao` is the worker's OWN default (qp 21) and is the only
+   *  one that passes no `--quality` flag at all; the worker's parser errors
+   *  on any name it does not know, so there was no string that reached it.
    *  Deliberately NOT called `quality` — that name is already VSR's 1-4. */
   encPreset: string;
   status: RtxStatus;
@@ -480,9 +483,9 @@ export function RtxEnhanceProvider({ children }: { children: ReactNode }) {
   }, [defaultCcStrength]);
   const [defaultEncPreset, setDefaultEncPreset] = useState<string>(() => {
     try {
-      return localStorage.getItem("mh.rtx.encPreset") || "entrega";
+      return localStorage.getItem("mh.rtx.encPreset") || "padrao";
     } catch {
-      return "entrega";
+      return "padrao";
     }
   });
   useEffect(() => {
