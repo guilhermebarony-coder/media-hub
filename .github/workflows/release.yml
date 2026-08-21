@@ -61,6 +61,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # These pins rot silently and nothing used to notice. BtbN stopped
+      # publishing n7.1 and it broke two things at once: this workflow, and
+      # every FRESH WINDOWS INSTALL -- since 1.12.0 the app downloads ffmpeg
+      # on first launch and ToolsGate blocks until it lands, so a dead URL in
+      # tools.rs bricks setup for new users while existing ones never notice.
+      # Runs before the expensive steps so it fails in seconds.
+      - name: Verify runtime download URLs
+        shell: bash
+        run: |
+          fail=0
+          urls=$(grep -oE 'url: "https://[^"]+' src-tauri/src/tools.rs | sed 's/url: "//' | sort -u)
+          for u in $urls; do
+            code=$(curl -s -o /dev/null -L -r 0-15 -w '%{http_code}' "$u")
+            case "$code" in
+              200|206) echo "  ok    $code  $u" ;;
+              *)       echo "  DEAD  $code  $u"; fail=1 ;;
+            esac
+          done
+          if [ "$fail" != "0" ]; then
+            echo ""
+            echo "A URL baked into src-tauri/src/tools.rs is dead. Shipping this"
+            echo "would leave fresh installs unable to fetch their sidecars."
+            exit 1
+          fi
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:

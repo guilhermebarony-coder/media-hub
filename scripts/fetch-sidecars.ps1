@@ -27,7 +27,17 @@ Write-Host "      -> $ytdlpOut" -ForegroundColor Green
 # ---------- ffmpeg ----------
 # BtbN GPL build — includes prores, dnxhd, libx264, etc.
 #
-# IMPORTANT: pin to the STABLE RELEASE BRANCH (n7.1), NOT master-latest.
+# IMPORTANT: pin to a STABLE RELEASE BRANCH, NOT master-latest.
+#
+# 2026-08-21: was n7.1, which BtbN stopped publishing — the asset 404s. That
+# broke the release build AND, because src-tauri/src/tools.rs carried the same
+# URL, every fresh Windows install: ffmpeg is downloaded on first launch and
+# ToolsGate blocks the app until it arrives. Moved to n9.0, which is also what
+# the macOS side already ships (martin-riedl "latest" resolves to 9.0.1), so
+# both platforms are on one major version.
+#
+# These pins rot silently. `Verify runtime download URLs` in release.yml now
+# checks the ones baked into tools.rs on every release run.
 # `ffmpeg-master-latest` is a bleeding-edge nightly re-fetched on every
 # build, so each release randomly inherited whatever regressions were in
 # that day's master (this is what caused the "transcode: at least one of
@@ -40,9 +50,9 @@ $ffZip = Join-Path $env:TEMP 'ffmpeg-mh.zip'
 $ffExtract = Join-Path $env:TEMP 'ffmpeg-mh'
 $ffOut = Join-Path $binDir "ffmpeg-$target.exe"
 
-Write-Host "[2/2] Fetching ffmpeg (BtbN GPL, stable n7.1, ~80 MB)..." -ForegroundColor Cyan
+Write-Host "[2/2] Fetching ffmpeg (BtbN GPL, stable n9.0, ~80 MB)..." -ForegroundColor Cyan
 Invoke-WebRequest `
-  -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-win64-gpl-7.1.zip' `
+  -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip' `
   -OutFile $ffZip
 Write-Host "      Extracting..." -ForegroundColor Cyan
 if (Test-Path $ffExtract) { Remove-Item -Recurse -Force $ffExtract }

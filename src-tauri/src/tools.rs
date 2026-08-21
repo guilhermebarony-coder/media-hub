@@ -62,9 +62,9 @@ struct ToolSpec {
 fn ffmpeg_spec() -> ToolSpec {
     ToolSpec {
         id: "ffmpeg",
-        // Stable release branch (n7.1) — NOT master-latest. See
+        // Stable release branch — NOT master-latest. See
         // scripts/fetch-sidecars.ps1 for why master churn is a hazard.
-        url: "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-win64-gpl-7.1.zip",
+        url: "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip",
         members: &[("ffmpeg.exe", "ffmpeg.exe")],
         out_name: "ffmpeg.exe",
         version: None,
