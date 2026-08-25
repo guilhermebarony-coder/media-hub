@@ -5591,6 +5591,53 @@ body.lib-resizing-h * {
 }
 .rtxw-placeholder { color: var(--text-1); text-align: center; font-size: 13px; line-height: 1.6; padding: 0 28px; }
 
+/* A preview that fails used to do so in the devtools console, which a
+   tester cannot open. Sits over the viewer, dismissible, and wraps the
+   worker's own message rather than paraphrasing it. */
+.rtxw-preverr {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+  z-index: 6;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 128, 128, 0.45);
+  background: rgba(40, 16, 16, 0.96);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+}
+.rtxw-preverr-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.rtxw-preverr strong { font-size: 12.5px; color: #ffb4b4; font-weight: 600; }
+.rtxw-preverr span {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-1);
+  word-break: break-word;
+}
+.rtxw-preverr-x {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  border-radius: 5px;
+  cursor: pointer;
+}
+.rtxw-preverr-x:hover { background: rgba(255, 128, 128, 0.18); color: #ffb4b4; }
+
 /* Drop-in feedback — a video is being dragged over the open window. */
 .rtxw.drop-hover { outline: 2px dashed var(--accent-line); outline-offset: -6px; }
 .rtxw-droplabel {

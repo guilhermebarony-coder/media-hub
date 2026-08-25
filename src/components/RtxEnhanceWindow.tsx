@@ -604,6 +604,23 @@ function SettingsFields({
  *  choice rather than two independent toggles. */
 type PrevMode = "off" | "cc" | "vsr" | "both";
 
+/**
+ * Which stages the preview opens on.
+ *
+ * This was a hardcoded "both", which meant the preview ran CodecClean on a
+ * clip whose own setting had it OFF (the default). Two consequences, both
+ * bad: it showed a picture the render would not produce, and it tripped the
+ * guard in `run_worker` that refuses output when the filter was requested and
+ * the worker silently ignored it — which the worker does whenever its
+ * hardware decoder fails to start. On such a machine the preview failed while
+ * the actual enhance was fine, which is a maddening thing to debug.
+ *
+ * The preview now opens on whatever the clip is set to do.
+ */
+function openingMode(job: RtxJob): PrevMode {
+  return job.cc ? "both" : "vsr";
+}
+
 /** A live preview session: one raw slice, re-filtered in place; VSR on demand. */
 type Slice = { key: string; startSec: number; before: string; cleaned: string };
 
@@ -790,7 +807,9 @@ export function RtxEnhanceWindow() {
   // once, re-filtered live, with VSR rendered only when toggled on.
   const [slice, setSlice] = useState<Slice | null>(null);
   const [vsrPath, setVsrPath] = useState<string | null>(null);
-  const [prevMode, setPrevMode] = useState<PrevMode>("both");
+  const [prevMode, setPrevMode] = useState<PrevMode>("vsr");
+  /** Why the last preview attempt produced nothing. */
+  const [prevError, setPrevError] = useState<string | null>(null);
   // Difference map (where VSR changed the frame) — needs VSR rendered first.
   const [diffPath, setDiffPath] = useState<string | null>(null);
   const [diffOn, setDiffOn] = useState(false);
@@ -866,9 +885,10 @@ export function RtxEnhanceWindow() {
     const key = `${job.id}-${Date.now()}`;
     setBusy("extract");
     setVsrPath(null);
-    setPrevMode("both");
+    setPrevMode(openingMode(job));
     setDiffPath(null);
     setDiffOn(false);
+    setPrevError(null);
     try {
       const before = await invoke<string>("rtx_slice_extract", {
         path: job.filePath,
@@ -877,7 +897,11 @@ export function RtxEnhanceWindow() {
       });
       setSlice({ key, startSec: timeSec, before, cleaned: before });
     } catch (e) {
+      // Was a console.warn and nothing else: the spinner stopped, no reason
+      // appeared, and the button read as broken. A tester cannot open a
+      // devtools console.
       console.warn("[rtx] slice extract failed:", e);
+      setPrevError(String(e));
       setBusy(null);
     }
   }, []);
@@ -885,10 +909,10 @@ export function RtxEnhanceWindow() {
   const clearSlice = useCallback(() => {
     setSlice(null);
     setVsrPath(null);
-    setPrevMode("both");
     setDiffPath(null);
     setDiffOn(false);
     setBusy(null);
+    setPrevError(null);
     vsrCache.current = null;
   }, []);
 
@@ -910,6 +934,7 @@ export function RtxEnhanceWindow() {
       const wantVsr = mode === "vsr" || mode === "both";
       const seq = ++regenSeq.current;
       setBusy("filter");
+      setPrevError(null);
       try {
         // Unique per render (seq) so the output path CHANGES each time — the
         // webview caches asset URLs, so a stable filename shows a stale frame.
@@ -974,6 +999,9 @@ export function RtxEnhanceWindow() {
         }
       } catch (e) {
         console.warn("[rtx] preview regen failed:", e);
+        // Only the newest attempt may speak — a stale rejection from a
+        // superseded slider drag must not bury a good preview.
+        if (seq === regenSeq.current) setPrevError(String(e));
       } finally {
         if (seq === regenSeq.current) setBusy(null);
       }
@@ -1195,6 +1223,24 @@ export function RtxEnhanceWindow() {
         <div className="rtxw-body">
           <div className="rtxw-main">
             {renderMain()}
+            {/* Sits over the viewer rather than inside renderMain's branches,
+                so a failure shows whether or not a slice ever loaded. */}
+            {prevError && (
+              <div className="rtxw-preverr" role="alert">
+                <div className="rtxw-preverr-body">
+                  <strong>The preview couldn’t be made.</strong>
+                  <span>{prevError}</span>
+                </div>
+                <button
+                  type="button"
+                  className="rtxw-preverr-x"
+                  title="Dismiss"
+                  onClick={() => setPrevError(null)}
+                >
+                  <Icon.x width={12} height={12} />
+                </button>
+              </div>
+            )}
             {dropHover && <div className="rtxw-droplabel">Drop to add</div>}
           </div>
 
