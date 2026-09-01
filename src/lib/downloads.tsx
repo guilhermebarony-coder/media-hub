@@ -300,13 +300,30 @@ function loadQueueFromStorage(): QueueJob[] {
     const parsed = JSON.parse(raw) as QueueJob[];
     // 1.1.3 — any "in-flight" row at boot is by definition orphaned
     // (the Rust process was killed when the app last closed; close
-    // protection is best-effort but a crash can leave them). Reset
-    // to "queued" so the worker picks them up; null out churn fields.
+    // protection is best-effort but a crash can leave them).
+    //
+    // 1.15.1 — but they are not all the same. A download resumes cheaply and
+    // usually succeeds, so those still go back to "queued". A TRANSCODE that
+    // was interrupted comes back as failed instead, because auto-resuming it
+    // built an inescapable loop: a tester's 4K60 encode exhausted memory, he
+    // closed the app to stop it, and reopening simply started it again —
+    // forever, with no cancel button during that phase to break out. Failed
+    // rows are never auto-resumed, and "Retry failed" is one click away, so
+    // nothing is lost except the loop.
     return parsed.map((j) => {
-      if (j.status === "fetching" || j.status === "downloading" || j.status === "transcoding") {
+      if (j.status === "fetching" || j.status === "downloading") {
         return {
           ...j,
           status: "queued" as QueueStatus,
+          progress: undefined,
+          transcodeProgress: undefined,
+        };
+      }
+      if (j.status === "transcoding") {
+        return {
+          ...j,
+          status: "failed" as QueueStatus,
+          error: "Transcode was interrupted when the app closed — press Retry to run it again.",
           progress: undefined,
           transcodeProgress: undefined,
         };

@@ -1911,9 +1911,18 @@ function QueueRow({ job, onCancel }: { job: QueueJob; onCancel: (id: string) => 
             ? "pill queued"
             : "pill live";
   // Cancel is only meaningful while yt-dlp is fetching bytes. fetching
-  // (metadata) and transcoding (ffmpeg) phases stay un-cancelable for
-  // now — metadata is fast, transcode kill is a future polish item.
-  const canCancel = job.status === "downloading";
+  // 1.15.1 — transcoding used to be un-cancelable "for now": no kill on the
+  // Rust side, so no button. That left the longest, heaviest phase of a job
+  // as the one you could not stop, which a tester found the hard way with a
+  // 4K60 encode that would not die. Now ffmpeg is killable, so the button
+  // covers every phase that is actually doing something — including queued,
+  // where there is no process to kill but plenty of reason to change your
+  // mind before it starts.
+  const canCancel =
+    job.status === "downloading" ||
+    job.status === "transcoding" ||
+    job.status === "fetching" ||
+    job.status === "queued";
 
   return (
     <li className="queue-row">
