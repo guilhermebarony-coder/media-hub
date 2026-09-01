@@ -349,6 +349,7 @@ pub async fn media_transcode(
     }
 
     if exit_code != Some(0) {
+        // (see explain_ffmpeg_failure below for why the tail alone lies)
         // Diagnostics: the last stderr line alone is rarely enough to tell
         // WHY a transcode failed (esp. "a stream received no packets", which
         // depends entirely on the input). Log the full stderr + probe the
@@ -367,12 +368,9 @@ pub async fn media_transcode(
                 exit_code, src_path, full_stderr, probe
             ),
         );
-        let tail = stderr_tail
-            .last()
-            .cloned()
-            .unwrap_or_else(|| "(no stderr)".into());
         return Err(format!(
-            "ffmpeg failed: {tail} — details saved to the diagnostics log (Settings → Diagnostics → Open logs)"
+            "{} — details saved to the diagnostics log (Settings → Diagnostics → Open logs)",
+            explain_ffmpeg_failure(&stderr_tail),
         ));
     }
 
@@ -401,8 +399,120 @@ pub async fn media_transcode(
     })
 }
 
+/// Turn ffmpeg's stderr into the one sentence worth putting in front of a
+/// person.
+///
+/// The LAST line is usually the least useful one. ffmpeg reports the
+/// CONSEQUENCE long after the CAUSE, and the consequence is generic:
+///
+///   x264 [error]: malloc of size 21979392 failed          <- the cause
+///   [vost#0:0/libx264] Error while opening encoder
+///   [vp9] get_buffer() failed
+///   [out#0/mp4] Nothing was written into output file,
+///     because at least one of its streams received no packets.   <- shown
+///
+/// A tester reading only that last line goes hunting for a corrupt download
+/// when they actually ran out of RAM encoding 4K60. Seen in the wild
+/// 2026-09-01 on exactly that input.
+fn explain_ffmpeg_failure(lines: &[String]) -> String {
+    let has = |needle: &str| {
+        lines
+            .iter()
+            .any(|l| l.to_ascii_lowercase().contains(needle))
+    };
+
+    // Out of memory. x264 at `-preset slow` on a 4K60 source wants far more
+    // than most machines have free, and the GPU encoder barely touches system
+    // RAM — so the suggestion is the actual way out, not a platitude.
+    if has("malloc of size") || has("cannot allocate memory") || has("out of memory") {
+        return "ran out of memory while encoding. This usually means the clip is too large for the CPU encoder (4K and 60fps are the usual culprits) — try an NVIDIA (NVENC) preset, which encodes on the GPU, or transcode a shorter segment"
+            .into();
+    }
+
+    // No video track. 1.15.0 refuses these before ffmpeg runs, so this is a
+    // backstop for inputs the pre-flight probe could not read.
+    if has("matches no streams") {
+        return "this file has no video track, so it can't be transcoded to a video format".into();
+    }
+
+    if has("no such file or directory") {
+        return "the source file is gone — it may have been moved or deleted since it was added".into();
+    }
+
+    if has("permission denied") {
+        return "permission denied writing the output — check the folder isn't read-only or in use".into();
+    }
+
+    // Nothing recognised: prefer the FIRST line ffmpeg flagged as an error
+    // over the last line it happened to print.
+    let first_error = lines.iter().find(|l| {
+        let low = l.to_ascii_lowercase();
+        low.contains("[error]") || low.starts_with("error")
+    });
+    match first_error.or_else(|| lines.last()) {
+        Some(l) => format!("ffmpeg failed: {}", l.trim()),
+        None => "ffmpeg failed with no output".into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    fn v(s: &[&str]) -> Vec<String> {
+        s.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// Verbatim from a tester's log, 2026-09-01: a 4K60 VP9 into libx264.
+    /// The app showed the last line and sent him looking for the wrong thing.
+    #[test]
+    fn the_cause_wins_over_the_last_line() {
+        let real = v(&[
+            "x264 [error]: malloc of size 21979392 failed",
+            "[vost#0:0/libx264 @ 000002c3ab99a780] Error while opening encoder - maybe incorrect parameters such as bit_rate, rate, width or height.",
+            "[vf#0:0 @ 000002c3ab8bb500] Error sending frames to consumers: Generic error in an external library",
+            "[vp9 @ 000002c3ab97bd00] get_buffer() failed",
+            "[out#0/mp4 @ 000002c3ab9955c0] Nothing was written into output file, because at least one of its streams received no packets.",
+        ]);
+        let msg = explain_ffmpeg_failure(&real);
+        assert!(msg.contains("ran out of memory"), "got: {msg}");
+        assert!(msg.contains("NVENC"), "must point at the way out; got: {msg}");
+        assert!(
+            !msg.contains("no packets"),
+            "the consequence must not be what we show; got: {msg}",
+        );
+    }
+
+    /// Also verbatim: the audio-only inputs that filled this log in July.
+    #[test]
+    fn audio_only_is_named_as_such() {
+        let real = v(&[
+            "Stream map '' matches no streams.",
+            "To ignore this, add a trailing '?' to the map.",
+            "Failed to set value '0:v:0' for option 'map': Invalid argument",
+            "Error opening output files: Invalid argument",
+        ]);
+        let msg = explain_ffmpeg_failure(&real);
+        assert!(msg.contains("no video track"), "got: {msg}");
+    }
+
+    /// Unrecognised failures still improve: the first flagged error beats
+    /// whatever ffmpeg printed last.
+    #[test]
+    fn unknown_failure_prefers_the_first_error_line() {
+        let lines = v(&[
+            "some chatter",
+            "[libsomething @ 0x1] [error] the actual problem",
+            "trailing noise that means nothing",
+        ]);
+        let msg = explain_ffmpeg_failure(&lines);
+        assert!(msg.contains("the actual problem"), "got: {msg}");
+
+        // With no error marker at all, fall back to the last line.
+        let plain = v(&["only", "these", "lines"]);
+        assert!(explain_ffmpeg_failure(&plain).contains("lines"));
+
+        assert!(explain_ffmpeg_failure(&[]).contains("no output"));
+    }
     // 1.13.5 — the GIF filter is written across several source lines with
     // `\` continuations. That strips the newline AND the next line's
     // indentation, but one stray space would make ffmpeg reject the whole
