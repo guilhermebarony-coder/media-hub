@@ -2073,6 +2073,7 @@ pub fn run() {
             tools::tools_status,
             tools::tools_ensure,
             transcode::media_transcode,
+            transcode::media_transcode_cancel,
             media_extract::media_extract_thumbnail,
             media_extract::media_fetch_thumbnail,
             media_extract::media_extract_waveform,

@@ -614,6 +614,7 @@ export function DownloadsProvider({
       let finalPaths = results.map((r) => r.path);
       let usedPreset: TranscodePreset = "none";
       let txError: string | null = null;
+      let txCanceled = false;
 
       if (preset !== "none") {
         const sem = isGpuPreset(preset) ? gpuTranscodeSem : cpuTranscodeSem;
@@ -631,7 +632,14 @@ export function DownloadsProvider({
               });
               txResults.push(txRes);
             } catch (e) {
-              txError = `transcode failed: ${String(e)} (source kept)`;
+              const m = String(e);
+              // The user asked for this. Reporting it as a failure would put
+              // a red row and an error message on a deliberate action.
+              if (m.includes("__canceled__")) {
+                txCanceled = true;
+                break;
+              }
+              txError = `transcode failed: ${m} (source kept)`;
               break;
             }
           }
@@ -688,7 +696,7 @@ export function DownloadsProvider({
       }
 
       updateQueueJob(job.id, {
-        status: txError ? "failed" : "done",
+        status: txCanceled ? "canceled" : txError ? "failed" : "done",
         error: txError ?? undefined,
         resultPath: finalPaths[finalPaths.length - 1],
         resultBytes: results[results.length - 1]?.bytes ?? null,
@@ -907,11 +915,14 @@ export function DownloadsProvider({
             resultBytes: txRes.bytes,
           });
         } catch (e) {
+          const m = String(e);
           updateQueueJob(job.id, {
-            status: "failed",
+            status: m.includes("__canceled__") ? "canceled" : "failed",
             resultPath: dlRes.path,
             resultBytes: dlRes.bytes,
-            error: `transcode failed: ${String(e)} (source kept)`,
+            error: m.includes("__canceled__")
+              ? undefined
+              : `transcode failed: ${m} (source kept)`,
           });
         } finally {
           sem.release();
@@ -1061,11 +1072,19 @@ export function DownloadsProvider({
   const cancelQueueJob = useCallback<DownloadsContextValue["cancelQueueJob"]>(
     async (id) => {
       updateQueueJob(id, { status: "canceled" });
-      try {
-        await invoke<boolean>("yt_download_cancel", { jobId: id });
-      } catch (e) {
-        console.warn("[cancel] yt_download_cancel failed:", e);
-      }
+      // A job has TWO processes over its life and cancel used to reach only
+      // the first. Past the download there is no yt-dlp left to kill, so
+      // ffmpeg ran to completion while the row already said "canceled".
+      // Both are addressed by job id and each is a no-op when it doesn't
+      // apply, so asking both is simpler than tracking which stage we're in.
+      const kill = async (cmd: string) => {
+        try {
+          await invoke<boolean>(cmd, { jobId: id });
+        } catch (e) {
+          console.warn(`[cancel] ${cmd} failed:`, e);
+        }
+      };
+      await Promise.all([kill("yt_download_cancel"), kill("media_transcode_cancel")]);
     },
     [updateQueueJob],
   );
@@ -1260,11 +1279,16 @@ export function DownloadsProvider({
   );
 
   const cancelSingleDownload = useCallback(async () => {
-    try {
-      await invoke<boolean>("yt_download_cancel", { jobId: SINGLE_URL_JOB_ID });
-    } catch (e) {
-      console.warn("[cancel] yt_download_cancel single failed:", e);
-    }
+    // Same two-process story as cancelQueueJob: past the download it is
+    // ffmpeg holding the CPU, not yt-dlp.
+    const kill = async (cmd: string) => {
+      try {
+        await invoke<boolean>(cmd, { jobId: SINGLE_URL_JOB_ID });
+      } catch (e) {
+        console.warn(`[cancel] ${cmd} single failed:`, e);
+      }
+    };
+    await Promise.all([kill("yt_download_cancel"), kill("media_transcode_cancel")]);
   }, []);
 
   const resetSingleDownload = useCallback(() => setSingleDownload(null), []);

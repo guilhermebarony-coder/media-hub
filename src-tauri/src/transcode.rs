@@ -151,6 +151,7 @@ fn probe_has_video(probe: &str) -> bool {
 #[tauri::command]
 pub async fn media_transcode(
     app: AppHandle,
+    registry: tauri::State<'_, crate::JobRegistry>,
     src_path: String,
     preset: String,
     total_sec_hint: Option<f64>,
@@ -267,10 +268,21 @@ pub async fn media_transcode(
         &format!("preset={} cmd: ffmpeg {}", preset.trim(), args.join(" ")),
     );
 
-    let (mut rx, _child) = ffmpeg
+    let (mut rx, child) = ffmpeg
         .args(args)
         .spawn()
         .map_err(|e| format!("ffmpeg spawn: {e}"))?;
+
+    // Register the child so `media_transcode_cancel(job_id)` can kill it.
+    // Until 1.15.1 this handle was dropped on the floor: cancelling a job
+    // that had already moved past the download killed yt-dlp (long gone) and
+    // left ffmpeg running to completion — the row said "canceled" while the
+    // CPU kept burning and the file still landed.
+    if let Some(id) = job_id.as_deref() {
+        if let Ok(mut map) = registry.children.lock() {
+            map.insert(id.to_string(), child);
+        }
+    }
 
     // Accumulator for the current chunk of progress key=value pairs.
     // ffmpeg writes one chunk per ~1s of source processed, terminated
@@ -348,6 +360,23 @@ pub async fn media_transcode(
         }
     }
 
+    // Deregister the (finished or killed) child, then check cancel BEFORE
+    // the failure branch: a killed ffmpeg exits non-zero, and reporting that
+    // as a crash would bury the fact that the user asked for it.
+    if let Some(id) = job_id.as_deref() {
+        let _ = registry.children.lock().map(|mut m| m.remove(id));
+        let was_canceled = registry
+            .canceled
+            .lock()
+            .map(|mut s| s.remove(id))
+            .unwrap_or(false);
+        if was_canceled {
+            // A half-written file is worse than none: it looks like a result.
+            let _ = std::fs::remove_file(&out_path_str);
+            return Err("__canceled__".into());
+        }
+    }
+
     if exit_code != Some(0) {
         // (see explain_ffmpeg_failure below for why the tail alone lies)
         // Diagnostics: the last stderr line alone is rarely enough to tell
@@ -397,6 +426,35 @@ pub async fn media_transcode(
         path: out_path_str,
         bytes,
     })
+}
+
+/// Kill the ffmpeg process of a running transcode.
+///
+/// Returns false when there was nothing to kill — the job already finished,
+/// or it is still downloading (in which case `yt_download_cancel` is the one
+/// that matters). The frontend calls both and lets whichever applies win.
+#[tauri::command]
+pub fn media_transcode_cancel(
+    registry: tauri::State<'_, crate::JobRegistry>,
+    job_id: String,
+) -> Result<bool, String> {
+    // Flag FIRST, so the loop above can tell a user-cancel from a crash when
+    // the killed process lands as a Terminated event.
+    if let Ok(mut set) = registry.canceled.lock() {
+        set.insert(job_id.clone());
+    }
+    let child = registry
+        .children
+        .lock()
+        .ok()
+        .and_then(|mut m| m.remove(&job_id));
+    match child {
+        Some(c) => {
+            c.kill().map_err(|e| format!("kill ffmpeg: {e}"))?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
 }
 
 /// Turn ffmpeg's stderr into the one sentence worth putting in front of a
